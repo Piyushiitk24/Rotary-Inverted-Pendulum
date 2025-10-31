@@ -8,19 +8,48 @@
 #define STEP_PIN 5
 #define DIR_PIN  6
 #define EN_PIN   7
-// Interface type 1 = DRIVER (STEP/DIR)
 AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
 // --- Sensor 1 (Pendulum) on Hardware I2C ---
-AS5600 as5600_pendulum;
+AS5600 as5600_pendulum(&Wire);  // This works - Wire is TwoWire*
 
-// --- Sensor 2 (Motor) on Software I2C ---
+// --- Sensor 2 (Motor) - MANUAL I2C HANDLING ---
 #define MOTOR_SDA_PIN 22
 #define MOTOR_SCL_PIN 24
-SoftwareWire motorWire(MOTOR_SDA_PIN, MOTOR_SCL_PIN);
-AS5600 as5600_motor(&motorWire); // <-- FIX #1: Pass the bus to the constructor
+#define AS5600_ADDRESS 0x36
+#define AS5600_RAW_ANGLE_REG 0x0C
+#define AS5600_STATUS_REG 0x0B
 
-// Test move distance (800 steps = 90 degrees at 1/16 microstepping)
+SoftwareWire motorWire(MOTOR_SDA_PIN, MOTOR_SCL_PIN);
+
+// Helper functions for manual AS5600 on SoftwareWire
+uint16_t readAS5600Angle(SoftwareWire &wire) {
+  wire.beginTransmission(AS5600_ADDRESS);
+  wire.write(AS5600_RAW_ANGLE_REG);
+  if (wire.endTransmission() != 0) return 0;
+  
+  wire.requestFrom(AS5600_ADDRESS, 2);
+  if (wire.available() >= 2) {
+    uint8_t high = wire.read();
+    uint8_t low = wire.read();
+    return (high << 8) | low;
+  }
+  return 0;
+}
+
+bool detectAS5600Magnet(SoftwareWire &wire) {
+  wire.beginTransmission(AS5600_ADDRESS);
+  wire.write(AS5600_STATUS_REG);
+  if (wire.endTransmission() != 0) return false;
+  
+  wire.requestFrom(AS5600_ADDRESS, 1);
+  if (wire.available()) {
+    uint8_t status = wire.read();
+    return (status & 0x20) != 0;  // Magnet detected bit
+  }
+  return false;
+}
+
 const long TEST_MOVE = 800; 
 
 // --- Function Prototypes ---
@@ -33,7 +62,8 @@ bool checkSerialForExit();
 // SETUP
 // ==========================================
 void setup() {
-  Serial.begin("\n\nUnified Hardware Characterization Test");
+  Serial.begin(115200);
+  Serial.println("\n\nUnified Hardware Characterization Test");
   Serial.println("========================================");
 
   // --- Stepper Setup ---
@@ -46,7 +76,7 @@ void setup() {
 
   // --- Pendulum Sensor (Hardware I2C) ---
   Wire.begin();
-  as5600_pendulum.begin(); // This one uses the default 'Wire'
+  as5600_pendulum.begin();  // No argument needed
   if (!as5600_pendulum.detectMagnet()) {
     Serial.println("ERROR: Pendulum Sensor (Hardware I2C on 20/21) not detected!");
   } else {
@@ -55,8 +85,8 @@ void setup() {
 
   // --- Motor Sensor (Software I2C) ---
   motorWire.begin();
-  as5600_motor.begin(); // <-- FIX #2: Call begin() with no arguments
-  if (!as5600_motor.detectMagnet()) {
+  motorWire.setClock(100000);  // 100kHz
+  if (!detectAS5600Magnet(motorWire)) {
     Serial.println("ERROR: Motor Sensor (Software I2C on 22/24) not detected!");
   } else {
     Serial.println("Motor Sensor... Connected.");
@@ -150,11 +180,12 @@ void runSensorTest() {
   while(Serial.available()) Serial.read();
   
   while (true) {
-    // Read from Hardware Bus
+    // Read from Hardware Bus (using library)
     float pendulum_deg = (as5600_pendulum.readAngle() * 360.0) / 4096.0;
 
-    // Read from Software Bus
-    float motor_deg = (as5600_motor.readAngle() * 360.0) / 4096.0;
+    // Read from Software Bus (manual I2C)
+    uint16_t motor_raw = readAS5600Angle(motorWire);
+    float motor_deg = (motor_raw * 360.0) / 4096.0;
 
     Serial.print(pendulum_deg, 2);
     Serial.print(" deg \t\t");
