@@ -18,7 +18,7 @@ AS5600 as5600_pendulum;
 #define MOTOR_SDA_PIN 22
 #define MOTOR_SCL_PIN 24
 SoftwareWire motorWire(MOTOR_SDA_PIN, MOTOR_SCL_PIN);
-AS5600 as5600_motor;
+AS5600 as5600_motor(&motorWire); // <-- FIX #1: Pass the bus to the constructor
 
 // Test move distance (800 steps = 90 degrees at 1/16 microstepping)
 const long TEST_MOVE = 800; 
@@ -33,8 +33,7 @@ bool checkSerialForExit();
 // SETUP
 // ==========================================
 void setup() {
-  Serial.begin(115200);
-  Serial.println("\n\nUnified Hardware Characterization Test");
+  Serial.begin("\n\nUnified Hardware Characterization Test");
   Serial.println("========================================");
 
   // --- Stepper Setup ---
@@ -47,7 +46,7 @@ void setup() {
 
   // --- Pendulum Sensor (Hardware I2C) ---
   Wire.begin();
-  as5600_pendulum.begin(); // Defaults to 'Wire'
+  as5600_pendulum.begin(); // This one uses the default 'Wire'
   if (!as5600_pendulum.detectMagnet()) {
     Serial.println("ERROR: Pendulum Sensor (Hardware I2C on 20/21) not detected!");
   } else {
@@ -56,7 +55,7 @@ void setup() {
 
   // --- Motor Sensor (Software I2C) ---
   motorWire.begin();
-  as5600_motor.begin(&motorWire); // Pass the software wire object
+  as5600_motor.begin(); // <-- FIX #2: Call begin() with no arguments
   if (!as5600_motor.detectMagnet()) {
     Serial.println("ERROR: Motor Sensor (Software I2C on 22/24) not detected!");
   } else {
