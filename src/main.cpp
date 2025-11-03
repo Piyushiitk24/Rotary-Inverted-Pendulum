@@ -60,6 +60,7 @@ void printMenu();
 void runMotorTest();
 void startSensorTest();
 void updateSensorTest();
+void runI2CScan();
 bool checkSerialForExit();
 
 // ==========================================
@@ -80,6 +81,21 @@ void setup() {
 
   // --- Pendulum Sensor (Hardware I2C) ---
   Wire.begin();
+  Serial.println("\nScanning Hardware I2C Bus (pins 20/21)...");
+  byte hw_count = 0;
+  for (byte addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("  Device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+      hw_count++;
+    }
+  }
+  if (hw_count == 0) {
+    Serial.println("  No devices found! Check wiring and pull-up resistors.");
+  }
+  
   as5600_pendulum.begin();
   if (!as5600_pendulum.detectMagnet()) {
     Serial.println("ERROR: Pendulum Sensor (Hardware I2C on 20/21) not detected!");
@@ -89,7 +105,22 @@ void setup() {
 
   // --- Motor Sensor (Software I2C) ---
   motorWire.begin();
-  motorWire.setClock(100000); // <-- FIX #1: Set stable 100kHz clock
+  motorWire.setClock(100000);
+  Serial.println("\nScanning Software I2C Bus (pins 22/24)...");
+  byte sw_count = 0;
+  for (byte addr = 1; addr < 127; addr++) {
+    motorWire.beginTransmission(addr);
+    if (motorWire.endTransmission() == 0) {
+      Serial.print("  Device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+      sw_count++;
+    }
+  }
+  if (sw_count == 0) {
+    Serial.println("  No devices found! Check wiring and pull-up resistors.");
+  }
+  
   if (!detectAS5600Magnet(motorWire)) {
     Serial.println("ERROR: Motor Sensor (Software I2C on 22/24) not detected!");
   } else {
@@ -113,6 +144,9 @@ void loop() {
     } else if (c == '2') {
       startSensorTest();
       sensorTestRunning = true;
+    } else if (c == '3') {
+      runI2CScan();
+      printMenu();
     } else if (c == '\n' || c == '\r') {
       // Ignore newlines
     } else {
@@ -136,7 +170,8 @@ void printMenu() {
   Serial.println("Select a test to run:");
   Serial.println(" 1. Motor Direction Test (Moves 90 deg & returns)");
   Serial.println(" 2. Live Sensor Test (Streams both sensor angles)");
-  Serial.print("Enter choice (1 or 2): ");
+  Serial.println(" 3. I2C Bus Scan (Check sensor connections)");
+  Serial.print("Enter choice (1-3): ");
 }
 
 /**
@@ -218,4 +253,57 @@ void updateSensorTest() {
     Serial.print(motor_deg, 2);
     Serial.println(" deg");
   }
+}
+
+/**
+ * Task 3: Scan both I2C buses for devices
+ */
+void runI2CScan() {
+  Serial.println("\n--- I2C Bus Scanner ---");
+  
+  Serial.println("\nScanning Hardware I2C (pins 20/21):");
+  byte hw_count = 0;
+  for (byte addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    byte error = Wire.endTransmission();
+    if (error == 0) {
+      Serial.print("  Device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.print(addr, HEX);
+      if (addr == 0x36) Serial.print(" (AS5600)");
+      Serial.println();
+      hw_count++;
+    }
+  }
+  if (hw_count == 0) {
+    Serial.println("  No devices found!");
+    Serial.println("  Check:");
+    Serial.println("    - Wire connections (pins 20/21)");
+    Serial.println("    - Power to sensor (5V/GND)");
+    Serial.println("    - Pull-up resistors (4.7kΩ recommended)");
+  }
+  
+  Serial.println("\nScanning Software I2C (pins 22/24):");
+  byte sw_count = 0;
+  for (byte addr = 1; addr < 127; addr++) {
+    motorWire.beginTransmission(addr);
+    byte error = motorWire.endTransmission();
+    if (error == 0) {
+      Serial.print("  Device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.print(addr, HEX);
+      if (addr == 0x36) Serial.print(" (AS5600)");
+      Serial.println();
+      sw_count++;
+    }
+  }
+  if (sw_count == 0) {
+    Serial.println("  No devices found!");
+    Serial.println("  Check:");
+    Serial.println("    - Wire connections (pins 22/24)");
+    Serial.println("    - Power to sensor (5V/GND)");
+    Serial.println("    - Pull-up resistors (4.7kΩ recommended)");
+  }
+  
+  Serial.println("\n--- Scan Complete ---");
 }
