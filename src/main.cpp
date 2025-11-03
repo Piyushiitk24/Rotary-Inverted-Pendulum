@@ -11,7 +11,7 @@
 AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
 // --- Sensor 1 (Pendulum) on Hardware I2C ---
-AS5600 as5600_pendulum(&Wire);  // This works - Wire is TwoWire*
+AS5600 as5600_pendulum(&Wire); // Pass the bus to the constructor
 
 // --- Sensor 2 (Motor) - MANUAL I2C HANDLING ---
 #define MOTOR_SDA_PIN 22
@@ -45,17 +45,21 @@ bool detectAS5600Magnet(SoftwareWire &wire) {
   wire.requestFrom(AS5600_ADDRESS, 1);
   if (wire.available()) {
     uint8_t status = wire.read();
-    return (status & 0x20) != 0;  // Magnet detected bit
+    return (status & 0x20) != 0; // Magnet detected bit
   }
   return false;
 }
 
+// --- Other Globals ---
 const long TEST_MOVE = 800; 
+unsigned long sensorTimestamp = 0; // For non-blocking timer
+bool sensorTestRunning = false;
 
 // --- Function Prototypes ---
 void printMenu();
 void runMotorTest();
-void runSensorTest();
+void startSensorTest();
+void updateSensorTest();
 bool checkSerialForExit();
 
 // ==========================================
@@ -68,7 +72,7 @@ void setup() {
 
   // --- Stepper Setup ---
   pinMode(EN_PIN, OUTPUT);
-  digitalWrite(EN_PIN, LOW); // Enable driver
+  digitalWrite(EN_PIN, LOW);
   stepper.setMaxSpeed(1000);
   stepper.setAcceleration(2000);
   stepper.setCurrentPosition(0);
@@ -76,7 +80,7 @@ void setup() {
 
   // --- Pendulum Sensor (Hardware I2C) ---
   Wire.begin();
-  as5600_pendulum.begin();  // No argument needed
+  as5600_pendulum.begin();
   if (!as5600_pendulum.detectMagnet()) {
     Serial.println("ERROR: Pendulum Sensor (Hardware I2C on 20/21) not detected!");
   } else {
@@ -85,7 +89,7 @@ void setup() {
 
   // --- Motor Sensor (Software I2C) ---
   motorWire.begin();
-  motorWire.setClock(100000);  // 100kHz
+  motorWire.setClock(100000); // <-- FIX #1: Set stable 100kHz clock
   if (!detectAS5600Magnet(motorWire)) {
     Serial.println("ERROR: Motor Sensor (Software I2C on 22/24) not detected!");
   } else {
@@ -99,21 +103,27 @@ void setup() {
 // MAIN LOOP (Menu Handler)
 // ==========================================
 void loop() {
-  if (Serial.available() > 0) {
+  // Check for menu commands only if the sensor test isn't running
+  if (Serial.available() > 0 && !sensorTestRunning) {
     char c = Serial.read();
 
     if (c == '1') {
       runMotorTest();
       printMenu();
     } else if (c == '2') {
-      runSensorTest();
-      printMenu();
+      startSensorTest();
+      sensorTestRunning = true;
     } else if (c == '\n' || c == '\r') {
       // Ignore newlines
     } else {
       Serial.println("Invalid choice. Try again.");
       printMenu();
     }
+  }
+
+  // --- FIX #2: Run the sensor test as a non-blocking loop ---
+  if (sensorTestRunning) {
+    updateSensorTest();
   }
 }
 
@@ -137,6 +147,7 @@ bool checkSerialForExit() {
   if (Serial.available() > 0) {
     char c = Serial.read();
     if (c == 'x' || c == 'X') {
+      sensorTestRunning = false; // Stop the sensor loop
       return true;
     }
   }
@@ -153,33 +164,48 @@ void runMotorTest() {
   Serial.println("Observe: Did the arm move CW or CCW?");
   
   stepper.moveTo(TEST_MOVE);
-  stepper.runToPosition(); // Blocks until move is done
+  stepper.runToPosition(); // This is a blocking call, which is fine for this test
 
   Serial.println("...pausing for 3 seconds...");
-  delay(3000);
+  delay(3000); // Blocking delay is fine here, as it's not in the main sensor loop
 
   Serial.println("Returning to zero...");
   stepper.moveTo(0);
-  stepper.runToPosition(); // Blocks until move is done
+  stepper.runToPosition();
 
   Serial.println("--- Motor Test Complete ---");
 }
 
 /**
- * Task 2: Runs a continuous loop printing both sensor values.
- * Exits when 'x' is sent.
+ * Task 2: Initializes the continuous sensor test.
  */
-void runSensorTest() {
+void startSensorTest() {
   Serial.println("\n--- Running Live Sensor Test ---");
   Serial.println("Streaming live data... Type 'X' to exit.");
   Serial.println("-------------------------------------------------");
   Serial.println("Pendulum Angle \t Motor Angle");
   Serial.println("-------------------------------------------------");
 
-  // Clear serial buffer
-  while(Serial.available()) Serial.read();
-  
-  while (true) {
+  while(Serial.available()) Serial.read(); // Clear serial buffer
+  sensorTimestamp = millis(); // Set the timer
+}
+
+/**
+ * Task 2: This is now called by loop() constantly.
+ * It only prints data every 100ms.
+ */
+void updateSensorTest() {
+  // First, check for exit command. Do this every loop.
+  if (checkSerialForExit()) {
+    Serial.println("--- Sensor Test Complete ---");
+    printMenu(); // Show the menu again
+    return;
+  }
+
+  // Second, check if 100ms have passed.
+  if (millis() - sensorTimestamp >= 100) {
+    sensorTimestamp = millis(); // Reset the timer
+
     // Read from Hardware Bus (using library)
     float pendulum_deg = (as5600_pendulum.readAngle() * 360.0) / 4096.0;
 
@@ -191,13 +217,5 @@ void runSensorTest() {
     Serial.print(" deg \t\t");
     Serial.print(motor_deg, 2);
     Serial.println(" deg");
-
-    delay(100); // 10 Hz refresh rate
-
-    // Check for exit command
-    if (checkSerialForExit()) {
-      Serial.println("--- Sensor Test Complete ---");
-      break; // Exit the while(true) loop
-    }
   }
 }
