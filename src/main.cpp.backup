@@ -22,7 +22,99 @@ AS5600 as5600_pendulum(&Wire); // Pass the bus to the constructor
 
 SoftwareWire motorWire(MOTOR_SDA_PIN, MOTOR_SCL_PIN);
 
-// Helper functions for manual AS5600 on SoftwareWire
+// ==========================================
+// SYSTEM CONFIGURATION
+// ==========================================
+
+// Motor limits (in steps from zero position)
+#define MAX_POSITION_STEPS 3200    // Maximum travel in one direction (adjust based on your setup)
+#define SOFT_LIMIT_STEPS 3000      // Soft limit before hard limit
+#define HOMING_SPEED 500           // Speed during homing procedure
+#define NORMAL_SPEED 2000          // Normal operation speed
+#define NORMAL_ACCEL 4000          // Normal acceleration
+
+// Pendulum angles (in degrees)
+#define PENDULUM_UPRIGHT 0.0       // Target angle for pendulum (0 = straight up)
+#define PENDULUM_DEADBAND 5.0      // Angle tolerance for "balanced"
+#define PENDULUM_SWING_THRESHOLD 45.0  // If pendulum is within this, try to balance
+
+// PID Controller gains (tune these!)
+#define KP 15.0    // Proportional gain
+#define KI 0.1     // Integral gain
+#define KD 5.0     // Derivative gain
+
+// Control loop timing
+#define CONTROL_LOOP_MS 10         // Run control loop every 10ms (100Hz)
+
+// System states
+enum SystemMode {
+  MODE_STARTUP,
+  MODE_HOMING,
+  MODE_IDLE,
+  MODE_MANUAL_TEST,
+  MODE_BALANCE_CONTROL,
+  MODE_EMERGENCY_STOP
+};
+
+SystemMode currentMode = MODE_STARTUP;
+
+// ==========================================
+// SYSTEM CONFIGURATION
+// ==========================================
+
+// Motor limits (in steps from zero position)
+#define MAX_POSITION_STEPS 3200    // Maximum travel in one direction (adjust based on your setup)
+#define SOFT_LIMIT_STEPS 3000      // Soft limit before hard limit
+#define HOMING_SPEED 500           // Speed during homing procedure
+#define NORMAL_SPEED 2000          // Normal operation speed
+#define NORMAL_ACCEL 4000          // Normal acceleration
+
+// Pendulum angles (in degrees)
+#define PENDULUM_UPRIGHT 0.0       // Target angle for pendulum (0 = straight up)
+#define PENDULUM_DEADBAND 5.0      // Angle tolerance for "balanced"
+#define PENDULUM_SWING_THRESHOLD 45.0  // If pendulum is within this, try to balance
+
+// PID Controller gains (tune these!)
+#define KP 15.0    // Proportional gain
+#define KI 0.1     // Integral gain
+#define KD 5.0     // Derivative gain
+
+// Control loop timing
+#define CONTROL_LOOP_MS 10         // Run control loop every 10ms (100Hz)
+
+// System states
+enum SystemMode {
+  MODE_STARTUP,
+  MODE_HOMING,
+  MODE_IDLE,
+  MODE_MANUAL_TEST,
+  MODE_BALANCE_CONTROL,
+  MODE_EMERGENCY_STOP
+};
+
+SystemMode currentMode = MODE_STARTUP;
+
+// ==========================================
+// GLOBAL VARIABLES
+// ==========================================
+
+// Position tracking
+long motorZeroPosition = 0;        // The "home" or "zero" position in steps
+float pendulumZeroAngle = 0.0;     // The angle when pendulum is straight up
+
+// PID Controller state
+float integralError = 0.0;
+float previousError = 0.0;
+unsigned long lastControlTime = 0;
+
+// Sensor readings
+float pendulumAngle = 0.0;         // Current pendulum angle (degrees)
+float motorAngle = 0.0;            // Current motor angle (degrees)
+long motorPosition = 0;            // Current motor position (steps)
+
+// Timing
+unsigned long sensorTimestamp = 0;
+bool sensorTestRunning = false;
 uint16_t readAS5600Angle(SoftwareWire &wire) {
   wire.beginTransmission(AS5600_ADDRESS);
   wire.write(AS5600_RAW_ANGLE_REG);
@@ -60,6 +152,7 @@ void printMenu();
 void runMotorTest();
 void startSensorTest();
 void updateSensorTest();
+void runI2CScan();
 bool checkSerialForExit();
 
 // ==========================================
@@ -80,6 +173,21 @@ void setup() {
 
   // --- Pendulum Sensor (Hardware I2C) ---
   Wire.begin();
+  Serial.println("\nScanning Hardware I2C Bus (pins 20/21)...");
+  byte hw_count = 0;
+  for (byte addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("  Device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+      hw_count++;
+    }
+  }
+  if (hw_count == 0) {
+    Serial.println("  No devices found! Check wiring and pull-up resistors.");
+  }
+  
   as5600_pendulum.begin();
   if (!as5600_pendulum.detectMagnet()) {
     Serial.println("ERROR: Pendulum Sensor (Hardware I2C on 20/21) not detected!");
@@ -89,7 +197,22 @@ void setup() {
 
   // --- Motor Sensor (Software I2C) ---
   motorWire.begin();
-  motorWire.setClock(100000); // <-- FIX #1: Set stable 100kHz clock
+  motorWire.setClock(100000);
+  Serial.println("\nScanning Software I2C Bus (pins 22/24)...");
+  byte sw_count = 0;
+  for (byte addr = 1; addr < 127; addr++) {
+    motorWire.beginTransmission(addr);
+    if (motorWire.endTransmission() == 0) {
+      Serial.print("  Device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+      sw_count++;
+    }
+  }
+  if (sw_count == 0) {
+    Serial.println("  No devices found! Check wiring and pull-up resistors.");
+  }
+  
   if (!detectAS5600Magnet(motorWire)) {
     Serial.println("ERROR: Motor Sensor (Software I2C on 22/24) not detected!");
   } else {
@@ -113,6 +236,9 @@ void loop() {
     } else if (c == '2') {
       startSensorTest();
       sensorTestRunning = true;
+    } else if (c == '3') {
+      runI2CScan();
+      printMenu();
     } else if (c == '\n' || c == '\r') {
       // Ignore newlines
     } else {
@@ -136,7 +262,8 @@ void printMenu() {
   Serial.println("Select a test to run:");
   Serial.println(" 1. Motor Direction Test (Moves 90 deg & returns)");
   Serial.println(" 2. Live Sensor Test (Streams both sensor angles)");
-  Serial.print("Enter choice (1 or 2): ");
+  Serial.println(" 3. I2C Bus Scan (Check sensor connections)");
+  Serial.print("Enter choice (1-3): ");
 }
 
 /**
@@ -218,4 +345,57 @@ void updateSensorTest() {
     Serial.print(motor_deg, 2);
     Serial.println(" deg");
   }
-} 
+}
+
+/**
+ * Task 3: Scan both I2C buses for devices
+ */
+void runI2CScan() {
+  Serial.println("\n--- I2C Bus Scanner ---");
+  
+  Serial.println("\nScanning Hardware I2C (pins 20/21):");
+  byte hw_count = 0;
+  for (byte addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    byte error = Wire.endTransmission();
+    if (error == 0) {
+      Serial.print("  Device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.print(addr, HEX);
+      if (addr == 0x36) Serial.print(" (AS5600)");
+      Serial.println();
+      hw_count++;
+    }
+  }
+  if (hw_count == 0) {
+    Serial.println("  No devices found!");
+    Serial.println("  Check:");
+    Serial.println("    - Wire connections (pins 20/21)");
+    Serial.println("    - Power to sensor (5V/GND)");
+    Serial.println("    - Pull-up resistors (4.7kΩ recommended)");
+  }
+  
+  Serial.println("\nScanning Software I2C (pins 22/24):");
+  byte sw_count = 0;
+  for (byte addr = 1; addr < 127; addr++) {
+    motorWire.beginTransmission(addr);
+    byte error = motorWire.endTransmission();
+    if (error == 0) {
+      Serial.print("  Device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.print(addr, HEX);
+      if (addr == 0x36) Serial.print(" (AS5600)");
+      Serial.println();
+      sw_count++;
+    }
+  }
+  if (sw_count == 0) {
+    Serial.println("  No devices found!");
+    Serial.println("  Check:");
+    Serial.println("    - Wire connections (pins 22/24)");
+    Serial.println("    - Power to sensor (5V/GND)");
+    Serial.println("    - Pull-up resistors (4.7kΩ recommended)");
+  }
+  
+  Serial.println("\n--- Scan Complete ---");
+}
