@@ -4,7 +4,53 @@ This document lists all backup scripts and their purposes.
 
 ## Available Scripts
 
-### 1. `main_full_pid_control.cpp.bak`
+### 1. `main_step_calibration.cpp.bak` (LATEST WORKING)
+**Purpose:** Step-based calibration with direct motor control (bypasses AccelStepper for jogging)
+**Features:**
+- Manual single-step jogging using A/D keys
+- Direct digitalWrite pulse generation for reliable movement
+- Step-based limit recording (more reliable than sensor angles)
+- Live sensor testing
+- Full range testing between limits
+
+**Status:** ✓ Motor movement confirmed working
+**Calibration achieved:** Left=-280, Right=+280 steps (560 total range = 1008°)
+
+**To restore:**
+```bash
+cp src/main_step_calibration.cpp.bak src/main.cpp
+platformio run --target upload
+```
+
+---
+
+### 2. `main.cpp` (CURRENT - SENSOR DIAGNOSTIC TOOL)
+**Purpose:** Comprehensive sensor testing and troubleshooting
+**Features:**
+- Full diagnostic suite for both AS5600 sensors
+- I2C bus scanning (Hardware and Software I2C)
+- Magnet detection and strength testing
+- AGC (Automatic Gain Control) verification
+- Live angle readings with change indicators
+- Pin configuration display
+
+**Menu Options:**
+1. Full Diagnostic (run all tests)
+2. I2C Bus Scan
+3. Test Pendulum Sensor (Hardware I2C)
+4. Test Motor Sensor (Software I2C)
+5. Live Angle Readings
+6. Show Pin Configuration
+
+**Use this to:**
+- Diagnose motor sensor issues
+- Verify magnet positioning
+- Check I2C communication
+- Confirm sensor wiring
+
+---
+
+### 3. `main_full_pid_control.cpp.bak`
 **Purpose:** Complete PID balance control system with automatic homing
 **Features:**
 - Automatic homing procedure

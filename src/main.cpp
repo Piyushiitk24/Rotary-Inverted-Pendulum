@@ -139,6 +139,8 @@ void printMainMenu() {
   Serial.println("L - Set limits to ±10 steps (default)");
   Serial.println("W - Set limits to ±15 steps");
   Serial.println("M - Set limits to ±20 steps");
+  Serial.println("\n--- DIAGNOSTICS ---");
+  Serial.println("D - EMI Test (disable motor, check sensor stability)");
   Serial.println("\n--- UTILITIES ---");
   Serial.println("0 - I2C Bus Scan");
   Serial.println("C - Clear calibration");
@@ -185,20 +187,38 @@ void liveSensorTest() {
   Serial.println("\n╔════════════════════════════════════════════╗");
   Serial.println("║         LIVE SENSOR READINGS               ║");
   Serial.println("╚════════════════════════════════════════════╝");
-  Serial.println("\nRotate pendulum and move motor arm.");
+  Serial.println("\n⚠ Testing with MOTOR DRIVER DISABLED");
+  Serial.println("This tests if motor driver causes interference.\n");
+  Serial.println("Rotate pendulum and move motor arm.");
   Serial.println("Press 'S' to stop.\n");
+  
+  // DISABLE motor driver to test for EMI
+  digitalWrite(EN_PIN, HIGH);
+  delay(100);
+  
   Serial.println("────────────────────────────────────────────");
-  Serial.println("Pendulum(°) \tMotor(°) \tSteps");
+  Serial.println("Pendulum(°) \tMotor(°) \tΔPend \tΔMotor");
   Serial.println("────────────────────────────────────────────");
   
   unsigned long lastPrint = millis();
+  float lastPendulum = 0;
+  float lastMotor = 0;
+  int stableCount = 0;
+  int jumpCount = 0;
   
   while (true) {
     if (Serial.available() > 0) {
       char c = Serial.read();
       if (c == 's' || c == 'S' || c == 'x' || c == 'X') {
         Serial.println("────────────────────────────────────────────");
-        Serial.println("Stopped.\n");
+        Serial.print("Stable readings: ");
+        Serial.println(stableCount);
+        Serial.print("Large jumps (>10°): ");
+        Serial.println(jumpCount);
+        Serial.println("\nStopped.\n");
+        
+        // Re-enable motor driver
+        digitalWrite(EN_PIN, LOW);
         delay(1000);
         return;
       }
@@ -206,7 +226,35 @@ void liveSensorTest() {
     
     if (millis() - lastPrint >= 100) {
       lastPrint = millis();
-      printSensorReadings();
+      
+      updateSensorReadings();
+      
+      // Calculate deltas
+      float deltaPend = abs(pendulumAngle - lastPendulum);
+      float deltaMotor = abs(motorAngle - lastMotor);
+      
+      // Track stability
+      if (deltaPend < 2.0 && deltaMotor < 2.0) {
+        stableCount++;
+      }
+      if (deltaPend > 10.0 || deltaMotor > 10.0) {
+        jumpCount++;
+        Serial.print("⚠ ");
+      } else {
+        Serial.print("  ");
+      }
+      
+      Serial.print(pendulumAngle, 2);
+      Serial.print("° \t");
+      Serial.print(motorAngle, 2);
+      Serial.print("° \t");
+      Serial.print(deltaPend, 1);
+      Serial.print("° \t");
+      Serial.print(deltaMotor, 1);
+      Serial.println("°");
+      
+      lastPendulum = pendulumAngle;
+      lastMotor = motorAngle;
     }
   }
 }
@@ -363,15 +411,24 @@ void testFullRange() {
   Serial.println("\n╔════════════════════════════════════════════╗");
   Serial.println("║         TEST FULL RANGE                    ║");
   Serial.println("╚════════════════════════════════════════════╝");
-  Serial.println("\nMoving between limits. Press 'S' to stop.\n");
+  Serial.println("\n⚠ Motor will move between calibrated limits!");
+  Serial.println("Press 'S' at any time to STOP.\n");
+  delay(2000);
   
   Serial.println("Moving to LEFT limit...");
   stepper.moveTo(maxStepsLeft);
   while (stepper.distanceToGo() != 0) {
     stepper.run();
     if (Serial.available() > 0) {
-      Serial.println("\nSTOPPED");
-      return;
+      char c = Serial.read();
+      if (c == 's' || c == 'S') {
+        stepper.stop();
+        digitalWrite(EN_PIN, HIGH); // Disable motor
+        Serial.println("\n⚠ EMERGENCY STOP!");
+        delay(2000);
+        digitalWrite(EN_PIN, LOW); // Re-enable
+        return;
+      }
     }
   }
   Serial.print("At LEFT: ");
@@ -384,8 +441,15 @@ void testFullRange() {
   while (stepper.distanceToGo() != 0) {
     stepper.run();
     if (Serial.available() > 0) {
-      Serial.println("\nSTOPPED");
-      return;
+      char c = Serial.read();
+      if (c == 's' || c == 'S') {
+        stepper.stop();
+        digitalWrite(EN_PIN, HIGH); // Disable motor
+        Serial.println("\n⚠ EMERGENCY STOP!");
+        delay(2000);
+        digitalWrite(EN_PIN, LOW); // Re-enable
+        return;
+      }
     }
   }
   Serial.print("At RIGHT: ");
@@ -398,8 +462,15 @@ void testFullRange() {
   while (stepper.distanceToGo() != 0) {
     stepper.run();
     if (Serial.available() > 0) {
-      Serial.println("\nSTOPPED");
-      return;
+      char c = Serial.read();
+      if (c == 's' || c == 'S') {
+        stepper.stop();
+        digitalWrite(EN_PIN, HIGH); // Disable motor
+        Serial.println("\n⚠ EMERGENCY STOP!");
+        delay(2000);
+        digitalWrite(EN_PIN, LOW); // Re-enable
+        return;
+      }
     }
   }
   Serial.println("✓ Test complete!\n");
@@ -503,6 +574,22 @@ void setup() {
   Serial.println("║   Step-Based Calibration (Reliable!)       ║");
   Serial.println("╚════════════════════════════════════════════╝\n");
   
+  Serial.println("⚠⚠⚠ SAFETY WARNING ⚠⚠⚠");
+  Serial.println("╔════════════════════════════════════════════╗");
+  Serial.println("║  1. CHECK MOTOR ARM IS FREE TO MOVE        ║");
+  Serial.println("║  2. ENSURE WIRES HAVE SLACK                ║");
+  Serial.println("║  3. BE READY TO DISCONNECT POWER           ║");
+  Serial.println("║  4. LIMITS: ±280 steps = ±504° max         ║");
+  Serial.println("╚════════════════════════════════════════════╝");
+  Serial.println("\nPress ANY KEY to continue...\n");
+  
+  while (!Serial.available()) {
+    delay(100);
+  }
+  while (Serial.available()) Serial.read(); // Clear buffer
+  
+  Serial.println("\nInitializing...\n");
+  
   pinMode(EN_PIN, OUTPUT);
   digitalWrite(EN_PIN, LOW);
   stepper.setMaxSpeed(MOTOR_SPEED);
@@ -554,6 +641,7 @@ void loop() {
       case 'l': case 'L': setQuickLimits(10); printMainMenu(); break;
       case 'w': case 'W': setQuickLimits(15); printMainMenu(); break;
       case 'm': case 'M': setQuickLimits(20); printMainMenu(); break;
+      case 'd': case 'D': liveSensorTest(); printMainMenu(); break;
       case 'c': case 'C': clearCalibration(); printMainMenu(); break;
       default: 
         Serial.println("Invalid."); 
