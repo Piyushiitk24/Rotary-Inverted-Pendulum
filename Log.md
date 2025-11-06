@@ -92,26 +92,26 @@ void manualStep(int direction) {
 
 **Add Capacitors for Noise Reduction** (CRITICAL):
 
+**Available Capacitors (from user's collection)**:
+- 100µF / 50V electrolytic (polarized - RED/ORANGE)
+- 10µF / 50V electrolytic (polarized - BLUE)
+- 1µF / 63V electrolytic (polarized - RED/ORANGE)
+
+**Detailed Installation Guide**: See `docs/CapacitorInstallationGuide.md` for complete beginner-friendly instructions with diagrams
+
 1. **Motor Driver Power (TMC2209 VMOT)**:
-   - 100µF electrolytic capacitor (16V+) between VMOT and GND
-   - 0.1µF ceramic capacitor between VMOT and GND
+   - 100µF electrolytic capacitor between VMOT and GND
    - Place as close as possible to driver
-   - **Polarity**: Electrolytic + to VMOT, - to GND
+   - **Polarity**: + to VMOT, - to GND (stripe = negative)
 
 2. **Arduino 5V Rail**:
    - 10µF electrolytic capacitor between 5V and GND
-   - 0.1µF ceramic capacitor between 5V and GND
-   - **Polarity**: Electrolytic + to 5V, - to GND
+   - **Polarity**: + to 5V, - to GND (stripe = negative)
 
 3. **Each AS5600 Sensor (2 total)**:
-   - 0.1µF ceramic capacitor between VCC and GND
+   - 1µF electrolytic capacitor between VCC and GND (at each sensor)
    - Place directly at sensor pins
-   - No polarity concerns
-
-**Shopping List**:
-- 2x 100µF electrolytic (16V or higher)
-- 1x 10µF electrolytic (16V or higher)
-- 6x 0.1µF ceramic (or 100nF, marked "104")
+   - **Polarity**: + to VCC, - to GND (stripe = negative)
 
 **Expected Results**:
 - Dramatically reduced sensor noise during motor operation
