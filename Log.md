@@ -126,7 +126,138 @@ void manualStep(int direction) {
 
 ---
 
-## System Status: ✅ Calibrated, ⚠ Pending Capacitor Installation
+## November 6, 2025
+
+### Hardware Modifications Completed
+
+**Capacitors Installed** ✅:
+- 1x 100µF / 50V on TMC2209 VMOT to GND (motor power filtering)
+- 1x 10µF / 50V on Arduino 5V to GND (logic power filtering)
+- 2x 1µF / 63V on AS5600 sensors VCC to GND (local sensor filtering)
+
+**Breadboard Reorganization**:
+- Separated power domains for better noise isolation
+- **Breadboard 1**: TMC2209 driver and motor control
+- **Breadboard 2**: Both AS5600 sensors, pull-up resistors, capacitors, Arduino 5V/GND distribution
+- Connected breadboards via shared 5V and GND rails
+
+### Issues Encountered
+
+#### Issue 1: Sensor Detection Failure After Breadboard Reorganization
+
+**Problem**: After moving sensor connections to second breadboard, both AS5600 sensors stopped being detected by Arduino. System hangs during initialization at "Testing Pendulum Sensor..."
+
+**Symptoms**:
+- Code hangs at sensor initialization
+- No I2C communication detected
+- Motor driver still works (unaffected)
+
+**Debugging Steps Taken**:
+1. Verified power connections between breadboards
+2. Checked SDA/SCL routing through breadboard
+3. Confirmed pull-up resistors still in place
+4. Switched VCC/GND positions on breadboard power rails
+
+**Root Cause (Suspected)**: 
+- Possible defective breadboard with broken internal connections
+- Power rail continuity issues
+- Signal integrity problems with longer traces through breadboard
+
+**Code Improvements Made**:
+- Added I2C timeout protection (`Wire.setWireTimeout()`)
+- Implemented raw I2C device detection before AS5600 library calls
+- Added granular debug output to identify exact hang point
+- Changed from `detectMagnet()` to direct angle reading (less blocking)
+- Increased initialization delays for capacitor stabilization (200ms)
+
+**Status**: Pending hardware troubleshooting with replacement breadboard
+
+### Code Changes
+
+**File**: `src/main.cpp`
+
+**Improvements**:
+```cpp
+// Added timeout protection
+Wire.setWireTimeout(5000, true);  // 5ms timeout, reset on timeout
+
+// Test I2C bus with raw transmission first
+Wire.beginTransmission(0x36);
+uint8_t error = Wire.endTransmission();
+
+// Direct angle reading instead of blocking detectMagnet()
+uint16_t test_angle = as5600_pendulum.readAngle();
+```
+
+**Benefits**:
+- Prevents infinite hangs on I2C communication failures
+- Provides detailed error messages for each failure point
+- Easier to diagnose hardware vs software issues
+- Graceful degradation instead of system freeze
+
+### Documentation Updates
+
+**New Files Created**:
+- `docs/CapacitorInstallationGuide.md` - Comprehensive beginner guide for capacitor installation with polarity warnings, step-by-step instructions, and diagrams
+
+**Updated Files**:
+- `Log.md` - Added Nov 5 capacitor specifications
+- Code comments - Enhanced I2C initialization documentation
+
+### Lessons Learned
+
+1. **Breadboard Quality Matters**: Not all breadboards have reliable internal connections. Power rail continuity can be intermittent.
+
+2. **Capacitors Need Stabilization Time**: Added 200ms delays after capacitor installation for power to stabilize before I2C communication.
+
+3. **Blocking I2C Calls**: AS5600 library's `detectMagnet()` and `begin()` functions can hang indefinitely without timeout protection.
+
+4. **Debug Incrementally**: Break initialization into small steps with print statements between each to identify exact failure point.
+
+5. **Test Power First**: Before debugging communication, verify power delivery to all components (5V at sensor VCC pins).
+
+### Tomorrow's Work (November 7, 2025)
+
+#### Priority 1: Hardware Verification
+1. Test with different breadboard
+2. Verify power rail continuity with multimeter
+3. Check all connections with continuity tester
+4. Measure voltage at critical points:
+   - Arduino 5V pin
+   - Breadboard power rails
+   - Sensor VCC pins
+   - Pull-up resistor connections
+
+#### Priority 2: Sensor Communication Test
+1. Upload latest code with debug output
+2. Run I2C scanner (option 0)
+3. Check which devices detected
+4. Test sensors individually (disconnect one at a time)
+
+#### Priority 3: If Sensors Work
+1. Test sensor stability with motor power ON
+2. Measure noise reduction from capacitors
+3. Verify >90% stable readings during motor operation
+4. Proceed with swing-up controller implementation
+
+### System Status: ⚠️ Hardware Troubleshooting Required
+
+**What Works**:
+- Motor driver and control
+- Code improvements (timeout protection, debug output)
+- Capacitors installed correctly
+
+**What Needs Fix**:
+- Sensor I2C communication (breadboard issue suspected)
+- Power distribution verification
+
+**Blocked**:
+- Cannot test capacitor effectiveness until sensors working
+- Cannot proceed to control algorithms
+
+---
+
+## System Status: ✅ Calibrated, ⚠ Pending Hardware Verification
 
 **What Works**:
 - Motor movement (280 steps calibrated range)

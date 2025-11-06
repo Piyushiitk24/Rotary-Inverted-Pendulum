@@ -597,22 +597,80 @@ void setup() {
   stepper.setCurrentPosition(0);
   Serial.println("[OK] Motor Driver");
   
+  // Initialize Hardware I2C with longer timeout for capacitors
+  Serial.print("Initializing Hardware I2C... ");
   Wire.begin();
-  delay(100);
-  as5600_pendulum.begin();
-  if (!as5600_pendulum.detectMagnet()) {
-    Serial.println("[ERROR] Pendulum Sensor");
+  Wire.setClock(400000);  // 400kHz
+  Wire.setWireTimeout(5000, true);  // 5ms timeout, reset on timeout
+  delay(200);  // Give capacitors time to stabilize
+  Serial.println("done");
+  
+  // Test I2C bus first with raw transmission
+  Serial.print("Testing I2C bus for device 0x36... ");
+  Wire.beginTransmission(0x36);
+  uint8_t error = Wire.endTransmission();
+  
+  if (error == 0) {
+    Serial.println("found!");
   } else {
-    Serial.println("[OK] Pendulum Sensor");
+    Serial.print("error ");
+    Serial.println(error);
+    Serial.println("  → Device not responding on Hardware I2C");
+    Serial.println("  → Check pins 20 (SDA), 21 (SCL)");
+    Serial.println("  → Check 5V, GND, and pull-up resistors");
   }
   
-  motorWire.begin();
-  motorWire.setClock(100000);
-  delay(100);
-  if (!detectAS5600Magnet(motorWire)) {
-    Serial.println("[ERROR] Motor Sensor");
+  // Test pendulum sensor with AS5600 library
+  Serial.print("Initializing AS5600 library... ");
+  as5600_pendulum.begin();
+  Serial.println("done");
+  
+  Serial.print("Testing magnet detection... ");
+  bool pendulum_ok = false;
+  // Try reading angle directly instead of detectMagnet (which might hang)
+  uint16_t test_angle = as5600_pendulum.readAngle();
+  if (test_angle > 0 && test_angle < 4096) {
+    pendulum_ok = true;
+    Serial.print("[OK] angle=");
+    Serial.println(test_angle);
   } else {
-    Serial.println("[OK] Motor Sensor");
+    Serial.println("[ERROR]");
+    Serial.println("  → Check magnet distance (2-3mm from chip)");
+    Serial.println("  → Magnet may be too far or missing");
+  }
+  
+  // Initialize Software I2C
+  Serial.print("Initializing Software I2C... ");
+  motorWire.begin();
+  motorWire.setClock(100000);  // 100kHz
+  motorWire.setDelay_us(5);  // 5μs delay for 100kHz
+  delay(200);  // Give capacitors time to stabilize
+  Serial.println("done");
+  
+  // Test motor sensor with raw I2C first
+  Serial.print("Testing I2C bus for device 0x36... ");
+  motorWire.beginTransmission(0x36);
+  uint8_t motor_error = motorWire.endTransmission();
+  
+  if (motor_error == 0) {
+    Serial.println("found!");
+  } else {
+    Serial.print("error ");
+    Serial.println(motor_error);
+    Serial.println("  → Device not responding on Software I2C");
+    Serial.println("  → Check pins 22 (SDA), 24 (SCL)");
+    Serial.println("  → Check 5V, GND, and pull-up resistors");
+  }
+  
+  // Test motor sensor by reading angle
+  Serial.print("Reading motor sensor angle... ");
+  uint16_t motor_test = readAS5600Angle(motorWire);
+  if (motor_test > 0 && motor_test < 4096) {
+    Serial.print("[OK] angle=");
+    Serial.println(motor_test);
+  } else {
+    Serial.println("[ERROR]");
+    Serial.println("  → Check magnet distance (2-3mm from chip)");
   }
   
   Serial.println("\n════════════════════════════════════════════");
