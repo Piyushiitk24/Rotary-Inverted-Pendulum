@@ -42,12 +42,12 @@ float lastPendulumRaw = 0.0;
 float lastMotorRaw = 0.0;
 bool firstReading = true;
 
-constexpr float MAX_SENSOR_DELTA_DEG = 12.0f;        // Max believable change per step
+constexpr float MAX_SENSOR_DELTA_DEG = 120.0f;       // Max believable change (catches 180° bit flips)
 constexpr float SAMPLE_CONSISTENCY_DEG = 3.0f;       // Required agreement between samples
 constexpr uint8_t MAX_STABLE_READ_RETRIES = 5;       // Attempts to obtain consistent data
 constexpr uint16_t AS5600_MIN_VALID = 20;            // Reject near-zero glitch values
 constexpr uint16_t AS5600_MAX_VALID = 4075;          // Reject near-4095 glitch values
-constexpr uint8_t LARGE_JUMP_CONFIRM_COUNT = 5;      // Consistent large readings needed to accept jump
+constexpr uint8_t LARGE_JUMP_CONFIRM_COUNT = 2;      // Consistent large readings needed to accept jump
 
 bool pendulumMagnetHealthy = true;
 bool motorMagnetHealthy = true;
