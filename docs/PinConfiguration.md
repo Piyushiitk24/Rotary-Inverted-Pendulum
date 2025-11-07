@@ -30,7 +30,7 @@
 
 | Source | TMC2209 Pin | Voltage | Notes |
 |--------|-------------|---------|-------|
-| Motor PSU (+) | VMOT | 12-24V | Motor power |
+| Motor PSU (+) | VMOT | 12V | Motor power |
 | Motor PSU (-) | GND (motor side) | 0V | Motor ground |
 | Arduino 5V | VIO | 5V | Logic power |
 | Arduino GND | GND (logic side) | 0V | Logic ground |
@@ -99,7 +99,7 @@
 ## Power Supply Architecture
 
 ```
-External 12-24V PSU
+External 12V PSU
     |
     ├─→ TMC2209 VMOT (motor power)
     |    └─→ [100µF + 0.1µF capacitors]
@@ -190,7 +190,7 @@ Arduino USB/VIN
 
 1. Check enable pin: LOW = enabled
 2. Verify STEP/DIR/EN connections (pins 5, 6, 7)
-3. Check motor power supply (12-24V to VMOT)
+3. Check motor power supply (12V to VMOT)
 4. Test with manual step function (option 7/8)
 
 ### Noisy Sensor Readings
@@ -208,7 +208,7 @@ Arduino USB/VIN
 ## Wiring Checklist
 
 - [ ] Stepper motor connected to TMC2209 (A1, A2, B1, B2)
-- [ ] Motor power 12-24V to TMC2209 VMOT
+- [ ] Motor power 12V to TMC2209 VMOT
 - [ ] Arduino 5V to TMC2209 VIO
 - [ ] Common ground: Motor PSU, TMC2209, Arduino
 - [ ] Control pins: 5 (STEP), 6 (DIR), 7 (EN)

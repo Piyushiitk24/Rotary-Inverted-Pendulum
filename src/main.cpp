@@ -3,6 +3,7 @@
 #include <SoftwareWire.h>
 #include <AS5600.h>
 #include <AccelStepper.h>
+#include <math.h>
 
 // Stepper Motor
 #define STEP_PIN 5
@@ -36,6 +37,25 @@ float pendulumAngle = 0.0;
 float motorAngle = 0.0;
 long motorSteps = 0;
 
+// Previous readings for change-rate limiting
+float lastPendulumRaw = 0.0;
+float lastMotorRaw = 0.0;
+bool firstReading = true;
+
+constexpr float MAX_SENSOR_DELTA_DEG = 12.0f;        // Max believable change per step
+constexpr float SAMPLE_CONSISTENCY_DEG = 3.0f;       // Required agreement between samples
+constexpr uint8_t MAX_STABLE_READ_RETRIES = 5;       // Attempts to obtain consistent data
+constexpr uint16_t AS5600_MIN_VALID = 20;            // Reject near-zero glitch values
+constexpr uint16_t AS5600_MAX_VALID = 4075;          // Reject near-4095 glitch values
+constexpr uint8_t LARGE_JUMP_CONFIRM_COUNT = 5;      // Consistent large readings needed to accept jump
+
+bool pendulumMagnetHealthy = true;
+bool motorMagnetHealthy = true;
+float pendulumJumpCandidate = 0.0f;
+uint8_t pendulumJumpCount = 0;
+float motorJumpCandidate = 0.0f;
+uint8_t motorJumpCount = 0;
+
 // Sensor I2C helpers
 uint16_t readAS5600Angle(SoftwareWire &wire) {
   wire.beginTransmission(AS5600_ADDRESS);
@@ -62,14 +82,215 @@ bool detectAS5600Magnet(SoftwareWire &wire) {
   return false;
 }
 
-void updateSensorReadings() {
-  // Read pendulum angle (Hardware I2C)
-  uint16_t pendulum_raw = as5600_pendulum.readAngle();
-  float pendulum_deg = (pendulum_raw * 360.0) / 4096.0;
+bool checkPendulumMagnet() {
+  uint8_t status = as5600_pendulum.readStatus();
+  // Bit 5 = MD (magnet detected), Bit 4 = ML (too weak), Bit 3 = MH (too strong)
+  bool detected = (status & 0x20) != 0;  // MD bit
+  bool tooWeak = (status & 0x10) != 0;   // ML bit  
+  bool tooStrong = (status & 0x08) != 0; // MH bit
+  return detected && !tooWeak && !tooStrong;
+}
+
+// Median of 3 readings to reject single-bit flips
+uint16_t readAS5600AngleMedian(SoftwareWire &wire) {
+  uint16_t r1 = readAS5600Angle(wire);
+  delayMicroseconds(100);
+  uint16_t r2 = readAS5600Angle(wire);
+  delayMicroseconds(100);
+  uint16_t r3 = readAS5600Angle(wire);
   
-  // Read motor angle (Software I2C) - for display only
-  uint16_t motor_raw = readAS5600Angle(motorWire);
-  motorAngle = (motor_raw * 360.0) / 4096.0;
+  // Sort and return middle value
+  if (r1 > r2) { uint16_t t = r1; r1 = r2; r2 = t; }
+  if (r2 > r3) { uint16_t t = r2; r2 = r3; r3 = t; }
+  if (r1 > r2) { uint16_t t = r1; r1 = r2; r2 = t; }
+  return r2;
+}
+
+uint16_t readPendulumAngleMedian() {
+  uint16_t r1 = as5600_pendulum.readAngle();
+  delayMicroseconds(100);
+  uint16_t r2 = as5600_pendulum.readAngle();
+  delayMicroseconds(100);
+  uint16_t r3 = as5600_pendulum.readAngle();
+  
+  // Sort and return middle value
+  if (r1 > r2) { uint16_t t = r1; r1 = r2; r2 = t; }
+  if (r2 > r3) { uint16_t t = r2; r2 = r3; r3 = t; }
+  if (r1 > r2) { uint16_t t = r1; r1 = r2; r2 = t; }
+  return r2;
+}
+
+float normalizeAngleDelta(float delta) {
+  while (delta > 180.0f) delta -= 360.0f;
+  while (delta < -180.0f) delta += 360.0f;
+  return delta;
+}
+
+bool isRawAngleValid(uint16_t raw) {
+  return raw >= AS5600_MIN_VALID && raw <= AS5600_MAX_VALID;
+}
+
+bool readStablePendulumDegrees(float &deg) {
+  float lastDeg = 0.0f;
+  bool hasLast = false;
+  for (uint8_t attempt = 0; attempt < MAX_STABLE_READ_RETRIES; attempt++) {
+    uint16_t raw = readPendulumAngleMedian();
+    if (!isRawAngleValid(raw)) continue;
+    float currentDeg = (raw * 360.0f) / 4096.0f;
+    if (hasLast) {
+      float delta = normalizeAngleDelta(currentDeg - lastDeg);
+      float deltaAbs = delta >= 0 ? delta : -delta;
+      if (deltaAbs <= SAMPLE_CONSISTENCY_DEG) {
+        deg = currentDeg;
+        return true;
+      }
+    }
+    lastDeg = currentDeg;
+    hasLast = true;
+    delayMicroseconds(150);
+  }
+  if (hasLast) {
+    deg = lastDeg;
+    return true;
+  }
+  return false;
+}
+
+bool readStableMotorDegrees(float &deg) {
+  float lastDeg = 0.0f;
+  bool hasLast = false;
+  for (uint8_t attempt = 0; attempt < MAX_STABLE_READ_RETRIES; attempt++) {
+    uint16_t raw = readAS5600AngleMedian(motorWire);
+    if (!isRawAngleValid(raw)) continue;
+    float currentDeg = (raw * 360.0f) / 4096.0f;
+    if (hasLast) {
+      float delta = normalizeAngleDelta(currentDeg - lastDeg);
+      float deltaAbs = delta >= 0 ? delta : -delta;
+      if (deltaAbs <= SAMPLE_CONSISTENCY_DEG) {
+        deg = currentDeg;
+        return true;
+      }
+    }
+    lastDeg = currentDeg;
+    hasLast = true;
+    delayMicroseconds(150);
+  }
+  if (hasLast) {
+    deg = lastDeg;
+    return true;
+  }
+  return false;
+}
+
+void updateSensorReadings() {
+  bool pendulumStatus = checkPendulumMagnet();
+  if (pendulumStatus != pendulumMagnetHealthy) {
+    if (!pendulumStatus) {
+      Serial.println("[WARN] Pendulum magnet out of range - holding last value");
+      pendulumJumpCount = 0;
+    } else {
+      Serial.println("[INFO] Pendulum magnet restored");
+    }
+    pendulumMagnetHealthy = pendulumStatus;
+  }
+  
+  bool motorStatus = detectAS5600Magnet(motorWire);
+  if (motorStatus != motorMagnetHealthy) {
+    if (!motorStatus) {
+      Serial.println("[WARN] Motor magnet not detected - holding last value");
+      motorJumpCount = 0;
+    } else {
+      Serial.println("[INFO] Motor magnet restored");
+    }
+    motorMagnetHealthy = motorStatus;
+  }
+  
+  float pendulum_deg = lastPendulumRaw;
+  bool pendulumUpdated = false;
+  if (pendulumMagnetHealthy) {
+    float candidate;
+    if (readStablePendulumDegrees(candidate)) {
+      if (!firstReading) {
+        float delta = normalizeAngleDelta(candidate - lastPendulumRaw);
+        float deltaAbs = fabsf(delta);
+        if (deltaAbs > MAX_SENSOR_DELTA_DEG) {
+          Serial.print("[WARN] Pendulum jump rejected: ");
+          Serial.print(delta, 1);
+          Serial.println("°");
+          if (pendulumJumpCount > 0 && fabsf(candidate - pendulumJumpCandidate) <= SAMPLE_CONSISTENCY_DEG) {
+            pendulumJumpCount++;
+          } else {
+            pendulumJumpCandidate = candidate;
+            pendulumJumpCount = 1;
+          }
+          if (pendulumJumpCount >= LARGE_JUMP_CONFIRM_COUNT) {
+            Serial.println("[WARN] Pendulum jump accepted after stability hold");
+            pendulumUpdated = true;
+            pendulum_deg = candidate;
+            pendulumJumpCount = 0;
+          }
+        } else {
+          pendulumUpdated = true;
+          pendulum_deg = candidate;
+          pendulumJumpCount = 0;
+        }
+      } else {
+        pendulumUpdated = true;
+        pendulum_deg = candidate;
+        pendulumJumpCount = 0;
+      }
+    }
+  }
+  if (pendulumUpdated) {
+    lastPendulumRaw = pendulum_deg;
+  } else {
+    pendulum_deg = lastPendulumRaw;
+  }
+  
+  float motor_deg = lastMotorRaw;
+  bool motorUpdated = false;
+  if (motorMagnetHealthy) {
+    float candidate;
+    if (readStableMotorDegrees(candidate)) {
+      if (!firstReading) {
+        float delta = normalizeAngleDelta(candidate - lastMotorRaw);
+        float deltaAbs = fabsf(delta);
+        if (deltaAbs > MAX_SENSOR_DELTA_DEG) {
+          Serial.print("[WARN] Motor jump rejected: ");
+          Serial.print(delta, 1);
+          Serial.println("°");
+          if (motorJumpCount > 0 && fabsf(candidate - motorJumpCandidate) <= SAMPLE_CONSISTENCY_DEG) {
+            motorJumpCount++;
+          } else {
+            motorJumpCandidate = candidate;
+            motorJumpCount = 1;
+          }
+          if (motorJumpCount >= LARGE_JUMP_CONFIRM_COUNT) {
+            Serial.println("[WARN] Motor jump accepted after stability hold");
+            motorUpdated = true;
+            motor_deg = candidate;
+            motorJumpCount = 0;
+          }
+        } else {
+          motorUpdated = true;
+          motor_deg = candidate;
+          motorJumpCount = 0;
+        }
+      } else {
+        motorUpdated = true;
+        motor_deg = candidate;
+        motorJumpCount = 0;
+      }
+    }
+  }
+  if (motorUpdated) {
+    lastMotorRaw = motor_deg;
+  } else {
+    motor_deg = lastMotorRaw;
+  }
+  motorAngle = motor_deg;
+  
+  firstReading = false;
   
   // Calculate pendulum angle relative to zero
   pendulumAngle = pendulum_deg - pendulumZeroAngle;
@@ -139,8 +360,10 @@ void printMainMenu() {
   Serial.println("L - Set limits to ±10 steps (default)");
   Serial.println("W - Set limits to ±15 steps");
   Serial.println("M - Set limits to ±20 steps");
-  Serial.println("\n--- DIAGNOSTICS ---");
+  Serial.println("--- DIAGNOSTICS ---");
   Serial.println("D - EMI Test (disable motor, check sensor stability)");
+  Serial.println("N - Motor Power Noise Test (capacitor effectiveness)");
+  Serial.println("R - RAW Diagnostic Mode (see bit-flip patterns)");
   Serial.println("\n--- UTILITIES ---");
   Serial.println("0 - I2C Bus Scan");
   Serial.println("C - Clear calibration");
@@ -180,6 +403,73 @@ void setZeroPosition() {
       }
     }
     delay(50);
+  }
+}
+
+void rawDiagnosticMode() {
+  Serial.println("\n╔════════════════════════════════════════════╗");
+  Serial.println("║       RAW SENSOR DIAGNOSTIC MODE           ║");
+  Serial.println("╚════════════════════════════════════════════╝");
+  Serial.println("\nShows RAW 12-bit values and filtered values.");
+  Serial.println("Use this to detect bit-flip patterns.\n");
+  Serial.println("Press 'S' to stop.\n");
+  
+  digitalWrite(EN_PIN, HIGH);  // Disable motor
+  delay(100);
+  
+  Serial.println("───────────────────────────────────────────────────────────────");
+  Serial.println("Pend_RAW  Pend_Filt  Motor_RAW  Motor_Filt  Pend(°)  Motor(°)");
+  Serial.println("───────────────────────────────────────────────────────────────");
+  
+  unsigned long lastPrint = millis();
+  
+  while (true) {
+    if (Serial.available() > 0) {
+      char c = Serial.read();
+      if (c == 's' || c == 'S' || c == 'x' || c == 'X') {
+        Serial.println("───────────────────────────────────────────────────────────────");
+        Serial.println("\nStopped.\n");
+        digitalWrite(EN_PIN, LOW);
+        delay(1000);
+        return;
+      }
+    }
+    
+    if (millis() - lastPrint >= 200) {
+      lastPrint = millis();
+      
+      // Single reads (corrupted by EMI)
+      uint16_t pend_single = as5600_pendulum.readAngle();
+      uint16_t motor_single = readAS5600Angle(motorWire);
+      
+      // Median-filtered reads (robust)
+      uint16_t pend_median = readPendulumAngleMedian();
+      uint16_t motor_median = readAS5600AngleMedian(motorWire);
+      
+      // Convert to degrees
+      float pend_deg = (pend_median * 360.0) / 4096.0;
+      float motor_deg = (motor_median * 360.0) / 4096.0;
+      
+      // Highlight differences
+      bool pend_diff = abs((int)pend_single - (int)pend_median) > 100;
+      bool motor_diff = abs((int)motor_single - (int)motor_median) > 100;
+      
+      if (pend_diff || motor_diff) Serial.print("⚠ ");
+      else Serial.print("  ");
+      
+      Serial.print(pend_single);
+      Serial.print("\\t");
+      Serial.print(pend_median);
+      Serial.print("\\t");
+      Serial.print(motor_single);
+      Serial.print("\\t");
+      Serial.print(motor_median);
+      Serial.print("\\t");
+      Serial.print(pend_deg, 1);
+      Serial.print("°\\t");
+      Serial.print(motor_deg, 1);
+      Serial.println("°");
+    }
   }
 }
 
@@ -259,6 +549,93 @@ void liveSensorTest() {
   }
 }
 
+void motorPowerNoiseTest() {
+  Serial.println("\n╔════════════════════════════════════════════╗");
+  Serial.println("║    MOTOR POWER NOISE TEST (Capacitor Test) ║");
+  Serial.println("╚════════════════════════════════════════════╝");
+  Serial.println("\n✓ Testing with MOTOR DRIVER ENABLED & MOTOR POWER ON");
+  Serial.println("This tests capacitor effectiveness against power supply noise.\n");
+  Serial.println("⚠ Motor will NOT move - just powered and ready.");
+  Serial.println("Keep pendulum and motor arm STATIONARY.");
+  Serial.println("Press 'S' to stop.\n");
+  
+  // ENABLE motor driver (motor power ON but not moving)
+  digitalWrite(EN_PIN, LOW);
+  delay(100);
+  
+  Serial.println("────────────────────────────────────────────");
+  Serial.println("Pendulum(°) \tMotor(°) \tΔPend \tΔMotor");
+  Serial.println("────────────────────────────────────────────");
+  
+  unsigned long lastPrint = millis();
+  float lastPendulum = 0;
+  float lastMotor = 0;
+  int stableCount = 0;
+  int jumpCount = 0;
+  
+  while (true) {
+    if (Serial.available() > 0) {
+      char c = Serial.read();
+      if (c == 's' || c == 'S' || c == 'x' || c == 'X') {
+        Serial.println("────────────────────────────────────────────");
+        Serial.print("Stable readings: ");
+        Serial.println(stableCount);
+        Serial.print("Large jumps (>10°): ");
+        Serial.println(jumpCount);
+        
+        float successRate = (stableCount * 100.0) / (stableCount + jumpCount);
+        Serial.print("Success rate: ");
+        Serial.print(successRate, 1);
+        Serial.println("%");
+        
+        if (successRate > 90) {
+          Serial.println("\n✓✓✓ EXCELLENT! Capacitors working well!");
+        } else if (successRate > 70) {
+          Serial.println("\n✓ GOOD. Minor noise remains.");
+        } else {
+          Serial.println("\n⚠ POOR. Need more filtering or check capacitor connections.");
+        }
+        
+        Serial.println("\nStopped.\n");
+        return;
+      }
+    }
+    
+    if (millis() - lastPrint >= 100) {
+      lastPrint = millis();
+      
+      updateSensorReadings();
+      
+      // Calculate deltas
+      float deltaPend = abs(pendulumAngle - lastPendulum);
+      float deltaMotor = abs(motorAngle - lastMotor);
+      
+      // Track stability
+      if (deltaPend < 2.0 && deltaMotor < 2.0) {
+        stableCount++;
+      }
+      if (deltaPend > 10.0 || deltaMotor > 10.0) {
+        jumpCount++;
+        Serial.print("⚠ ");
+      } else {
+        Serial.print("  ");
+      }
+      
+      Serial.print(pendulumAngle, 2);
+      Serial.print("° \t");
+      Serial.print(motorAngle, 2);
+      Serial.print("° \t");
+      Serial.print(deltaPend, 1);
+      Serial.print("° \t");
+      Serial.print(deltaMotor, 1);
+      Serial.println("°");
+      
+      lastPendulum = pendulumAngle;
+      lastMotor = motorAngle;
+    }
+  }
+}
+
 void manualStep(int direction) {
   // Force enable the motor
   digitalWrite(EN_PIN, LOW);
@@ -276,6 +653,9 @@ void manualStep(int direction) {
   
   // Update AccelStepper's internal position to match
   stepper.setCurrentPosition(stepper.currentPosition() + direction);
+
+  // Allow driver current spike to settle before next sensor read
+  delayMicroseconds(500);
 }
 
 void setLeftLimit() {
@@ -308,18 +688,26 @@ void setLeftLimit() {
         delay(50);  // Wait for motor to settle
         
         updateSensorReadings();
-        Serial.print("← Left | Position: ");
+        Serial.print("← Left | Step: ");
         Serial.print(motorSteps);
-        Serial.println(" steps");
+        Serial.print(" | Pend: ");
+        Serial.print(pendulumAngle, 1);
+        Serial.print("° | Motor: ");
+        Serial.print(motorAngle, 1);
+        Serial.println("°");
       } else if (c == 'd' || c == 'D') {
         Serial.println("Stepping RIGHT (CCW)...");
         manualStep(+1);  // Move right
         delay(50);  // Wait for motor to settle
         
         updateSensorReadings();
-        Serial.print("→ Right | Position: ");
+        Serial.print("→ Right | Step: ");
         Serial.print(motorSteps);
-        Serial.println(" steps");
+        Serial.print(" | Pend: ");
+        Serial.print(pendulumAngle, 1);
+        Serial.print("° | Motor: ");
+        Serial.print(motorAngle, 1);
+        Serial.println("°");
       } else if (c == 'l' || c == 'L') {
         maxStepsLeft = stepper.currentPosition();
         Serial.println("\n✓ LEFT LIMIT SET!");
@@ -368,18 +756,26 @@ void setRightLimit() {
         delay(50);
         
         updateSensorReadings();
-        Serial.print("← Left | Position: ");
+        Serial.print("← Left | Step: ");
         Serial.print(motorSteps);
-        Serial.println(" steps");
+        Serial.print(" | Pend: ");
+        Serial.print(pendulumAngle, 1);
+        Serial.print("° | Motor: ");
+        Serial.print(motorAngle, 1);
+        Serial.println("°");
       } else if (c == 'd' || c == 'D') {
         Serial.println("Stepping RIGHT (CCW)...");
         manualStep(+1);  // Move right
         delay(50);
         
         updateSensorReadings();
-        Serial.print("→ Right | Position: ");
+        Serial.print("→ Right | Step: ");
         Serial.print(motorSteps);
-        Serial.println(" steps");
+        Serial.print(" | Pend: ");
+        Serial.print(pendulumAngle, 1);
+        Serial.print("° | Motor: ");
+        Serial.print(motorAngle, 1);
+        Serial.println("°");
       } else if (c == 'r' || c == 'R') {
         maxStepsRight = stepper.currentPosition();
         isCalibrated = true;
@@ -480,20 +876,30 @@ void testFullRange() {
 void jogLeft() {
   stepper.move(-1);
   stepper.runToPosition();
+  delayMicroseconds(500);
   updateSensorReadings();
-  Serial.print("← Position: ");
+  Serial.print("← Step ");
   Serial.print(motorSteps);
-  Serial.println(" steps");
+  Serial.print(" | Pend: ");
+  Serial.print(pendulumAngle, 1);
+  Serial.print("° | Motor: ");
+  Serial.print(motorAngle, 1);
+  Serial.println("°");
   delay(300);
 }
 
 void jogRight() {
   stepper.move(1);
   stepper.runToPosition();
+  delayMicroseconds(500);
   updateSensorReadings();
-  Serial.print("→ Position: ");
+  Serial.print("→ Step ");
   Serial.print(motorSteps);
-  Serial.println(" steps");
+  Serial.print(" | Pend: ");
+  Serial.print(pendulumAngle, 1);
+  Serial.print("° | Motor: ");
+  Serial.print(motorAngle, 1);
+  Serial.println("°");
   delay(300);
 }
 
@@ -501,6 +907,7 @@ void returnToZero() {
   Serial.println("Returning to zero...");
   stepper.moveTo(0);
   stepper.runToPosition();
+  delayMicroseconds(500);
   Serial.println("✓ At center");
   printSensorReadings();
   delay(500);
@@ -566,6 +973,15 @@ void clearCalibration() {
 }
 
 void setup() {
+  // EMERGENCY: Disable motor IMMEDIATELY before anything else!
+  pinMode(EN_PIN, OUTPUT);
+  digitalWrite(EN_PIN, HIGH);  // HIGH = DISABLED
+  pinMode(STEP_PIN, OUTPUT);
+  digitalWrite(STEP_PIN, LOW);  // Stop any step signals
+  pinMode(DIR_PIN, OUTPUT);
+  digitalWrite(DIR_PIN, LOW);   // Set direction low
+  delay(100);  // Let signals stabilize
+  
   Serial.begin(115200);
   delay(2000);
   
@@ -580,7 +996,11 @@ void setup() {
   Serial.println("║  2. ENSURE WIRES HAVE SLACK                ║");
   Serial.println("║  3. BE READY TO DISCONNECT POWER           ║");
   Serial.println("║  4. LIMITS: ±280 steps = ±504° max         ║");
+  Serial.println("║  5. Motor driver DISABLED during setup     ║");
   Serial.println("╚════════════════════════════════════════════╝");
+  Serial.println("\n⚠ IMPORTANT: If motor moves during power-on,");
+  Serial.println("  immediately disconnect power! This indicates");
+  Serial.println("  a hardware issue with the driver board.");
   Serial.println("\nPress ANY KEY to continue...\n");
   
   while (!Serial.available()) {
@@ -590,20 +1010,20 @@ void setup() {
   
   Serial.println("\nInitializing...\n");
   
-  pinMode(EN_PIN, OUTPUT);
-  digitalWrite(EN_PIN, LOW);
+  // Motor already disabled at start of setup()
+  // Configure stepper settings (motor still disabled)
   stepper.setMaxSpeed(MOTOR_SPEED);
   stepper.setAcceleration(MOTOR_ACCEL);
   stepper.setCurrentPosition(0);
-  Serial.println("[OK] Motor Driver");
+  Serial.println("[OK] Motor Driver (disabled for safety)");
   
   // Initialize Hardware I2C with longer timeout for capacitors
   Serial.print("Initializing Hardware I2C... ");
   Wire.begin();
-  Wire.setClock(400000);  // 400kHz
+  Wire.setClock(100000);  // REDUCED to 100kHz for noise immunity
   Wire.setWireTimeout(5000, true);  // 5ms timeout, reset on timeout
   delay(200);  // Give capacitors time to stabilize
-  Serial.println("done");
+  Serial.println("done (100kHz for EMI immunity)");
   
   // Test I2C bus first with raw transmission
   Serial.print("Testing I2C bus for device 0x36... ");
@@ -623,6 +1043,15 @@ void setup() {
   // Test pendulum sensor with AS5600 library
   Serial.print("Initializing AS5600 library... ");
   as5600_pendulum.begin();
+  
+  // Check magnet field strength
+  Serial.print("Checking pendulum magnet field... ");
+  if (checkPendulumMagnet()) {
+    Serial.println("OK");
+  } else {
+    Serial.println("WARNING: Magnet too weak/strong or not detected!");
+    Serial.println("  → Adjust magnet distance (should be 2-3mm)");
+  }
   Serial.println("done");
   
   Serial.print("Testing magnet detection... ");
@@ -643,7 +1072,6 @@ void setup() {
   Serial.print("Initializing Software I2C... ");
   motorWire.begin();
   motorWire.setClock(100000);  // 100kHz
-  motorWire.setDelay_us(5);  // 5μs delay for 100kHz
   delay(200);  // Give capacitors time to stabilize
   Serial.println("done");
   
@@ -700,6 +1128,8 @@ void loop() {
       case 'w': case 'W': setQuickLimits(15); printMainMenu(); break;
       case 'm': case 'M': setQuickLimits(20); printMainMenu(); break;
       case 'd': case 'D': liveSensorTest(); printMainMenu(); break;
+      case 'n': case 'N': motorPowerNoiseTest(); printMainMenu(); break;
+      case 'r': case 'R': rawDiagnosticMode(); printMainMenu(); break;
       case 'c': case 'C': clearCalibration(); printMainMenu(); break;
       default: 
         Serial.println("Invalid."); 

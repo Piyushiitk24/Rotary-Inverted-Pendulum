@@ -3,10 +3,10 @@ A control systems project implementing a rotary inverted pendulum using an Ardui
 Core Hardware Components
 Microcontroller: Arduino Mega 2560
 Motor Driver: TMC2209 (V3.0)
+Motor Power Supply: 12V DC adapter
 Stepper Motor: 17HS4401-D (1.8° step angle, 200 steps/rev)
-Sensor 1 (Pendulum): AS5600 12-bit magnetic encoder (I2C)
-Sensor 2 (Motor): AS5600 12-bit magnetic encoder (I2C)
-Power Supply: External 12V-28V PSU for motor power
+Sensor 1 (Pendulum): AS5600 12-bit magnetic encoder (Hardware I2C pins 20/21)
+Sensor 2 (Motor): AS5600 12-bit magnetic encoder (Software I2C pins 22/24)
 Pin Configuration
 See docs/ProjectPinMap.md for the complete, definitive wiring details. This map is the single source of truth.
 ⚠️ CRITICAL: A common ground between the external PSU and the Arduino GND is required for the system to function.
@@ -106,7 +106,7 @@ Pendulum Sensor: Check Wire connections (SDA $\rightarrow$ 20, SCL $\rightarrow$
 Motor Sensor: Check SoftwareWire connections (SDA $\rightarrow$ 22, SCL $\rightarrow$ 24).
 Motor Not Moving
 Check enable pin is LOW (driver enabled).
-Verify motor power supply (12-28V) is connected to VM & GND.
+Verify motor power supply (12V) is connected to VM & GND.
 Confirm Common Ground between PSU and Arduino.
 Check STEP and DIR pin connections (Pins 5, 6).
 Motor Moves Wrong Direction

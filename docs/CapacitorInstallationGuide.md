@@ -69,7 +69,7 @@ The motor driver is where the noise starts. This is the **highest priority** ins
 ### Where Exactly?
 
 **Find these pins on your TMC2209 driver:**
-- **VMOT** (motor power input) - This connects to your 12-24V power supply
+- **VMOT** (motor power input) - This connects to your 12V power supply
 - **GND** (ground near VMOT) - This connects to power supply ground
 
 ### Step-by-Step Installation
@@ -148,7 +148,7 @@ NEGATIVE leg (-) → Connect to GND pin (the one near VMOT)
 ```
      Motor Power Supply
            |
-           | 12-24V
+           | 12V
            |
         ╔══╧══════════════════╗
         ║  VMOT (+ input)    ║
@@ -334,7 +334,7 @@ NEGATIVE leg (-) → Connect to GND pin on AS5600 board
 ## Complete Wiring Diagram with ALL Capacitors
 
 ```
-External 12-24V Power Supply
+External 12V Power Supply
     │
     ├──→ VMOT (TMC2209) ──┬──→ Motor Coils
     │                     │
