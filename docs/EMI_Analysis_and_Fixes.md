@@ -41,12 +41,37 @@ Step -2: Pend: 170.9° (bit 11 flipped to 1, +206.8° error)
 Step -3: Pend: -36.0° (bit 11 back to 0, corrected)
 ```
 
-### 2. EMI Source
+### 2. EMI Source - CRITICAL DISTINCTION
+
+**NOT the motor's magnetic field** (which AS5600 is designed to measure near motors)
+
+**The real culprit: TMC2209 driver high-frequency switching**
+
 Every motor step generates:
 - **Sharp current spike** in TMC2209 driver (~1-2A risetime <1µs)
-- **Magnetic field pulse** from motor coil switching
-- **Conducted noise** on power rails (filtered by capacitors)
-- **Radiated EMI** coupling into I2C signal lines (NOT filtered)
+- **High-frequency EM radiation** (100kHz-10MHz range) from fast dI/dt
+- **Long breadboard wires** (10-30cm) act as antennas, picking up this radiation
+- **I2C digital communication corrupted** - bit flips during transmission
+
+**Key insight**:
+- Motor's DC magnetic field (0-100Hz): AS5600 measures this perfectly ✅
+- Driver's switching noise (100kHz-10MHz): Corrupts I2C digital lines ❌
+- These are **completely different phenomena**
+
+### 3. Why This Works in Production Systems
+
+**PCB-based designs** (SimpleFOC, ODrive, commercial servos):
+- AS5600 placed **directly on PCB** near motor driver
+- I2C traces <2cm long (vs your 10-30cm breadboard wires)
+- Ground plane shields from EM radiation
+- 0.1µF ceramic caps at each chip filter high-frequency noise
+- Result: <1% error rate despite motors right next to sensors
+
+**Your breadboard challenge**:
+- Long jumper wires = excellent antennas for 100kHz-10MHz EMI
+- No ground plane shielding
+- Distributed capacitance and inductance in wires
+- This is why breadboard testing is hard, not because of fundamental design flaw
 
 ### 3. Why 400kHz I2C Failed
 - Long breadboard wires act as antennas
@@ -255,6 +280,76 @@ You correctly identified:
 - Bit-level corruption mechanism
 - Need for signal integrity improvements
 - Inadequate error checking in current code
+
+## Next Steps
+
+### Immediate (Test First)
+1. **Add 0.1µF ceramic capacitors** at both AS5600 sensor chips
+   - Most effective single fix (50-70% error reduction expected)
+   - Place capacitor leads directly at sensor VCC/GND pins
+   - Keep leads <5mm long
+   
+2. **Run live sensor test** (Option 2)
+   - Current status: 20-25% corruption rate
+   - Target: <5% after capacitor addition
+
+### If Still >5% Errors (Hardware Escalation)
+
+3. **Shielded cable for I2C lines**
+   - Replace breadboard jumpers with shielded twisted-pair cable
+   - Ground shield at Arduino end only (avoid ground loops)
+   - Expected: 60-80% error reduction
+   
+4. **100Ω series resistors**
+   - Add on all 4 I2C lines (both sensors, SDA+SCL)
+   - Slows down edges, reduces high-frequency radiation
+   - Trade-off: Still within 100kHz I2C spec
+
+### Engineering Discussion - NOT A PARADOX
+
+**Question**: "How do engineers place encoders near motors when motor drivers cause EMI?"
+
+**Answer**: They do it all the time successfully! The key differences:
+
+**PCB-based production systems** (SimpleFOC, ODrive, commercial servos):
+- ✅ AS5600 placed ON-BOARD with motor driver (same PCB)
+- ✅ I2C traces: 1-2cm long (vs your 10-30cm breadboard wires)
+- ✅ Ground plane acts as shield between driver and sensor
+- ✅ 0.1µF ceramic caps at every IC (high-freq filtering)
+- ✅ Twisted-pair or differential I2C routing
+- ✅ Result: <1% error rate despite intense EMI environment
+
+**Your breadboard prototype** (inherently challenging):
+- ❌ Long jumper wires = excellent antennas for 100kHz-10MHz
+- ❌ No ground plane shielding
+- ❌ Distributed parasitic capacitance/inductance
+- ❌ This is a **prototyping limitation**, not a design flaw
+
+**Why your custom AS5600 mount is CORRECT**:
+- Fixed magnet distance = perfect
+- Proximity to motor shaft = necessary and fine
+- Problem is purely the **communication wires**, not the sensing
+
+**Real-world examples**:
+1. **SimpleFOC library**: Thousands of projects using AS5600/AS5048 next to BLDC/stepper drivers
+2. **ODrive controller**: AS5047 SPI encoder on same board as 40A motor driver
+3. **Industrial servo motors**: Encoders **inside motor housing** with shielded cables out
+
+The sensors work fine near motors. The challenge is getting clean digital data out via long wires.
+
+### Migration Path to Production
+
+When you move from breadboard to final design:
+
+**Option A - PCB design**:
+- AS5600 sensors directly on main PCB
+- I2C traces <2cm with ground plane
+- All EMI issues disappear
+
+**Option B - Remote sensors** (if PCB not possible):
+- Keep AS5600 near motor (your current mount is good)
+- Use shielded twisted-pair cable for I2C
+- Or switch to differential encoder (e.g., AS5047 with SPI)
 
 ## Next Steps
 
