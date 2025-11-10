@@ -3,10 +3,10 @@ A control systems project implementing a rotary inverted pendulum using an Ardui
 Core Hardware Components
 Microcontroller: Arduino Mega 2560
 Motor Driver: TMC2209 (V3.0)
-Motor Power Supply: 12V DC adapter
+Motor Power Supply: 24V, 2A DC adapter
 Stepper Motor: 17HS4401-D (1.8° step angle, 200 steps/rev)
 Sensor 1 (Pendulum): AS5600 12-bit magnetic encoder (Hardware I2C pins 20/21)
-Sensor 2 (Motor): AS5600 12-bit magnetic encoder (Software I2C pins 22/24)
+Sensor 2 (Motor): AS5600 12-bit magnetic encoder (Software I2C pins 22/24) - Currently unused, using step counting instead
 Pin Configuration
 See docs/ProjectPinMap.md for the complete, definitive wiring details. This map is the single source of truth.
 ⚠️ CRITICAL: A common ground between the external PSU and the Arduino GND is required for the system to function.
@@ -89,7 +89,8 @@ Move complete.
 
 Development Notes
 Motor Configuration
-$V_{\text{ref}}$ Setting: 1.01V (provides $\approx 0.77\text{A}$ RMS current)
+$V_{\text{ref}}$ Setting: 2.112V (provides $\approx 2.4\text{A}$ motor current for increased torque)
+Power Supply: 24V, 2A adapter (upgraded for higher speed and torque requirements)
 Steps per revolution: 3200 (200 base steps $\times$ 1/16 microstepping, default on TMC2209)
 75° limit: 666 steps (75 * 3200 / 360)
 Sensor Architecture
@@ -106,7 +107,7 @@ Pendulum Sensor: Check Wire connections (SDA $\rightarrow$ 20, SCL $\rightarrow$
 Motor Sensor: Check SoftwareWire connections (SDA $\rightarrow$ 22, SCL $\rightarrow$ 24).
 Motor Not Moving
 Check enable pin is LOW (driver enabled).
-Verify motor power supply (12V) is connected to VM & GND.
+Verify motor power supply (24V) is connected to VM & GND.
 Confirm Common Ground between PSU and Arduino.
 Check STEP and DIR pin connections (Pins 5, 6).
 Motor Moves Wrong Direction

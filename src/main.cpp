@@ -1,22 +1,19 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <SoftwareWire.h>
+// #include <SoftwareWire.h> // No longer needed
 #include <AS5600.h>
 #include <AccelStepper.h>
 #include <math.h>
 
 // ============================================================
-//  ROTARY INVERTED PENDULUM - SENSOR-BASED CONTROL
+//  ROTARY INVERTED PENDULUM - STEPPER-BASED CONTROL
 // ============================================================
 //
-// WORKFLOW:
-// 1. Startup diagnostics (both sensors + motor)
-// 2. Set zero position (center arm, pendulum up)
-// 3. Test sensors continuously
-// 4. Calibrate left/right limits (sensor-based)
-// 5. Return to center
-// 6. Energy-based swing-up with constraints
-// 7. LQR balance control
+// V4.8 - 24V POWER ENABLED
+// - 24V Power Supply
+// - TMC2209 Vref = 2.11V (for 1.5A RMS)
+// - Pendulum Sensor: AS5600 (Hardware I2C)
+// - Motor Position: Stepper Count (Virtual Encoder)
 //
 // ============================================================
 
@@ -29,17 +26,12 @@ AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 // Pendulum Sensor on Hardware I2C (pins 20/21)
 AS5600 as5600_pendulum(&Wire);
 
-// Motor Sensor on Software I2C (pins 22/24)
-#define MOTOR_SDA_PIN 22
-#define MOTOR_SCL_PIN 24
-#define AS5600_ADDRESS 0x36
-#define AS5600_RAW_ANGLE_REG 0x0C
-#define AS5600_STATUS_REG 0x0B
-SoftwareWire motorWire(MOTOR_SDA_PIN, MOTOR_SCL_PIN);
-
 // Motor configuration
-#define MOTOR_SPEED 6000
-#define MOTOR_ACCEL 15000
+// --- 24V HIGH PERFORMANCE VALUES ---
+// With 24V and 1.5A, the motor can now handle high speeds.
+#define MOTOR_SPEED 12000     // (Was 4000)
+#define MOTOR_ACCEL 30000     // (Was 8000)
+// ---
 #define CALIBRATION_SPEED 1000
 #define JOG_SPEED 2000
 
@@ -51,32 +43,32 @@ enum SystemState {
   STATE_IDLE,
   STATE_SWING_UP,
   STATE_BALANCE,
-  STATE_EMERGENCY_STOP
+  STATE_EMERGENCY_STOP,
+  STATE_MONITORING,   // New state for non-blocking monitor
+  STATE_MOVING        // New state for non-blocking moves
 };
 
 SystemState currentState = STATE_STARTUP;
 
 // Calibration data
 float pendulumZeroAngle = 0.0;
-float motorZeroAngle = 0.0;
-float motorLeftLimit = 0.0;   // degrees, sensor-based
-float motorRightLimit = 0.0;  // degrees, sensor-based
 long stepsAtZero = 0;
 long stepsAtLeftLimit = 0;
 long stepsAtRightLimit = 0;
 bool systemCalibrated = false;
+bool leftLimitSet = false;   // Track if left limit was set
+bool rightLimitSet = false;  // Track if right limit was set
 
 // Current sensor readings
 float pendulumAngle = 0.0;  // relative to zero (upright)
-float motorAngle = 0.0;     // relative to zero (center)
 uint16_t pendulumRaw = 0;
-uint16_t motorRaw = 0;
 
-// Control parameters (will be tuned)
-float Kp_swing = 300.0;      // Swing-up proportional gain
-float Kp_balance = 25.0;     // Balance proportional gain
-float Kd_balance = 8.0;      // Balance derivative gain
-float Ki_balance = 0.5;      // Balance integral gain
+// Control parameters (LIVE TUNING - adjust with P/D/I/M commands)
+float Kp_balance = 0.0; // START AT ZERO
+float Kd_balance = 0.0; // START AT ZERO
+float Ki_balance = 0.0; // START AT ZERO
+float Kp_motor = 0.0;   // START AT ZERO
+
 float balanceThreshold = 25.0; // Switch to balance mode (degrees)
 
 // Constants
@@ -86,35 +78,45 @@ const float DEG2RAD = PI / 180.0;
 float previousPendulumAngle = 0.0;
 float integralError = 0.0;
 unsigned long lastControlTime = 0;
-#define CONTROL_LOOP_MS 10
+#define CONTROL_LOOP_MS 10 // 10ms = 100Hz control loop
+
+// --- NEW --- Serial command buffer
+char serialBuffer[50];
+int serialBufferPos = 0;
+
+// Forward declarations
+void checkSerialInput();
+void parseSerialCommand(String cmd);
+void printMenu();
 
 // ============================================================
 //  SENSOR I2C FUNCTIONS
 // ============================================================
 
-uint16_t readAS5600Angle(SoftwareWire &wire) {
-  wire.beginTransmission(AS5600_ADDRESS);
-  wire.write(AS5600_RAW_ANGLE_REG);
-  if (wire.endTransmission() != 0) return 0;
-  wire.requestFrom(AS5600_ADDRESS, 2);
-  if (wire.available() >= 2) {
-    uint8_t high = wire.read();
-    uint8_t low = wire.read();
-    return (high << 8) | low;
+// Helper for median filter
+void insertionSort(uint16_t arr[], int n) {
+  int i, key, j;
+  for (i = 1; i < n; i++) {
+    key = arr[i];
+    j = i - 1;
+    while (j >= 0 && arr[j] > key) {
+      arr[j + 1] = arr[j];
+      j = j - 1;
+    }
+    arr[j + 1] = key;
   }
-  return 0;
 }
 
-bool detectAS5600Magnet(SoftwareWire &wire) {
-  wire.beginTransmission(AS5600_ADDRESS);
-  wire.write(AS5600_STATUS_REG);
-  if (wire.endTransmission() != 0) return false;
-  wire.requestFrom(AS5600_ADDRESS, 1);
-  if (wire.available()) {
-    uint8_t status = wire.read();
-    return (status & 0x20) != 0;
-  }
-  return false;
+// Read sensor with a 3-sample median filter for EMI rejection
+uint16_t readAngleMedian(AS5600 &sensor) {
+  uint16_t readings[3];
+  readings[0] = sensor.readAngle();
+  delayMicroseconds(100);
+  readings[1] = sensor.readAngle();
+  delayMicroseconds(100);
+  readings[2] = sensor.readAngle();
+  insertionSort(readings, 3);
+  return readings[1]; // Return median value
 }
 
 float normalizeAngle(float angle) {
@@ -123,16 +125,18 @@ float normalizeAngle(float angle) {
   return angle;
 }
 
+// Handle angle wraparound for derivative calculation
+float normalizeAngleDelta(float delta) {
+  while (delta > 180.0f) delta -= 360.0f;
+  while (delta < -180.0f) delta += 360.0f;
+  return delta;
+}
+
 void updateSensors() {
   // Read pendulum sensor (Hardware I2C)
-  pendulumRaw = as5600_pendulum.readAngle();
+  pendulumRaw = readAngleMedian(as5600_pendulum);
   float pendulum_deg = (pendulumRaw * 360.0) / 4096.0;
   pendulumAngle = normalizeAngle(pendulum_deg - pendulumZeroAngle);
-  
-  // Read motor sensor (Software I2C)
-  motorRaw = readAS5600Angle(motorWire);
-  float motor_deg = (motorRaw * 360.0) / 4096.0;
-  motorAngle = normalizeAngle(motor_deg - motorZeroAngle);
 }
 
 // ============================================================
@@ -140,326 +144,175 @@ void updateSensors() {
 // ============================================================
 
 bool checkSystemHealth() {
-  Serial.println("\n╔════════════════════════════════════════════╗");
-  Serial.println("║      SYSTEM DIAGNOSTICS                    ║");
-  Serial.println("╚════════════════════════════════════════════╝\n");
+  Serial.println(F("\n╔════════════════════════════════════════════╗"));
+  Serial.println(F("║      SYSTEM DIAGNOSTICS                    ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝\n"));
   
   bool allGood = true;
   
   // Check motor driver
-  Serial.print("Motor Driver... ");
+  Serial.print(F("Motor Driver... "));
   digitalWrite(EN_PIN, LOW);
   delay(100);
-  Serial.println("✓ Enabled");
+  Serial.println(F("✓ Enabled"));
   
   // Check pendulum sensor
-  Serial.print("Pendulum Sensor (Hardware I2C 0x36)... ");
+  Serial.print(F("Pendulum Sensor (Hardware I2C 0x36)... "));
   if (!as5600_pendulum.detectMagnet()) {
-    Serial.println("✗ FAILED - No magnet detected!");
+    Serial.println(F("✗ FAILED - No magnet detected!"));
     allGood = false;
   } else {
-    uint16_t raw = as5600_pendulum.readAngle();
-    Serial.print("✓ OK (raw: ");
+    uint16_t raw = readAngleMedian(as5600_pendulum);
+    Serial.print(F("✓ OK (raw: "));
     Serial.print(raw);
-    Serial.println(")");
-  }
-  
-  // Check motor sensor
-  Serial.print("Motor Sensor (Software I2C 0x36)... ");
-  if (!detectAS5600Magnet(motorWire)) {
-    Serial.println("✗ FAILED - No magnet detected!");
-    allGood = false;
-  } else {
-    uint16_t raw = readAS5600Angle(motorWire);
-    Serial.print("✓ OK (raw: ");
-    Serial.print(raw);
-    Serial.println(")");
+    Serial.println(F(")"));
   }
   
   // Test motor movement
-  Serial.print("Motor Movement Test... ");
+  Serial.print(F("Motor Movement Test... "));
   long startPos = stepper.currentPosition();
-  stepper.setSpeed(1000);
-  for (int i = 0; i < 100; i++) {
-    stepper.runSpeed();
-    delayMicroseconds(100);
+  stepper.setMaxSpeed(1000); // Use a known speed
+  stepper.moveTo(startPos + 200); // Move 200 steps
+  while(stepper.distanceToGo() != 0) {
+    stepper.run();
+  }
+  stepper.moveTo(startPos); // Move back
+  while(stepper.distanceToGo() != 0) {
+    stepper.run();
   }
   stepper.setCurrentPosition(startPos); // Reset
-  Serial.println("✓ Motor responds");
+  Serial.println(F("✓ Motor responds"));
+  
+  // USER FIX 5.2: Disable motor after test
+  digitalWrite(EN_PIN, HIGH);
   
   Serial.println();
   if (allGood) {
-    Serial.println("✅ ALL SYSTEMS OPERATIONAL");
+    Serial.println(F("✅ ALL SYSTEMS OPERATIONAL"));
   } else {
-    Serial.println("❌ SYSTEM CHECK FAILED - Fix errors before proceeding");
+    Serial.println(F("❌ SYSTEM CHECK FAILED - Fix errors before proceeding"));
   }
-  Serial.println("════════════════════════════════════════════\n");
+  Serial.println(F("════════════════════════════════════════════\n"));
   
   return allGood;
 }
 
 // ============================================================
-//  ZEROING PROCEDURE
+//  MENU ACTIONS (NOW NON-BLOCKING)
 // ============================================================
 
 void performZeroing() {
-  Serial.println("\n╔════════════════════════════════════════════╗");
-  Serial.println("║      ZERO POSITION SETUP                   ║");
-  Serial.println("╚════════════════════════════════════════════╝\n");
-  Serial.println("1. Position the motor arm at CENTER");
-  Serial.println("2. Hold the pendulum STRAIGHT UP (vertical)");
-  Serial.println("3. Press 'Z' when ready to set zero position\n");
+  Serial.println(F("\n╔════════════════════════════════════════════╗"));
+  Serial.println(F("║      ZERO POSITION SETUP                   ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝\n"));
+  Serial.println(F("1. Position the motor arm at CENTER"));
+  Serial.println(F("2. Hold the pendulum STRAIGHT UP (vertical)"));
+  Serial.println(F("3. Press 'Z' when ready to set zero position\n"));
   
   currentState = STATE_ZEROING;
-  
-  while (true) {
-    if (Serial.available() > 0) {
-      char c = Serial.read();
-      if (c == 'z' || c == 'Z') {
-        // Set zero positions
-        stepper.setCurrentPosition(0);
-        stepsAtZero = 0;
-        
-        uint16_t pendulum_raw = as5600_pendulum.readAngle();
-        pendulumZeroAngle = (pendulum_raw * 360.0) / 4096.0;
-        
-        uint16_t motor_raw = readAS5600Angle(motorWire);
-        motorZeroAngle = (motor_raw * 360.0) / 4096.0;
-        
-        Serial.println("\n✅ ZERO POSITION SET!");
-        Serial.print("   Pendulum zero: ");
-        Serial.print(pendulumZeroAngle, 2);
-        Serial.println("°");
-        Serial.print("   Motor zero: ");
-        Serial.print(motorZeroAngle, 2);
-        Serial.println("°");
-        Serial.println("════════════════════════════════════════════\n");
-        
-        currentState = STATE_IDLE;
-        break;
-      }
-    }
-    delay(50);
-  }
+  // Don't block - return and let main loop handle input
 }
-
-// ============================================================
-//  SENSOR LIVE MONITORING
-// ============================================================
 
 void liveMonitorSensors() {
-  Serial.println("\n╔════════════════════════════════════════════╗");
-  Serial.println("║      LIVE SENSOR MONITORING                ║");
-  Serial.println("╚════════════════════════════════════════════╝\n");
-  Serial.println("Streaming both sensors. Press 'S' to stop.\n");
-  Serial.println("────────────────────────────────────────────────");
-  Serial.println("Pendulum(°) | Motor(°) | Motor Raw | Steps");
-  Serial.println("────────────────────────────────────────────────");
+  Serial.println(F("\n╔════════════════════════════════════════════╗"));
+  Serial.println(F("║      LIVE SENSOR MONITORING                ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝\n"));
+  Serial.println(F("Streaming pendulum sensor. Press 'X' to stop.\n"));
+  Serial.println(F("────────────────────────────────────────────────"));
+  Serial.println(F("Pendulum(°) | Pendulum Raw | Steps"));
+  Serial.println(F("────────────────────────────────────────────────"));
   
-  unsigned long lastPrint = millis();
-  
-  while (true) {
-    if (Serial.available() > 0) {
-      char c = Serial.read();
-      if (c == 's' || c == 'S') {
-        Serial.println("────────────────────────────────────────────────");
-        Serial.println("\nMonitoring stopped.\n");
-        return;
-      }
-    }
-    
-    if (millis() - lastPrint >= 200) {
-      lastPrint = millis();
-      updateSensors();
-      
-      Serial.print("  ");
-      Serial.print(pendulumAngle, 2);
-      Serial.print("°   \t");
-      Serial.print(motorAngle, 2);
-      Serial.print("°  \t");
-      Serial.print(motorRaw);
-      Serial.print("  \t");
-      Serial.println(stepper.currentPosition());
-    }
-  }
+  currentState = STATE_MONITORING; // Set new state
+  // REMOVED BLOCKING while(true) LOOP
+  // The main loop() will now handle the printing
 }
-
-// ============================================================
-//  LIMIT CALIBRATION
-// ============================================================
 
 void calibrateLimits() {
-  Serial.println("\n╔════════════════════════════════════════════╗");
-  Serial.println("║      LIMIT CALIBRATION                     ║");
-  Serial.println("╚════════════════════════════════════════════╝\n");
-  Serial.println("Use A/D keys to jog left/right");
-  Serial.println("Press 'L' at LEFT limit, 'R' at RIGHT limit");
-  Serial.println("Press 'Q' to quit calibration\n");
+  Serial.println(F("\n╔════════════════════════════════════════════╗"));
+  Serial.println(F("║      LIMIT CALIBRATION                     ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝\n"));
+  Serial.println(F("Use 'A'/'D' keys to jog, 'L'/'R' to set limits"));
+  Serial.println(F("Press 'Q' to quit calibration\n"));
   
   currentState = STATE_CALIBRATION;
+  leftLimitSet = false;   // Reset flags
+  rightLimitSet = false;
+  digitalWrite(EN_PIN, LOW); // Enable motor for jogging
   stepper.setMaxSpeed(JOG_SPEED);
   stepper.setAcceleration(MOTOR_ACCEL);
-  
-  bool leftSet = false;
-  bool rightSet = false;
-  
-  while (true) {
-    if (Serial.available() > 0) {
-      char c = Serial.read();
-      
-      if (c == 'a' || c == 'A') {
-        // Jog left
-        stepper.move(-50);
-        while (stepper.distanceToGo() != 0) {
-          stepper.run();
-        }
-        updateSensors();
-        Serial.print("← Left | Motor: ");
-        Serial.print(motorAngle, 2);
-        Serial.print("° | Steps: ");
-        Serial.println(stepper.currentPosition());
-        
-      } else if (c == 'd' || c == 'D') {
-        // Jog right
-        stepper.move(50);
-        while (stepper.distanceToGo() != 0) {
-          stepper.run();
-        }
-        updateSensors();
-        Serial.print("→ Right | Motor: ");
-        Serial.print(motorAngle, 2);
-        Serial.print("° | Steps: ");
-        Serial.println(stepper.currentPosition());
-        
-      } else if (c == 'l' || c == 'L') {
-        // Set left limit
-        updateSensors();
-        motorLeftLimit = motorAngle;
-        stepsAtLeftLimit = stepper.currentPosition();
-        leftSet = true;
-        Serial.print("\n✓ LEFT LIMIT SET: ");
-        Serial.print(motorLeftLimit, 2);
-        Serial.print("° (");
-        Serial.print(stepsAtLeftLimit);
-        Serial.println(" steps)\n");
-        
-      } else if (c == 'r' || c == 'R') {
-        // Set right limit
-        updateSensors();
-        motorRightLimit = motorAngle;
-        stepsAtRightLimit = stepper.currentPosition();
-        rightSet = true;
-        Serial.print("\n✓ RIGHT LIMIT SET: ");
-        Serial.print(motorRightLimit, 2);
-        Serial.print("° (");
-        Serial.print(stepsAtRightLimit);
-        Serial.println(" steps)\n");
-        
-      } else if (c == 'q' || c == 'Q') {
-        if (leftSet && rightSet) {
-          systemCalibrated = true;
-          Serial.println("\n✅ CALIBRATION COMPLETE!");
-          Serial.print("   Range: ");
-          Serial.print(motorRightLimit - motorLeftLimit, 1);
-          Serial.print("° (");
-          Serial.print(stepsAtRightLimit - stepsAtLeftLimit);
-          Serial.println(" steps)");
-          Serial.println("════════════════════════════════════════════\n");
-          currentState = STATE_IDLE;
-          return;
-        } else {
-          Serial.println("\n⚠ Must set both LEFT and RIGHT limits before quitting!\n");
-        }
-      }
-    }
-    delay(10);
-  }
+  // REMOVED BLOCKING while(true) LOOP
+  // The main loop() will now handle stepper.run() and checkSerialInput()
 }
 
-// ============================================================
-//  RETURN TO CENTER
-// ============================================================
-
 void returnToCenter() {
-  Serial.println("\n╔════════════════════════════════════════════╗");
-  Serial.println("║      RETURNING TO CENTER                   ║");
-  Serial.println("╚════════════════════════════════════════════╝\n");
+  Serial.println(F("\n╔════════════════════════════════════════════╗"));
+  Serial.println(F("║      RETURNING TO CENTER                   ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝\n"));
   
+  digitalWrite(EN_PIN, LOW); // Enable motor
   stepper.setMaxSpeed(MOTOR_SPEED);
   stepper.setAcceleration(MOTOR_ACCEL);
   stepper.moveTo(stepsAtZero);
-  
-  while (stepper.distanceToGo() != 0) {
-    stepper.run();
-  }
-  
-  updateSensors();
-  Serial.print("✓ At center | Motor angle: ");
-  Serial.print(motorAngle, 2);
-  Serial.println("°");
-  Serial.println("════════════════════════════════════════════\n");
+
+  currentState = STATE_MOVING; // Set state to MOVING
+  // REMOVED BLOCKING while(true) LOOP
+  // The main loop() will run the motor
 }
 
 // ============================================================
-//  CONTROL SYSTEM - ENERGY-BASED SWING-UP
+//  CONTROL SYSTEM - BANG-BANG SWING-UP
 // ============================================================
-
-float calculatePendulumEnergy() {
-  // Simplified energy: E = (1 - cos(alpha))
-  // At bottom (180°): E = 2 (max)
-  // At top (0°): E = 0 (min)
-  float alpha_rad = pendulumAngle * DEG2RAD;
-  return 1.0 - cos(alpha_rad);
-}
 
 void runSwingUp() {
   updateSensors();
   
-  // Calculate pendulum energy
-  float energy = calculatePendulumEnergy();
-  float alpha_rad = pendulumAngle * DEG2RAD;
-  float alpha_dot = (pendulumAngle - previousPendulumAngle) / (CONTROL_LOOP_MS / 1000.0);
+  // Estimate velocity (rad/s)
+  float angleDelta = normalizeAngleDelta(pendulumAngle - previousPendulumAngle);
+  float alpha_dot = (angleDelta * DEG2RAD) / (CONTROL_LOOP_MS / 1000.0);
   
-  // Energy-based control: pump energy into pendulum
-  // Direction based on pendulum velocity and position
-  float control = Kp_swing * energy * alpha_dot * cos(alpha_rad);
+  previousPendulumAngle = pendulumAngle;
   
-  // Convert to motor position target (in steps)
-  long targetSteps = stepper.currentPosition() + (long)control;
-  
-  // Enforce limits
-  if (targetSteps < stepsAtLeftLimit) targetSteps = stepsAtLeftLimit;
-  if (targetSteps > stepsAtRightLimit) targetSteps = stepsAtRightLimit;
-  
-  stepper.moveTo(targetSteps);
-  stepper.run();
-  
-  // Check if close enough to switch to balance
-  if (abs(pendulumAngle) < balanceThreshold) {
-    Serial.println("\n✓ Pendulum near upright - Switching to BALANCE mode");
+  // Check if ready to switch to BALANCE (near upright AND slow)
+  if (abs(pendulumAngle) < balanceThreshold && abs(alpha_dot) < 2.0) { // 2.0 rad/s = ~115 deg/s
+    Serial.println(F("\n✓ Pendulum near upright & slow - Switching to BALANCE mode"));
     currentState = STATE_BALANCE;
     integralError = 0.0;
     lastControlTime = millis();
+    // previousPendulumAngle is already set
+    return;
   }
   
-  previousPendulumAngle = pendulumAngle;
+  // True Bang-Bang Logic
+  long targetSteps;
+  float alpha_rad = pendulumAngle * DEG2RAD;
+  if (alpha_dot * cos(alpha_rad) > 0) {
+    // Moving away from upright → push to the RIGHT limit
+    targetSteps = stepsAtRightLimit;
+  } else {
+    // Moving toward upright → push to the LEFT limit
+    targetSteps = stepsAtLeftLimit;
+  }
+  
+  stepper.moveTo(targetSteps);
+  // stepper.run() is called in main loop
 }
 
 // ============================================================
-//  CONTROL SYSTEM - LQR BALANCE
+//  CONTROL SYSTEM - PID BALANCE
 // ============================================================
 
 void runBalance() {
   updateSensors();
   
-  float dt = (millis() - lastControlTime) / 1000.0;
-  lastControlTime = millis();
+  // Use fixed dt for consistent control
+  const float dt = CONTROL_LOOP_MS / 1000.0;  // 0.01s
   
   // Check if pendulum fell
   if (abs(pendulumAngle) > 60.0) {
-    Serial.println("\n⚠ Pendulum fell - Returning to IDLE");
+    Serial.println(F("\n⚠ Pendulum fell - Returning to IDLE"));
     stepper.stop();
     currentState = STATE_IDLE;
+    digitalWrite(EN_PIN, HIGH); // Disable motor
     return;
   }
   
@@ -471,60 +324,316 @@ void runBalance() {
   if (integralError > 100.0) integralError = 100.0;
   if (integralError < -100.0) integralError = -100.0;
   
-  float derivative = (pendulumAngle - previousPendulumAngle) / dt;
+  float angleDelta = normalizeAngleDelta(pendulumAngle - previousPendulumAngle);
+  float derivative = angleDelta / dt;
+  
+  previousPendulumAngle = pendulumAngle;
   
   float pidOutput = Kp_balance * error + Ki_balance * integralError + Kd_balance * derivative;
   
   // Also include motor position feedback (keep centered)
-  float motorCorrection = -0.5 * motorAngle;
+  float motorStepError = (float)stepper.currentPosition() - (float)stepsAtZero;
+  float motorCorrection = -Kp_motor * motorStepError;
   
   float totalControl = pidOutput + motorCorrection;
   
-  // Convert to target position
-  long targetSteps = stepsAtZero - (long)(totalControl * 10.0);
+  // CRITICAL LOGIC FIX (v4.3)
+  long targetSteps = stepsAtZero + (long)(totalControl);
   
   // Enforce limits
   if (targetSteps < stepsAtLeftLimit) targetSteps = stepsAtLeftLimit;
   if (targetSteps > stepsAtRightLimit) targetSteps = stepsAtRightLimit;
   
   stepper.moveTo(targetSteps);
-  stepper.run();
-  
-  previousPendulumAngle = pendulumAngle;
+  // stepper.run() is called in main loop
 }
 
 // ============================================================
-//  MAIN MENU
+//  MAIN MENU & CONTROL TICK
 // ============================================================
 
+void printTuningGains() {
+  Serial.println(F("\n--- Current Gains (24V Enabled) ---"));
+  Serial.print(F("Kp = ")); Serial.println(Kp_balance, 4);
+  Serial.print(F("Kd = ")); Serial.println(Kd_balance, 4);
+  Serial.print(F("Ki = ")); Serial.println(Ki_balance, 4);
+  Serial.print(F("Km = ")); Serial.println(Kp_motor, 4);
+  Serial.println(F("------------------------------------"));
+}
+
 void printMenu() {
-  Serial.println("\n╔════════════════════════════════════════════╗");
-  Serial.println("║  ROTARY INVERTED PENDULUM CONTROL         ║");
-  Serial.println("╚════════════════════════════════════════════╝");
-  Serial.print("\nState: ");
+  Serial.println(F("\n╔════════════════════════════════════════════╗"));
+  Serial.println(F("║  ROTARY INVERTED PENDULUM CONTROL (v4.8)  ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝"));
+  Serial.print(F("\nState: "));
   switch(currentState) {
-    case STATE_STARTUP: Serial.println("STARTUP"); break;
-    case STATE_ZEROING: Serial.println("ZEROING"); break;
-    case STATE_CALIBRATION: Serial.println("CALIBRATION"); break;
-    case STATE_IDLE: Serial.println("IDLE"); break;
-    case STATE_SWING_UP: Serial.println("SWING-UP ACTIVE"); break;
-    case STATE_BALANCE: Serial.println("BALANCING"); break;
-    case STATE_EMERGENCY_STOP: Serial.println("EMERGENCY STOP"); break;
+    case STATE_STARTUP: Serial.println(F("STARTUP")); break;
+    case STATE_ZEROING: Serial.println(F("ZEROING")); break;
+    case STATE_CALIBRATION: Serial.println(F("CALIBRATION")); break;
+    case STATE_IDLE: Serial.println(F("IDLE")); break;
+    case STATE_SWING_UP: Serial.println(F("SWING-UP ACTIVE")); break;
+    case STATE_BALANCE: Serial.println(F("BALANCING")); break;
+    case STATE_EMERGENCY_STOP: Serial.println(F("EMERGENCY STOP")); break;
+    case STATE_MONITORING: Serial.println(F("MONITORING")); break;
+    case STATE_MOVING: Serial.println(F("MOVING")); break;
+    default: Serial.println(F("UNKNOWN"));
   }
-  Serial.print("Calibrated: ");
-  Serial.println(systemCalibrated ? "YES" : "NO");
-  Serial.println("\n--- SETUP SEQUENCE ---");
-  Serial.println("1 - System Diagnostics");
-  Serial.println("2 - Set Zero Position");
-  Serial.println("3 - Live Sensor Monitoring");
-  Serial.println("4 - Calibrate Left/Right Limits");
-  Serial.println("5 - Return to Center");
-  Serial.println("\n--- CONTROL ---");
-  Serial.println("S - Start Swing-Up & Balance");
-  Serial.println("X - Stop Control");
-  Serial.println("E - Emergency Stop");
-  Serial.println("════════════════════════════════════════════");
-  Serial.print("Choice: ");
+  Serial.print(F("Calibrated: "));
+  Serial.println(systemCalibrated ? F("YES") : F("NO"));
+  Serial.println(F("\n--- SETUP SEQUENCE ---"));
+  Serial.println(F("1 - System Diagnostics"));
+  Serial.println(F("2 - Set Zero Position"));
+  Serial.println(F("3 - Live Sensor Monitoring"));
+  Serial.println(F("4 - Calibrate Left/Right Limits"));
+  Serial.println(F("5 - Return to Center"));
+  Serial.println(F("\n--- CONTROL ---"));
+  Serial.println(F("S - Start Swing-Up & Balance"));
+  Serial.println(F("B - Balance Test (manual start from upright)"));
+  Serial.println(F("X - Stop Control"));
+  Serial.println(F("E - Emergency Stop"));
+  Serial.println(F("\n--- LIVE TUNING (use while B or S is running) ---"));
+  Serial.println(F("P<val> (e.g., P10.5) - Set Kp_balance"));
+  Serial.println(F("D<val> (e.g., D0.2)  - Set Kd_balance"));
+  Serial.println(F("I<val> (e.g., I0.01) - Set Ki_balance"));
+  Serial.println(F("M<val> (e.g., M0.05) - Set Kp_motor"));
+  Serial.println(F("T - Show Current Tuning Gains"));
+  Serial.println(F("════════════════════════════════════════════"));
+  Serial.print(F("Choice: "));
+}
+
+// New function to run control logic at a fixed rate
+void controlTick() {
+  // This function is called every 10ms by the timer in loop()
+  if (currentState == STATE_SWING_UP) {
+    runSwingUp();
+  } else if (currentState == STATE_BALANCE) {
+    runBalance();
+  }
+}
+
+// ============================================================
+//  NEW: NON-BLOCKING COMMAND PARSER
+// ============================================================
+
+void parseSerialCommand(String cmd) {
+  if (cmd.length() == 0) return;
+  char commandType = cmd.charAt(0);
+  String cmdVal = cmd.substring(1);
+
+  // These commands work in ANY state (Tuning & Stop)
+  switch (commandType) {
+    case 'P': case 'p':
+      Kp_balance = cmdVal.toFloat();
+      Serial.print(F("Set Kp_balance = ")); Serial.println(Kp_balance, 4);
+      return;
+    case 'D': case 'd':
+      Kd_balance = cmdVal.toFloat();
+      Serial.print(F("Set Kd_balance = ")); Serial.println(Kd_balance, 4);
+      return;
+    case 'I': case 'i':
+      Ki_balance = cmdVal.toFloat();
+      Serial.print(F("Set Ki_balance = ")); Serial.println(Ki_balance, 4);
+      return;
+    case 'M': case 'm':
+      Kp_motor = cmdVal.toFloat();
+      Serial.print(F("Set Kp_motor = ")); Serial.println(Kp_motor, 4);
+      return;
+    case 'T': case 't':
+      printTuningGains();
+      return;
+    case 'X': case 'x':
+      stepper.stop();
+      digitalWrite(EN_PIN, HIGH);
+      if (currentState == STATE_MONITORING) {
+        Serial.println(F("\n✓ Monitoring stopped"));
+      } else if (currentState == STATE_SWING_UP || currentState == STATE_BALANCE) {
+        Serial.println(F("\n✓ Control stopped"));
+      } else if (currentState == STATE_CALIBRATION) {
+         Serial.println(F("\n✓ Calibration stopped"));
+      }
+      currentState = STATE_IDLE;
+      printMenu();
+      return;
+    case 'E': case 'e':
+      stepper.stop();
+      digitalWrite(EN_PIN, HIGH);
+      currentState = STATE_EMERGENCY_STOP;
+      Serial.println(F("\n!!! EMERGENCY STOP !!!"));
+      Serial.println(F("Power cycle or reset to continue.\n"));
+      return;
+  }
+
+  // --- Menu commands below only work if NOT in a control state ---
+  if (currentState == STATE_SWING_UP || currentState == STATE_BALANCE || currentState == STATE_MOVING) {
+    Serial.println(F("Must press 'X' to stop control before giving menu commands."));
+    return;
+  }
+  
+  // Special handling for calibration mode commands
+  if (currentState == STATE_CALIBRATION) {
+    switch (commandType) {
+      case 'a': case 'A':
+        stepper.move(-50); // Set target, main loop will run it
+        Serial.println(F("← Jogging Left 50 steps..."));
+        return;
+      case 'd': case 'D':
+        stepper.move(50); // Set target, main loop will run it
+        Serial.println(F("→ Jogging Right 50 steps..."));
+        return;
+      case 'l': case 'L':
+        stepsAtLeftLimit = stepper.currentPosition();
+        leftLimitSet = true;
+        Serial.print(F("\n✓ LEFT LIMIT SET: ")); Serial.print(stepsAtLeftLimit); Serial.println(F(" steps\n"));
+        return;
+      case 'r': case 'R':
+        stepsAtRightLimit = stepper.currentPosition();
+        rightLimitSet = true;
+        Serial.print(F("\n✓ RIGHT LIMIT SET: ")); Serial.print(stepsAtRightLimit); Serial.println(F(" steps\n"));
+        return;
+      case 'q': case 'Q':
+        if (leftLimitSet && rightLimitSet) {
+          if (stepsAtLeftLimit > stepsAtRightLimit) {
+            Serial.println(F("   (i) Note: Limits were entered backward and have been swapped."));
+            long tmp = stepsAtLeftLimit;
+            stepsAtLeftLimit = stepsAtRightLimit;
+            stepsAtRightLimit = tmp;
+          }
+          systemCalibrated = true;
+          digitalWrite(EN_PIN, HIGH); // Disable motor after calibration
+          currentState = STATE_IDLE;
+          Serial.println(F("\n✅ CALIBRATION COMPLETE!"));
+          Serial.print(F("   Range: ")); Serial.print(stepsAtRightLimit - stepsAtLeftLimit); Serial.println(F(" steps")); 
+          Serial.println(F("════════════════════════════════════════════\n"));
+          printMenu();
+        } else {
+          Serial.println(F("\n⚠ Must set both LEFT and RIGHT limits before quitting!\n"));
+        }
+        return;
+    }
+  }
+
+  // Special handling for zeroing mode
+  if (currentState == STATE_ZEROING) {
+    if (commandType == 'z' || commandType == 'Z') {
+      stepper.setCurrentPosition(0);
+      stepsAtZero = 0;
+      uint16_t pendulum_raw = readAngleMedian(as5600_pendulum);
+      pendulumZeroAngle = (pendulum_raw * 360.0) / 4096.0;
+      Serial.println(F("\n✅ ZERO POSITION SET!"));
+      Serial.print(F("   Pendulum zero: ")); Serial.print(pendulumZeroAngle, 2); Serial.println(F("°"));
+      Serial.print(F("   Motor zero: 0 steps")); Serial.println();
+      Serial.println(F("════════════════════════════════════════════\n"));
+      updateSensors();
+      previousPendulumAngle = pendulumAngle;
+      currentState = STATE_IDLE;
+      printMenu();
+    }
+    return;
+  }
+
+  // --- Standard Menu Commands (must be in IDLE or STARTUP) ---
+  if (currentState == STATE_IDLE || currentState == STATE_STARTUP) {
+    switch (commandType) {
+      case '1':
+        checkSystemHealth();
+        printMenu();
+        break;
+      case '2':
+        performZeroing();
+        // Menu will be shown after 'Z' is pressed
+        break;
+      case '3':
+        liveMonitorSensors();
+        // printMenu() is NOT called, 'X' will call it
+        break;
+      case '4':
+        calibrateLimits();
+        // printMenu() is called by parseSerialCommand on 'Q'
+        break;
+      case '5':
+        if (!systemCalibrated) {
+          Serial.println(F("\nMust calibrate limits first (option 4).\n"));
+          printMenu();
+        } else {
+          returnToCenter();
+          // printMenu() will be called from main loop when move finishes
+        }
+        break;
+      case 's': case 'S':
+        if (!systemCalibrated) {
+          Serial.println(F("\n⚠ Cannot start - System not calibrated!"));
+          Serial.println(F("Complete setup sequence (options 1-5) first.\n"));
+          printMenu();
+        } else {
+          Serial.println(F("\n╔════════════════════════════════════════════╗"));
+          Serial.println(F("║  STARTING SWING-UP CONTROL                 ║"));
+          Serial.println(F("╚════════════════════════════════════════════╝\n"));
+          Serial.println(F("Pull pendulum down, then release..."));
+          Serial.println(F("Press 'X' to stop.\n"));
+          digitalWrite(EN_PIN, LOW);
+          updateSensors();
+          previousPendulumAngle = pendulumAngle;
+          delay(1000); // Give user time to release
+          currentState = STATE_SWING_UP;
+          lastControlTime = millis();
+        }
+        break;
+      case 'b': case 'B':
+        if (!systemCalibrated) {
+          Serial.println(F("\n⚠ Cannot start - System not calibrated!"));
+          Serial.println(F("Complete setup sequence (options 1-5) first.\n"));
+          printMenu();
+        } else {
+          Serial.println(F("\n╔════════════════════════════════════════════╗"));
+          Serial.println(F("║  BALANCE TEST MODE                         ║"));
+          Serial.println(F("╚════════════════════════════════════════════╝\n"));
+          Serial.println(F("Hold pendulum near upright, then release..."));
+          Serial.println(F("Press 'X' to stop.\n"));
+          digitalWrite(EN_PIN, LOW);
+          updateSensors();
+          previousPendulumAngle = pendulumAngle;
+          integralError = 0.0;
+          delay(1000); // Give user time to release
+          currentState = STATE_BALANCE;
+          lastControlTime = millis();
+        }
+        break;
+      
+      default:
+        Serial.println(F("\nInvalid choice."));
+        printMenu();
+        break;
+    }
+  }
+}
+
+// New non-blocking function to check for serial commands
+void checkSerialInput() {
+  while (Serial.available() > 0) {
+    char inChar = (char)Serial.read();
+
+    if (inChar == '\n') { // Only check for Newline
+      // End of command
+      if (serialBufferPos > 0) {
+        serialBuffer[serialBufferPos] = '\0'; // Null terminate
+        Serial.print(F("Command: ")); Serial.println(serialBuffer); // Echo command for debugging
+        parseSerialCommand(String(serialBuffer));
+        serialBufferPos = 0; // Reset buffer
+      }
+    } else if (inChar == '\r') {
+      // Ignore carriage return
+    }
+    else if (inChar >= ' ') { // Only accept printable chars
+      if (serialBufferPos < 49) {
+        serialBuffer[serialBufferPos] = inChar;
+        serialBufferPos++;
+      } else {
+        // Buffer overflow, just reset
+        serialBufferPos = 0;
+      }
+    }
+    // Ignore other chars
+  }
 }
 
 // ============================================================
@@ -544,10 +653,10 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   
-  Serial.println("\n\n╔════════════════════════════════════════════╗");
-  Serial.println("║  ROTARY INVERTED PENDULUM - FULL SYSTEM   ║");
-  Serial.println("║  Sensor-Based Calibration & Control       ║");
-  Serial.println("╚════════════════════════════════════════════╝\n");
+  Serial.println(F("\n\n╔════════════════════════════════════════════╗"));
+  Serial.println(F("║  ROTARY INVERTED PENDULUM - FULL SYSTEM   ║"));
+  Serial.println(F("║  Step-Based Calibration & Control (v4.8)  ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝\n"));
   
   // Configure stepper
   stepper.setMaxSpeed(MOTOR_SPEED);
@@ -556,151 +665,70 @@ void setup() {
   
   // Initialize Hardware I2C (pendulum sensor)
   Wire.begin();
-  Wire.setClock(100000);
+  Wire.setClock(100000); // 100kHz for noise robustness
   delay(100);
   as5600_pendulum.begin();
   
-  // Initialize Software I2C (motor sensor)
-  motorWire.begin();
-  motorWire.setClock(100000);
-  delay(100);
-  
-  Serial.println("System initialized. Run diagnostics (option 1) first.\n");
+  Serial.println(F("System initialized. Run diagnostics (option 1) first.\n"));
+  Serial.flush(); // Ensure output is sent
   
   currentState = STATE_STARTUP;
   printMenu();
+  Serial.flush(); // Ensure menu is sent
 }
 
 // ============================================================
-//  MAIN LOOP
+//  MAIN LOOP (NEW ARCHITECTURE)
 // ============================================================
 
 void loop() {
-  // Handle control modes
-  if (currentState == STATE_SWING_UP) {
-    unsigned long now = millis();
-    if (now - lastControlTime >= CONTROL_LOOP_MS) {
-      lastControlTime = now;
-      runSwingUp();
-    } else {
-      stepper.run();
+  // Main loop must run as fast as possible
+  
+  // 1. Run the non-blocking serial command checker
+  checkSerialInput();
+
+  // 2. Handle control logic at a fixed rate (100Hz)
+  unsigned long now = millis();
+  if (now - lastControlTime >= CONTROL_LOOP_MS) {
+    lastControlTime = now;
+    if (currentState == STATE_SWING_UP || currentState == STATE_BALANCE) {
+      controlTick();
     }
-    
-    // Check for stop command
-    if (Serial.available() > 0) {
-      char c = Serial.read();
-      if (c == 'x' || c == 'X' || c == 's' || c == 'S') {
-        stepper.stop();
-        currentState = STATE_IDLE;
-        Serial.println("\n✓ Control stopped");
-        printMenu();
-      }
-    }
-    return;
+  }
+
+  // 3. Handle sensor monitoring display (if active)
+  static unsigned long lastMonitorPrint = 0;
+  if (currentState == STATE_MONITORING && (now - lastMonitorPrint >= 200)) {
+    lastMonitorPrint = now;
+    updateSensors();
+    Serial.print(F("  "));
+    Serial.print(pendulumAngle, 2);
+    Serial.print(F("°   \t"));
+    Serial.print(pendulumRaw);
+    Serial.print(F("  \t"));
+    Serial.println(stepper.currentPosition());
+  }
+
+  // 4. Run the stepper motor
+  // This must be run for ALL states that can move the motor
+  if (currentState == STATE_SWING_UP || 
+      currentState == STATE_BALANCE || 
+      currentState == STATE_CALIBRATION || 
+      currentState == STATE_MOVING) {
+    stepper.run();
+  }
+
+  // 5. Check for completion of non-blocking moves
+  if (currentState == STATE_MOVING && stepper.distanceToGo() == 0) {
+    // The "returnToCenter" move has finished
+    currentState = STATE_IDLE;
+    digitalWrite(EN_PIN, HIGH); // Disable motor
+    Serial.print(F("✓ At center | Steps: "));
+    Serial.println(stepper.currentPosition());
+    Serial.println(F("════════════════════════════════════════════\n"));
+    printMenu();
   }
   
-  if (currentState == STATE_BALANCE) {
-    unsigned long now = millis();
-    if (now - lastControlTime >= CONTROL_LOOP_MS) {
-      lastControlTime = now;
-      runBalance();
-    } else {
-      stepper.run();
-    }
-    
-    // Check for stop command
-    if (Serial.available() > 0) {
-      char c = Serial.read();
-      if (c == 'x' || c == 'X' || c == 's' || c == 'S') {
-        stepper.stop();
-        currentState = STATE_IDLE;
-        Serial.println("\n✓ Control stopped");
-        printMenu();
-      }
-    }
-    return;
-  }
-  
-  // Menu handling
-  if (Serial.available() > 0) {
-    char c = Serial.read();
-    
-    if (c == '\n' || c == '\r') return;
-    
-    switch(c) {
-      case '1':
-        checkSystemHealth();
-        printMenu();
-        break;
-        
-      case '2':
-        performZeroing();
-        printMenu();
-        break;
-        
-      case '3':
-        liveMonitorSensors();
-        printMenu();
-        break;
-        
-      case '4':
-        if (currentState != STATE_IDLE && currentState != STATE_CALIBRATION) {
-          Serial.println("\nMust be in IDLE state. Set zero position first (option 2).\n");
-        } else {
-          calibrateLimits();
-        }
-        printMenu();
-        break;
-        
-      case '5':
-        if (!systemCalibrated) {
-          Serial.println("\nMust calibrate limits first (option 4).\n");
-        } else {
-          returnToCenter();
-        }
-        printMenu();
-        break;
-        
-      case 's': case 'S':
-        if (!systemCalibrated) {
-          Serial.println("\n⚠ Cannot start - System not calibrated!");
-          Serial.println("Complete setup sequence (options 1-5) first.\n");
-          printMenu();
-        } else {
-          Serial.println("\n╔════════════════════════════════════════════╗");
-          Serial.println("║  STARTING SWING-UP CONTROL                 ║");
-          Serial.println("╚════════════════════════════════════════════╝\n");
-          Serial.println("Pull pendulum down, then release...");
-          Serial.println("Press 'X' to stop.\n");
-          digitalWrite(EN_PIN, LOW);
-          delay(1000);
-          currentState = STATE_SWING_UP;
-          lastControlTime = millis();
-          previousPendulumAngle = 0.0;
-        }
-        break;
-        
-      case 'x': case 'X':
-        stepper.stop();
-        currentState = STATE_IDLE;
-        Serial.println("\n✓ Stopped");
-        printMenu();
-        break;
-        
-      case 'e': case 'E':
-        stepper.stop();
-        digitalWrite(EN_PIN, HIGH);
-        currentState = STATE_EMERGENCY_STOP;
-        Serial.println("\n!!! EMERGENCY STOP !!!");
-        Serial.println("Power cycle or reset to continue.\n");
-        break;
-        
-      default:
-        if (c != '\n' && c != '\r') {
-          Serial.println("\nInvalid choice.");
-          printMenu();
-        }
-        break;
-    }
-  }
+  // The old blocking serial menu is GONE.
+  // All commands are handled by checkSerialInput() -> parseSerialCommand()
 }
