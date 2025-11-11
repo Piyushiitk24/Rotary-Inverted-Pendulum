@@ -81,6 +81,10 @@ float motorRightLimitAbs = 0.0f;
 float motorStepsPerDeg = 1.0f;
 bool motorScaleReady = false;
 
+// Motor driver state tracking
+bool motorDriverEnabled = false;
+bool idleHoldEnabled = false;
+
 void refreshCalibrationStatus() {
   systemCalibrated = zeroPositionSet && leftLimitSet && rightLimitSet && motorScaleReady;
 }
@@ -89,6 +93,8 @@ float getBaseErrorSteps();
 float getBaseErrorDegrees();
 void updateSensors();
 void resyncBaseFromSensor();
+void setMotorEnabled(bool enable);
+void applyIdleHoldIfNeeded();
 
 // Current sensor readings
 float pendulumAngle = 0.0;  // relative to zero (upright)
@@ -287,6 +293,27 @@ void updateSensors() {
 }
 
 // ============================================================
+//  MOTOR DRIVER HELPERS
+// ============================================================
+
+void setMotorEnabled(bool enable) {
+  digitalWrite(EN_PIN, enable ? LOW : HIGH);
+  motorDriverEnabled = enable;
+}
+
+void applyIdleHoldIfNeeded() {
+  if (currentState != STATE_IDLE && currentState != STATE_STARTUP) {
+    return;
+  }
+
+  if (idleHoldEnabled && zeroPositionSet) {
+    setMotorEnabled(true);
+  } else {
+    setMotorEnabled(false);
+  }
+}
+
+// ============================================================
 //  STARTUP DIAGNOSTICS
 // ============================================================
 
@@ -296,10 +323,12 @@ bool checkSystemHealth() {
   Serial.println(F("╚════════════════════════════════════════════╝\n"));
   
   bool allGood = true;
+  bool motorStateBeforeTest = motorDriverEnabled;
+  bool holdPreference = idleHoldEnabled;
   
   // Check motor driver
   Serial.print(F("Motor Driver... "));
-  digitalWrite(EN_PIN, LOW);
+  setMotorEnabled(true);
   delay(100);
   Serial.println(F("✓ Enabled"));
   
@@ -348,8 +377,12 @@ bool checkSystemHealth() {
   applyHighPerformanceProfile();
   Serial.println(F("✓ Motor responds"));
   
-  // USER FIX 5.2: Disable motor after test
-  digitalWrite(EN_PIN, HIGH);
+  // Restore previous motor state / hold preference
+  if (!motorStateBeforeTest) {
+    setMotorEnabled(false);
+  }
+  idleHoldEnabled = holdPreference;
+  applyIdleHoldIfNeeded();
   
   Serial.println();
   if (allGood) {
@@ -404,7 +437,7 @@ void calibrateLimits() {
   rightLimitSet = false;
   motorScaleReady = false;
   refreshCalibrationStatus();
-  digitalWrite(EN_PIN, LOW); // Enable motor for jogging
+  setMotorEnabled(true); // Enable motor for jogging
   stepper.setMaxSpeed(JOG_SPEED);
   stepper.setAcceleration(MOTOR_ACCEL);
   // REMOVED BLOCKING while(true) LOOP
@@ -416,7 +449,7 @@ void returnToCenter() {
   Serial.println(F("║      RETURNING TO CENTER                   ║"));
   Serial.println(F("╚════════════════════════════════════════════╝\n"));
   
-  digitalWrite(EN_PIN, LOW); // Enable motor
+  setMotorEnabled(true); // Enable motor
   applyHighPerformanceProfile();
   long targetSteps = stepsAtZero;
   if (motorScaleReady && fabs(motorStepsPerDeg) > 1e-3f) {
@@ -489,8 +522,9 @@ void runBalance() {
     Serial.println(F("\n⚠ Pendulum fell - Returning to IDLE"));
     stepper.stop();
     currentState = STATE_IDLE;
-    digitalWrite(EN_PIN, HIGH); // Disable motor
+    setMotorEnabled(false);
     resyncBaseFromSensor();
+    applyIdleHoldIfNeeded();
     return;
   }
   
@@ -568,6 +602,14 @@ void printMenu() {
   Serial.println(zeroPositionSet ? F("SET") : F("NOT SET"));
   Serial.print(F("Motor limits: "));
   Serial.println((leftLimitSet && rightLimitSet) ? F("SET") : F("NOT SET"));
+  Serial.print(F("Motor hold: "));
+  if (!zeroPositionSet) {
+    Serial.println(F("OFF (set zero to enable)"));
+  } else if (idleHoldEnabled) {
+    Serial.println(motorDriverEnabled ? F("ON (base clamped)") : F("ON (will clamp in IDLE)"));
+  } else {
+    Serial.println(F("OFF"));
+  }
   Serial.println(F("\n--- SETUP SEQUENCE ---"));
   Serial.println(F("1 - System Diagnostics"));
   Serial.println(F("2 - Set Zero Position"));
@@ -577,6 +619,7 @@ void printMenu() {
   Serial.println(F("\n--- CONTROL ---"));
   Serial.println(F("S - Start Swing-Up & Balance"));
   Serial.println(F("B - Balance Test (manual start from upright)"));
+  Serial.println(F("H - Toggle motor hold (clamp/release base)"));
   Serial.println(F("X - Stop Control"));
   Serial.println(F("E - Emergency Stop"));
   Serial.println(F("T - Show Current Tuning Gains"));
@@ -607,9 +650,27 @@ void parseSerialCommand(String cmd) {
     case 'T': case 't':
       printTuningGains();
       return;
+    case 'H': case 'h':
+      if (currentState == STATE_SWING_UP || currentState == STATE_BALANCE || currentState == STATE_MOVING) {
+        Serial.println(F("\n⚠ Stop control ('X') before toggling motor hold."));
+        return;
+      }
+      if (!zeroPositionSet) {
+        Serial.println(F("\n⚠ Set zero (option 2) before enabling motor hold."));
+        return;
+      }
+      idleHoldEnabled = !idleHoldEnabled;
+      if (idleHoldEnabled) {
+        Serial.println(F("\n✓ Motor hold ENABLED - base clamped"));
+      } else {
+        Serial.println(F("\n✓ Motor hold DISABLED - base free"));
+      }
+      applyIdleHoldIfNeeded();
+      printMenu();
+      return;
     case 'X': case 'x':
       stepper.stop();
-      digitalWrite(EN_PIN, HIGH);
+      setMotorEnabled(false);
       if (currentState == STATE_MONITORING) {
         Serial.println(F("\n✓ Monitoring stopped"));
       } else if (currentState == STATE_SWING_UP || currentState == STATE_BALANCE) {
@@ -620,11 +681,13 @@ void parseSerialCommand(String cmd) {
          Serial.println(F("\n✓ Calibration stopped"));
       }
       currentState = STATE_IDLE;
+      applyIdleHoldIfNeeded();
       printMenu();
       return;
     case 'E': case 'e':
       stepper.stop();
-      digitalWrite(EN_PIN, HIGH);
+      idleHoldEnabled = false;
+      setMotorEnabled(false);
       currentState = STATE_EMERGENCY_STOP;
       swingTargetDir = 0;
       resyncBaseFromSensor();
@@ -700,10 +763,10 @@ void parseSerialCommand(String cmd) {
             updateSensors();
           }
           refreshCalibrationStatus();
-          digitalWrite(EN_PIN, HIGH); // Disable motor after calibration
+          currentState = STATE_IDLE;
+          applyIdleHoldIfNeeded();
           stepper.setMaxSpeed(MOTOR_SPEED);
           stepper.setAcceleration(MOTOR_ACCEL);
-          currentState = STATE_IDLE;
           Serial.println(F("\n✅ CALIBRATION COMPLETE!"));
           Serial.print(F("   Step Range: ")); Serial.print(stepsAtRightLimit - stepsAtLeftLimit); Serial.println(F(" steps")); 
           Serial.print(F("   Motor range: "));
@@ -753,7 +816,12 @@ void parseSerialCommand(String cmd) {
       previousPendulumAngle = pendulumAngle;
       zeroPositionSet = true;
       refreshCalibrationStatus();
+      if (!idleHoldEnabled) {
+        idleHoldEnabled = true;
+        Serial.println(F("   Motor hold enabled to preserve zero (toggle with 'H')."));
+      }
       currentState = STATE_IDLE;
+      applyIdleHoldIfNeeded();
       printMenu();
     }
     return;
@@ -803,7 +871,8 @@ void parseSerialCommand(String cmd) {
           Serial.println(F("╚════════════════════════════════════════════╝\n"));
           Serial.println(F("Pull pendulum down, then release..."));
           Serial.println(F("Press 'X' to stop.\n"));
-          digitalWrite(EN_PIN, LOW);
+          resyncBaseFromSensor();
+          setMotorEnabled(true);
           applySwingProfile();
           updateSensors();
           previousPendulumAngle = pendulumAngle;
@@ -824,7 +893,8 @@ void parseSerialCommand(String cmd) {
           Serial.println(F("╚════════════════════════════════════════════╝\n"));
           Serial.println(F("Hold pendulum near upright, then release..."));
           Serial.println(F("Press 'X' to stop.\n"));
-          digitalWrite(EN_PIN, LOW);
+          resyncBaseFromSensor();
+          setMotorEnabled(true);
           applyBalanceProfile();
           updateSensors();
           previousPendulumAngle = pendulumAngle;
@@ -866,7 +936,7 @@ void checkSerialInput() {
 void setup() {
   // Initialize pins
   pinMode(EN_PIN, OUTPUT);
-  digitalWrite(EN_PIN, HIGH); // Disabled initially
+  setMotorEnabled(false); // Disabled initially
   pinMode(STEP_PIN, OUTPUT);
   digitalWrite(STEP_PIN, LOW);
   pinMode(DIR_PIN, OUTPUT);
@@ -953,8 +1023,9 @@ void loop() {
   if (currentState == STATE_MOVING && stepper.distanceToGo() == 0) {
     // The "returnToCenter" move has finished
     currentState = STATE_IDLE;
-    digitalWrite(EN_PIN, HIGH); // Disable motor
-     resyncBaseFromSensor();
+    setMotorEnabled(false);
+    resyncBaseFromSensor();
+    applyIdleHoldIfNeeded();
     Serial.print(F("✓ At center | Steps: "));
     Serial.println(stepper.currentPosition());
     Serial.println(F("════════════════════════════════════════════\n"));
