@@ -199,6 +199,21 @@ uint16_t test_angle = as5600_pendulum.readAngle();
 
 **New Files Created**:
 
+## November 7, 2025
+
+### Motor Sensor Characterisation & Integration
+- Built a dedicated AS5600 motor-sensor calibration sketch (`src/motor_sensor_cal_tool.cpp.bak`) that runs on the SoftwareWire bus (SDA=22, SCL=24). The tool lets us zero the magnet, jog with adjustable increments, capture left/right limits, and prints both controller steps and absolute degrees for every move. Added auto-scaling so the jog increment can target ~10° moves once a span is known.
+- Discovered the TMC2209 is still in high microstep mode (≈1/32), so one "step" reported by AccelStepper is only ~0.065–0.08° of shaft rotation. The calibration tool now computes `deg/step` directly from the measured sensor span and reuses it for consistent reporting.
+- Verified the AS5600 output is linear and symmetric when zeroed at the midpoint. Any apparent asymmetry was due to re-zeroing by eye after calibration. The tool now auto-zeroes at the midpoint and reminds us to re-align the stepper count only after jogging to the sensor's 0°.
+
+### Main Control Firmware Updates
+- Restored the full pendulum controller in `src/main.cpp` and baked in the motor-mounted AS5600 via SoftwareWire. `updateSensors()` now samples both pendulum and motor encoders with the same 3-sample median filter used during diagnostics.
+- Zeroing (menu option 2) now captures both pendulum and motor angles; limit calibration (option 4) records sensor angles alongside step counts, derives `motorStepsPerDeg`, and requires zero to be set first. The setup sequence refuses to start swing-up or balance until zero + limits + scale are all recorded.
+- Live monitoring prints pendulum angle, motor angle, raw values, and steps in a single row so drift is immediately visible. Diagnostics (option 1) checks both hardware-I²C and SoftwareWire sensors for magnet presence.
+- Balance control uses the AS5600 motor angle for the centering term (`Kp_motor` now acts in steps-per-motor-degree), and the "Return to Center" action leverages the sensor reading to remove accumulated drift instead of trusting the virtual encoder alone.
+- Documented the new workflow in the menu output and kept the calibration helper (`motor_sensor_cal_tool.cpp.bak`) as a reference for future hardware checks.
+- Added continuous sensor refresh in the main loop so motor angles remain valid outside the control states, fixed zeroing output to show the absolute motor angle captured, and updated the `Return to Center` routine to read the AS5600 before issuing a move—resolving the "key 5 does nothing" behavior.
+
 ---
 
 ## November 7, 2025
@@ -1741,3 +1756,8 @@ With increased torque:
 **Expected outcome**: Significantly improved performance vs 12V configuration, with careful tuning required to harness the increased power safely.
 
 Good night! 🌙 Tomorrow's testing should show much better swing-up performance with the 24V supply.
+
+## November 11, 2025 – Swing-Up Capture & Balance Guardrails
+- Added latched swing targets and tightened the switch-to-balance criteria: we now require the pendulum angle < 12°, angular velocity < 1.5 rad/s, and the base to be within ±5° (or ±400 microsteps) of center before enabling the PID. This prevents the controller from inheriting huge step errors right after a high-energy pump.
+- Introduced dedicated motion profiles: swing-up runs at 20 k µsteps/s with 80 k µsteps/s² acceleration, balance uses 15 k/40 k, and general moves stick to 12 k/18 k. Diagnostics re-applies the high-speed profile once the low-speed test finishes.
+- Re-tuned the balance controller to conservative fixed gains (Kp=4, Kd=0.8, Ki=0.05, Km=0.03) and clamped the output to ±800 microsteps. The motor-centering term now falls back to step counts when the AS5600 scale isn’t ready, avoiding runaway corrections from noisy sensor data.
