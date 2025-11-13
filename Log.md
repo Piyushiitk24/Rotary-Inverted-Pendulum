@@ -1598,16 +1598,55 @@ The 10° motor drift issue should be largely resolved by the median filtering an
 **Important notes**:
 ⚠️ Monitor motor and driver temperature during extended operation
 ⚠️ Ensure adequate cooling if motor gets too hot
+
+---
+
+<!-- markdownlint-disable MD022 MD024 MD032 MD009 -->
+
+## Motor Sensor Replacement & Telemetry Enhancements (Nov 12, 2025)
+
+### Objective
+
+Diagnose inconsistent motor encoder readings, validate the new AS5600 magnet install, and make firmware tweaks to expose calibration-time telemetry before resuming PID tuning.
+
+### Hardware Findings
+
+- Original motor magnet delivered only ~12° of sensor span despite ±200 step jogs.
+- Live-monitor traces showed the pendulum encoder behaving, but the motor channel remained pinned within a narrow band—classic sign of a non-diametric magnet or severe misalignment.
+- Swapped in a **true diametrically magnetized disc**, keeping the 2–3 mm air gap. Manual 180° rotation now produces a smooth raw sweep **747 → ~4060 → 2817** (~180° electrical span) with no dead zones or spikes.
+- Confirmed that flipping the magnet only inverts sign; either face works as long as the disc is diametric and centered.
+
+### Firmware Updates (`src/main.cpp`)
+
+- Added a one-shot `calibrationTelemetryPending` flag so each `A`/`D` jog prints a fresh sensor snapshot once the move finishes:
+  - Steps, filtered motor angle + raw count
+  - Pendulum angle + raw count
+- Reset the flag on calibration exit paths (`Q`, `X`, successful completion) to avoid stray prints.
+- Clarified the centering term by flipping the correction sign: `motorCorrection = -Kp_motor * motorStepError * blend;` so positive gains pull the base back to center instead of pushing it further out.
+
+### Validation Results
+
+- Limit calibration: ±200 step jogs now map to ~±110° relative motor angle, confirming the new scale is captured correctly when limits are stored.
+- Live monitoring: manual 180° sweep shows the motor encoder traversing the full range while step counts remain fixed (driver disabled), verifying sensor fidelity independent of AccelStepper.
+- High-level controller review confirmed no additional code changes are required; existing normalization and bang-bang/PID logic already leverage the improved encoder data.
+
+### Next Session TODO
+
+- Re-run full calibration (Options 1–4) with the new magnet in place.
+- Begin PID re-tuning (target for Nov 13 session) using the now-reliable motor feedback.
+
+System is ready for gain tuning with trustworthy motor-position telemetry.
 ⚠️ Verify motor current rating supports 2.4A continuous operation
 
 ### Expected Performance Improvements
 
 With increased torque:
+
 1. **Swing-up**: Faster energy build-up, higher swing amplitudes
 2. **Balance**: Better disturbance rejection, more stable control
 3. **Response**: Quicker acceleration, more precise positioning
 
-### Next Steps
+### Follow-Up Actions
 
 - Test swing-up mode (option S) to verify improved performance
 - Monitor for any overheating during extended balance tests
@@ -1761,3 +1800,5 @@ Good night! 🌙 Tomorrow's testing should show much better swing-up performance
 - Added latched swing targets and tightened the switch-to-balance criteria: we now require the pendulum angle < 12°, angular velocity < 1.5 rad/s, and the base to be within ±5° (or ±400 microsteps) of center before enabling the PID. This prevents the controller from inheriting huge step errors right after a high-energy pump.
 - Introduced dedicated motion profiles: swing-up runs at 20 k µsteps/s with 80 k µsteps/s² acceleration, balance uses 15 k/40 k, and general moves stick to 12 k/18 k. Diagnostics re-applies the high-speed profile once the low-speed test finishes.
 - Re-tuned the balance controller to conservative fixed gains (Kp=4, Kd=0.8, Ki=0.05, Km=0.03) and clamped the output to ±800 microsteps. The motor-centering term now falls back to step counts when the AS5600 scale isn’t ready, avoiding runaway corrections from noisy sensor data.
+
+<!-- markdownlint-enable MD022 MD024 MD032 MD009 -->

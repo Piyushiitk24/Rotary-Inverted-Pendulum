@@ -4,6 +4,7 @@
 #include <AS5600.h>
 #include <AccelStepper.h>
 #include <math.h>
+#include <ctype.h>
 
 // ============================================================
 //  ROTARY INVERTED PENDULUM - STEPPER-BASED CONTROL
@@ -84,6 +85,10 @@ bool motorScaleReady = false;
 // Motor driver state tracking
 bool motorDriverEnabled = false;
 bool idleHoldEnabled = false;
+bool motorCenteringEnabled = true;
+bool calibrationTelemetryPending = false;
+
+String serialCommandBuffer;
 
 void refreshCalibrationStatus() {
   systemCalibrated = zeroPositionSet && leftLimitSet && rightLimitSet && motorScaleReady;
@@ -131,11 +136,11 @@ void resyncBaseFromSensor() {
   stepper.setCurrentPosition(stepsAtZero + sensorSteps);
 }
 
-// Control parameters (static defaults tuned for lightweight PLA build)
-const float Kp_balance = 4.0f;
-const float Kd_balance = 0.8f;
-const float Ki_balance = 0.05f;
-const float Kp_motor = 0.03f;   // proportional gain on step-count error to keep arm centered
+// Control parameters (defaults tuned for lightweight PLA build)
+float Kp_balance = 2.0f;
+float Kd_balance = 0.0f;
+float Ki_balance = 0.000f;
+float Kp_motor = 0.1f;   // proportional gain on step-count error (positive pulls base back toward center)
 
 float balanceThreshold = 25.0; // Switch to balance mode (degrees)
 
@@ -146,6 +151,7 @@ const float BALANCE_SWITCH_RATE = 1.5f; // rad/s
 const float BALANCE_SWITCH_BASE_DEG = 5.0f;
 const long BALANCE_SWITCH_BASE_STEPS = 400;
 const long BALANCE_OUTPUT_CLAMP = 800;
+const float MOTOR_CENTER_WINDOW_DEG = 20.0f; // disable centering outside this pendulum window
 
 static inline void applyMotionProfile(float maxSpeed, float accel) {
   stepper.setMaxSpeed(maxSpeed);
@@ -436,6 +442,7 @@ void calibrateLimits() {
   leftLimitSet = false;   // Reset flags
   rightLimitSet = false;
   motorScaleReady = false;
+  calibrationTelemetryPending = false;
   refreshCalibrationStatus();
   setMotorEnabled(true); // Enable motor for jogging
   stepper.setMaxSpeed(JOG_SPEED);
@@ -548,8 +555,15 @@ void runBalance() {
   if (motorScaleReady) {
     motorStepError = motorAngle * motorStepsPerDeg;
   }
-  float motorCorrection = Kp_motor * motorStepError;
-  
+
+  float motorCorrection = 0.0f;
+  if (motorCenteringEnabled && Kp_motor > 1e-6f) {
+    if (fabs(pendulumAngle) < MOTOR_CENTER_WINDOW_DEG) {
+      float blend = 1.0f - (fabs(pendulumAngle) / MOTOR_CENTER_WINDOW_DEG);
+      motorCorrection = -Kp_motor * motorStepError * blend;
+    }
+  }
+
   float totalControl = pidOutput + motorCorrection;
 
   if (totalControl > BALANCE_OUTPUT_CLAMP) totalControl = BALANCE_OUTPUT_CLAMP;
@@ -610,6 +624,8 @@ void printMenu() {
   } else {
     Serial.println(F("OFF"));
   }
+  Serial.print(F("Motor centering: "));
+  Serial.println(motorCenteringEnabled ? F("ON") : F("OFF"));
   Serial.println(F("\n--- SETUP SEQUENCE ---"));
   Serial.println(F("1 - System Diagnostics"));
   Serial.println(F("2 - Set Zero Position"));
@@ -620,6 +636,11 @@ void printMenu() {
   Serial.println(F("S - Start Swing-Up & Balance"));
   Serial.println(F("B - Balance Test (manual start from upright)"));
   Serial.println(F("H - Toggle motor hold (clamp/release base)"));
+  Serial.println(F("C - Toggle motor centering term"));
+  Serial.println(F("P<x> - Set Kp  (e.g. P1.8)"));
+  Serial.println(F("I<x> - Set Ki  (e.g. I0.05)"));
+  Serial.println(F("D<x> - Set Kd  (e.g. D0.3)"));
+  Serial.println(F("M<x> - Set Kp_motor (e.g. M0.05)"));
   Serial.println(F("X - Stop Control"));
   Serial.println(F("E - Emergency Stop"));
   Serial.println(F("T - Show Current Tuning Gains"));
@@ -642,7 +663,61 @@ void controlTick() {
 // ============================================================
 
 void parseSerialCommand(String cmd) {
+  cmd.trim();
   if (cmd.length() == 0) return;
+
+  if (cmd.length() > 1) {
+    char prefix = cmd.charAt(0);
+    char prefixUpper = toupper((unsigned char)prefix);
+    if (prefixUpper == 'P' || prefixUpper == 'I' || prefixUpper == 'D' || prefixUpper == 'M') {
+      String valueStr = cmd.substring(1);
+      valueStr.trim();
+      if (valueStr.length() == 0) {
+        switch (prefixUpper) {
+          case 'P':
+            Serial.println(F("\nUsage: P<value>  e.g. P1.8"));
+            break;
+          case 'I':
+            Serial.println(F("\nUsage: I<value>  e.g. I0.05"));
+            break;
+          case 'D':
+            Serial.println(F("\nUsage: D<value>  e.g. D0.3"));
+            break;
+          case 'M':
+            Serial.println(F("\nUsage: M<value>  e.g. M0.05"));
+            break;
+        }
+      } else {
+        float newValue = valueStr.toFloat();
+        switch (prefixUpper) {
+          case 'P':
+            Kp_balance = newValue;
+            Serial.print(F("\n✓ Kp updated to "));
+            Serial.println(Kp_balance, 4);
+            break;
+          case 'I':
+            Ki_balance = newValue;
+            integralError = 0.0f;  // reset accumulated error when Ki changes
+            Serial.print(F("\n✓ Ki updated to "));
+            Serial.println(Ki_balance, 4);
+            break;
+          case 'D':
+            Kd_balance = newValue;
+            Serial.print(F("\n✓ Kd updated to "));
+            Serial.println(Kd_balance, 4);
+            break;
+          case 'M':
+            Kp_motor = newValue;
+            Serial.print(F("\n✓ Kp_motor updated to "));
+            Serial.println(Kp_motor, 4);
+            break;
+        }
+      }
+      printTuningGains();
+      return;
+    }
+  }
+
   char commandType = cmd.charAt(0);
 
   // These commands work in ANY state (Stop/Status)
@@ -668,6 +743,16 @@ void parseSerialCommand(String cmd) {
       applyIdleHoldIfNeeded();
       printMenu();
       return;
+    case 'C': case 'c':
+      motorCenteringEnabled = !motorCenteringEnabled;
+      if (motorCenteringEnabled) {
+        Serial.println(F("\n✓ Motor centering ENABLED"));
+        resyncBaseFromSensor();
+      } else {
+        Serial.println(F("\n✓ Motor centering DISABLED"));
+      }
+      printMenu();
+      return;
     case 'X': case 'x':
       stepper.stop();
       setMotorEnabled(false);
@@ -678,7 +763,8 @@ void parseSerialCommand(String cmd) {
         swingTargetDir = 0;
         resyncBaseFromSensor();
       } else if (currentState == STATE_CALIBRATION) {
-         Serial.println(F("\n✓ Calibration stopped"));
+        calibrationTelemetryPending = false;
+        Serial.println(F("\n✓ Calibration stopped"));
       }
       currentState = STATE_IDLE;
       applyIdleHoldIfNeeded();
@@ -707,10 +793,12 @@ void parseSerialCommand(String cmd) {
     switch (commandType) {
       case 'a': case 'A':
         stepper.move(-50);
+        calibrationTelemetryPending = true;
         Serial.println(F("← Jogging Left 50 steps..."));
         return;
       case 'd': case 'D':
         stepper.move(50);
+        calibrationTelemetryPending = true;
         Serial.println(F("→ Jogging Right 50 steps..."));
         return;
       case 'l': case 'L':
@@ -764,6 +852,7 @@ void parseSerialCommand(String cmd) {
           }
           refreshCalibrationStatus();
           currentState = STATE_IDLE;
+          calibrationTelemetryPending = false;
           applyIdleHoldIfNeeded();
           stepper.setMaxSpeed(MOTOR_SPEED);
           stepper.setAcceleration(MOTOR_ACCEL);
@@ -824,6 +913,24 @@ void parseSerialCommand(String cmd) {
       applyIdleHoldIfNeeded();
       printMenu();
     }
+    return;
+  }
+
+  // If user entered tuning command without a value, provide usage help
+  if (commandType == 'P' || commandType == 'p') {
+    Serial.println(F("\nUsage: P<value>  e.g. P1.8"));
+    return;
+  }
+  if (commandType == 'I' || commandType == 'i') {
+    Serial.println(F("\nUsage: I<value>  e.g. I0.05"));
+    return;
+  }
+  if (commandType == 'D' || commandType == 'd') {
+    Serial.println(F("\nUsage: D<value>  e.g. D0.3"));
+    return;
+  }
+  if (commandType == 'M' || commandType == 'm') {
+    Serial.println(F("\nUsage: M<value>  e.g. M0.05"));
     return;
   }
 
@@ -918,14 +1025,34 @@ void parseSerialCommand(String cmd) {
 void checkSerialInput() {
   while (Serial.available() > 0) {
     char inChar = (char)Serial.read();
-    if (inChar == '\r' || inChar == '\n') {
+    if (inChar == '\r') {
+      // Ignore carriage return, wait for newline
       continue;
     }
+
+    if (inChar == '\n') {
+      Serial.println();
+      if (serialCommandBuffer.length() > 0) {
+        parseSerialCommand(serialCommandBuffer);
+        serialCommandBuffer = "";
+      }
+      continue;
+    }
+
+    if (inChar == '\b' || inChar == 0x7F) {
+      if (serialCommandBuffer.length() > 0) {
+        serialCommandBuffer.remove(serialCommandBuffer.length() - 1);
+        Serial.print("\b \b");
+      }
+      continue;
+    }
+
     if (inChar < ' ') {
       continue;
     }
-    Serial.println(inChar);
-    parseSerialCommand(String(inChar));
+
+    Serial.print(inChar);
+    serialCommandBuffer += inChar;
   }
 }
 
@@ -1030,6 +1157,22 @@ void loop() {
     Serial.println(stepper.currentPosition());
     Serial.println(F("════════════════════════════════════════════\n"));
     printMenu();
+  }
+
+  if (currentState == STATE_CALIBRATION && calibrationTelemetryPending && stepper.distanceToGo() == 0) {
+    calibrationTelemetryPending = false;
+    updateSensors();
+    Serial.print(F("   Steps: "));
+    Serial.print(stepper.currentPosition());
+    Serial.print(F(" | Motor: "));
+    Serial.print(motorAngle, 2);
+    Serial.print(F("° (raw "));
+    Serial.print(motorRaw);
+    Serial.print(F(") | Pendulum: "));
+    Serial.print(pendulumAngle, 2);
+    Serial.print(F("° (raw "));
+    Serial.print(pendulumRaw);
+    Serial.println(F(")"));
   }
   
   // The old blocking serial menu is GONE.
