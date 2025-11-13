@@ -90,6 +90,28 @@ bool calibrationTelemetryPending = false;
 
 String serialCommandBuffer;
 
+enum BalanceLogReason : uint8_t {
+  BALANCE_LOG_REASON_FALL = 0,
+  BALANCE_LOG_REASON_USER_STOP = 1,
+  BALANCE_LOG_REASON_EMERGENCY = 2,
+  BALANCE_LOG_REASON_OTHER = 3
+};
+
+bool balanceLogActive = false;
+bool balanceLogPendingStart = false;
+const char *balanceLogOriginLabel = "manual";
+uint32_t balanceLogSessionCounter = 0;
+
+extern float Kp_balance;
+extern float Ki_balance;
+extern float Kd_balance;
+extern float Kp_motor;
+
+void requestBalanceLogStart(const char *originLabel);
+void cancelBalanceLogStart();
+void startBalanceLogIfNeeded();
+void endBalanceLog(BalanceLogReason reason);
+
 void refreshCalibrationStatus() {
   systemCalibrated = zeroPositionSet && leftLimitSet && rightLimitSet && motorScaleReady;
 }
@@ -134,6 +156,74 @@ void resyncBaseFromSensor() {
   updateSensors();
   long sensorSteps = (long)lroundf(motorAngle * motorStepsPerDeg);
   stepper.setCurrentPosition(stepsAtZero + sensorSteps);
+}
+
+void requestBalanceLogStart(const char *originLabel) {
+  balanceLogOriginLabel = originLabel;
+  balanceLogPendingStart = true;
+}
+
+void cancelBalanceLogStart() {
+  balanceLogPendingStart = false;
+}
+
+static void printBalanceLogEndReason(BalanceLogReason reason) {
+  switch (reason) {
+    case BALANCE_LOG_REASON_FALL:
+      Serial.println(F("pendulum_fell"));
+      break;
+    case BALANCE_LOG_REASON_USER_STOP:
+      Serial.println(F("user_stop"));
+      break;
+    case BALANCE_LOG_REASON_EMERGENCY:
+      Serial.println(F("emergency_stop"));
+      break;
+    default:
+      Serial.println(F("other"));
+      break;
+  }
+}
+
+void startBalanceLogIfNeeded() {
+  if (!balanceLogPendingStart || balanceLogActive) {
+    return;
+  }
+  balanceLogPendingStart = false;
+  balanceLogActive = true;
+  balanceLogSessionCounter++;
+  unsigned long now = millis();
+  Serial.print(F("[BALANCE_LOG_START],"));
+  Serial.print(balanceLogSessionCounter);
+  Serial.print(F(","));
+  Serial.print(now);
+  Serial.print(F(","));
+  Serial.println(balanceLogOriginLabel);
+  Serial.print(F("[BALANCE_GAINS],"));
+  Serial.print(Kp_balance, 6);
+  Serial.print(F(","));
+  Serial.print(Ki_balance, 6);
+  Serial.print(F(","));
+  Serial.print(Kd_balance, 6);
+  Serial.print(F(","));
+  Serial.println(Kp_motor, 6);
+  Serial.println(F("[BALANCE_COLUMNS],time_s,setpoint_deg,pendulum_deg,stepper_steps,motor_deg,control_output"));
+}
+
+void endBalanceLog(BalanceLogReason reason) {
+  if (!balanceLogActive && !balanceLogPendingStart) {
+    return;
+  }
+  if (balanceLogActive) {
+    unsigned long now = millis();
+    Serial.print(F("[BALANCE_LOG_END],"));
+    Serial.print(balanceLogSessionCounter);
+    Serial.print(F(","));
+    Serial.print(now);
+    Serial.print(F(","));
+    printBalanceLogEndReason(reason);
+  }
+  balanceLogActive = false;
+  balanceLogPendingStart = false;
 }
 
 // Control parameters (defaults tuned for lightweight PLA build)
@@ -495,6 +585,7 @@ void runSwingUp() {
     currentState = STATE_BALANCE;
     integralError = 0.0;
     lastControlTime = millis();
+    requestBalanceLogStart("swing_up");
     // previousPendulumAngle is already set
     return;
   }
@@ -520,6 +611,7 @@ void runSwingUp() {
 
 void runBalance() {
   updateSensors();
+  startBalanceLogIfNeeded();
   
   // Use fixed dt for consistent control
   const float dt = CONTROL_LOOP_MS / 1000.0;  // 0.01s
@@ -527,6 +619,7 @@ void runBalance() {
   // Check if pendulum fell
   if (abs(pendulumAngle) > 60.0) {
     Serial.println(F("\n⚠ Pendulum fell - Returning to IDLE"));
+    endBalanceLog(BALANCE_LOG_REASON_FALL);
     stepper.stop();
     currentState = STATE_IDLE;
     setMotorEnabled(false);
@@ -775,6 +868,11 @@ void parseSerialCommand(String cmd) {
     case 'X': case 'x':
       stepper.stop();
       setMotorEnabled(false);
+      if (currentState == STATE_BALANCE) {
+        endBalanceLog(BALANCE_LOG_REASON_USER_STOP);
+      } else if (currentState == STATE_SWING_UP) {
+        cancelBalanceLogStart();
+      }
       if (currentState == STATE_MONITORING) {
         Serial.println(F("\n✓ Monitoring stopped"));
       } else if (currentState == STATE_SWING_UP || currentState == STATE_BALANCE) {
@@ -793,6 +891,7 @@ void parseSerialCommand(String cmd) {
       stepper.stop();
       idleHoldEnabled = false;
       setMotorEnabled(false);
+      endBalanceLog(BALANCE_LOG_REASON_EMERGENCY);
       currentState = STATE_EMERGENCY_STOP;
       swingTargetDir = 0;
       resyncBaseFromSensor();
@@ -1029,6 +1128,7 @@ void parseSerialCommand(String cmd) {
           delay(1000); // Give user time to release
           currentState = STATE_BALANCE;
           lastControlTime = millis();
+          requestBalanceLogStart("manual");
         }
         break;
       

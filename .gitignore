@@ -27,6 +27,12 @@ Desktop.ini
 *.swo
 *.bak
 *.orig
+logs/
+
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+*$py.class
 
 # Python virtual environments
 .venv/
