@@ -6,6 +6,7 @@
 # IDE metadata
 .vscode/
 .idea/
+.github/
 .clangd/
 .cache/
 .ccls-cache/
