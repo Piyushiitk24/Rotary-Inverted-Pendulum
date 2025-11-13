@@ -1801,4 +1801,26 @@ Good night! 🌙 Tomorrow's testing should show much better swing-up performance
 - Introduced dedicated motion profiles: swing-up runs at 20 k µsteps/s with 80 k µsteps/s² acceleration, balance uses 15 k/40 k, and general moves stick to 12 k/18 k. Diagnostics re-applies the high-speed profile once the low-speed test finishes.
 - Re-tuned the balance controller to conservative fixed gains (Kp=4, Kd=0.8, Ki=0.05, Km=0.03) and clamped the output to ±800 microsteps. The motor-centering term now falls back to step counts when the AS5600 scale isn’t ready, avoiding runaway corrections from noisy sensor data.
 
+## November 13, 2025 – Workflow & Tooling Cleanup
+
+### Unified Test Workflow
+- Formalized a clean-cycle routine: keep PlatformIO focused on build/upload and let the Python logger (`tools/balance_plot.py`) handle runtime interaction plus CSV capture, preventing serial-port contention.
+- Confirmed both `platformio run` and `platformio run --target upload` complete cleanly after the recent firmware adjustments before sharing the new workflow steps.
+
+### Python Logger Enhancements
+- Refined the logger to auto-refresh the firmware menu when it connects, optionally flush the input buffer, and stream serial output to disk without drops so it can fully replace the PlatformIO monitor during calibration and diagnostics.
+- Documented the logger’s hotkeys and passthrough behavior so diagnostics, calibration, and balance trials can all run from the Python tool while the logs remain tidy.
+
+### Analysis Notebook Refresh
+- Rebuilt `tools/balance_analysis.ipynb` into a concise seven-cell notebook that loads the latest CSV, summarizes recent attempts, and generates consistent pendulum-angle, motor-step, and control-effort plots for quick reviews.
+- Added helpers for filtering the most recent sessions and highlighting balance windows, accelerating post-run analysis immediately after logging sessions.
+
+### Repository Hygiene
+- Expanded `.gitignore` to cover `.vscode/`, `.github/`, CSV logs, virtual-environment artefacts, and cache folders, then removed the previously tracked IDE directories so the index stays clean.
+- Verified with `git status` that the working tree is pristine after the cleanup, giving future tuning runs a tidy baseline.
+
+### Next Steps
+- Commit and push the tooling/documentation updates, then continue the upload → logger capture → notebook review loop for PID refinement.
+- Resume balance tuning with the streamlined workflow now in place.
+
 <!-- markdownlint-enable MD022 MD024 MD032 MD009 -->

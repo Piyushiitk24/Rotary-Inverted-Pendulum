@@ -29,7 +29,7 @@ TELEMETRY_COLUMNS = (
     "setpoint_deg",
     "pendulum_deg",
     "stepper_steps",
-    "motor_deg",
+    "base_deg",
     "control_output",
 )
 
@@ -123,8 +123,10 @@ def open_serial(port: str, baud: int, *, flush_input: bool = False) -> serial.Se
 def start_command_input_thread(ser: serial.Serial, stop_event: threading.Event) -> threading.Thread:
     def worker() -> None:
         print(
-            "\n[INPUT] Type menu commands here (e.g. 'b', 's', 'x', 'P1.6')."
-            " Type 'exit' or press Ctrl+C to quit.\n"
+            "\n[INPUT] Type firmware menu commands here."
+            "\n        Setup: 1,2,3,4,5    Control: S,B,X,E"
+            "\n        Gains: P#, I#, D#, M#   Toggles: H,C,T"
+            "\n        Type 'exit' or press Ctrl+C to quit.\n"
         )
         while not stop_event.is_set():
             try:
