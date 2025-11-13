@@ -997,6 +997,54 @@ void startControl() {
 
 ### Summary of All Fixes Applied
 
+
+---
+
+## November 13, 2025
+
+### Firmware Refactor: Virtual-Encoder Balance Path
+- Removed the motor-mounted AS5600 from the balance loop and switched the base angle to a virtual encoder derived from step counts only.
+- Added `virtualDegPerStep` scaling with an assumed ±75° span; the value is computed from left/right limit steps during calibration. The function `getBaseErrorDegrees()` now converts step error to degrees without touching I2C.
+- Replaced all motor-sensor calls and telemetry with the step-derived base angle. `BALANCE_COLUMNS` now advertises `base_deg` instead of `motor_deg` so downstream tools don’t expect the motor sensor.
+
+### Derivative Noise Control
+- Implemented a first‑order low‑pass filter on the derivative term (`DERIVATIVE_FILTER_ALPHA`, default 0.2). The filtered derivative feeds the PD controller and is reset whenever BALANCE mode starts to avoid start‑up spikes.
+
+### Tools Updated
+- `tools/balance_plot.py` now logs/plots `base_deg` and shows an updated input prompt that matches the firmware’s non‑blocking menu.
+- Rebuilt `tools/balance_analysis.ipynb` from scratch (“Balance Log Explorer”). The notebook:
+  - Imports helpers from `balance_plot.py` (port/CSV compatibility).
+  - Auto‑detects `base_deg` vs legacy `motor_deg` for plots.
+  - Provides quick per‑attempt plots, an overlay, basic metrics, and a gain table.
+
+### PD Tuning Session (Km = 0, Ki = 0)
+- Sweep: (Kp, Kd) = (3.0, 0.4) → (3.0, 0.8) → (3.0, 1.1) → (3.2, 1.4) → (3.4, 1.6)
+- Observations across all five runs:
+  - Higher Kd clearly damps the small oscillations near upright, but the base steadily drifts because centering is disabled. Once the base approaches a travel limit, the controller runs out of authority and the pendulum departs rapidly.
+  - Kp ≥ 3.4 reaches actuator limits quickly; increasing P further no longer improves hold time.
+  - The filtered derivative removes the worst of the 100 Hz quantization chatter, but large ± bursts still appear as Kd rises; these bursts mainly consume authority rather than improving stability once the base is off‑center.
+
+### Conclusion From Today
+- With Km = 0 the base drift is the dominant failure mode. PD by itself can hold the pendulum briefly, but the base walks into a limit in ~0.5–1.0s and the system falls.
+
+### Plan for Next Session
+- Re‑introduce a small centering term using the virtual base angle (no sensor dependency) and keep Ki = 0.
+- Recommended next 5 attempts:
+  1) Kp = 3.2, Kd = 1.0, Km = 0.02
+  2) Kp = 3.2, Kd = 1.3, Km = 0.02
+  3) Kp = 3.4, Kd = 1.2, Km = 0.03
+  4) Kp = 3.0, Kd = 1.2, Km = 0.04
+  5) Kp = 3.2, Kd = 1.4, Km = 0.04
+- Keep the clamp and motion profile unchanged for comparability; abort a run if the control output rails continuously.
+
+### Notes on Motor Authority
+- Consider lowering TMC2209 microstepping (e.g., from 1/32 to 1/8) to increase per‑step torque and achievable mechanical speed. This can be set via CFG pins on the carrier or via UART `MRES` if available. Re‑tune only after a mechanical change.
+
+**Files touched today:**
+- `src/main.cpp` (virtual encoder path, derivative filter, telemetry labels)
+- `tools/balance_plot.py` (column rename, prompt)
+- `tools/balance_analysis.ipynb` (rebuilt)
+
 **Performance Fixes**:
 1. ✅ Velocity wraparound: Added `normalizeAngleDelta()`
 2. ✅ Control gains: Kp_theta 5→200, swingSpeed 800→5000
