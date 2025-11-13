@@ -27,3 +27,9 @@ Desktop.ini
 *.swo
 *.bak
 *.orig
+
+# Python virtual environments
+.venv/
+venv/
+env/
+.env/
