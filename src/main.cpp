@@ -578,6 +578,25 @@ void runBalance() {
   
   stepper.moveTo(targetSteps);
   // stepper.run() is called in main loop
+
+  // --- Add this code for Plotter Telemetry ---
+  const float telemetryTime = millis() / 1000.0f;
+  Serial.print(telemetryTime, 3);              // Column 1: time (s)
+  Serial.print(",");
+  Serial.print(0.0f, 3);                       // Column 2: pendulum setpoint (deg)
+  Serial.print(",");
+  Serial.print(pendulumAngle, 3);              // Column 3: pendulum angle (deg)
+  Serial.print(",");
+  Serial.print(stepper.currentPosition());     // Column 4: stepper position (microsteps)
+  Serial.print(",");
+  if (motorScaleReady) {
+    Serial.print(motorAngle, 3);               // Column 5: motor sensor angle (deg)
+  } else {
+    Serial.print("nan");                       // Column 5: placeholder until calibrated
+  }
+  Serial.print(",");
+  Serial.println(totalControl, 3);             // Column 6: control output (microsteps)
+  // --- End of Plotter Code ---
 }
 
 // ============================================================
