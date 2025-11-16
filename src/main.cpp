@@ -37,8 +37,9 @@ const float DEFAULT_DEG_PER_STEP   = 0.1f;    // Fallback if limits not yet know
 #define MOTOR_ACCEL 18000     // (Was 8000)
 #define SWING_MAX_SPEED 20000
 #define SWING_ACCEL 80000
-#define BALANCE_MAX_SPEED 15000
-#define BALANCE_ACCEL 40000
+// Aggressive balance profile (adopt from working high-rate sketch)
+#define BALANCE_MAX_SPEED 150000
+#define BALANCE_ACCEL 100000
 // ---
 #define CALIBRATION_SPEED 1000
 #define JOG_SPEED 2000
@@ -200,7 +201,7 @@ void startBalanceLogIfNeeded() {
   Serial.print(Kd_balance, 6);
   Serial.print(F(","));
   Serial.println(Kp_motor, 6);
-  Serial.println(F("[BALANCE_COLUMNS],time_s,setpoint_deg,pendulum_deg,stepper_steps,base_deg,control_output"));
+  Serial.println(F("[BALANCE_COLUMNS],time_s,setpoint_deg,pendulum_deg,stepper_steps,base_deg,control_delta_steps"));
 }
 
 void endBalanceLog(BalanceLogReason reason) {
@@ -220,11 +221,16 @@ void endBalanceLog(BalanceLogReason reason) {
   balanceLogPendingStart = false;
 }
 
-// Control parameters (defaults tuned for lightweight PLA build)
-float Kp_balance = 2.0f;
-float Kd_balance = 0.0f;
-float Ki_balance = 0.000f;
-float Kp_motor = 0.0f;   // default off when only using virtual encoder
+// Control parameters (defaults tuned for 24V stepper build)
+// Kp_balance   - pendulum angle proportional gain  (deg)
+// Kd_balance   - pendulum angular velocity gain    (deg/s)
+// Ki_balance   - integral gain on pendulum angle   (deg * s)
+// Kp_motor     - base centering proportional gain  (steps)
+// Start with small integral to combat drift at high rate; tune live via serial
+float Kp_balance = 8.0f;
+float Kd_balance = 1.5f;
+float Ki_balance = 0.03f;
+float Kp_motor   = 0.14f;
 
 float balanceThreshold = 25.0; // Switch to balance mode (degrees)
 
@@ -235,8 +241,11 @@ const float BALANCE_SWITCH_RATE = 1.5f; // rad/s
 const float BALANCE_SWITCH_BASE_DEG = 5.0f;
 const long BALANCE_SWITCH_BASE_STEPS = 400;
 const long BALANCE_OUTPUT_CLAMP = 800;
-const float MOTOR_CENTER_WINDOW_DEG = 20.0f; // disable centering outside this pendulum window
-const float DERIVATIVE_FILTER_ALPHA = 0.2f;  // Low-pass weight for derivative term
+const float MOTOR_CENTER_WINDOW_DEG = 15.0f;
+// EWMA filter on angle (applied only during BALANCE) at 1 kHz control
+const float EWMA_ALPHA_BAL = 0.45f;  // 0.3–0.6 typical; higher = more responsive
+// Per-tick slew clamp expressed in degrees at 1 kHz
+const float MAX_DEG_PER_TICK_BAL = 120.0f; // matches ~150k steps/s with current virtual scaling
 
 static inline void applyMotionProfile(float maxSpeed, float accel) {
   stepper.setMaxSpeed(maxSpeed);
@@ -258,9 +267,17 @@ static inline void applyBalanceProfile() {
 // Control state
 float previousPendulumAngle = 0.0;
 float integralError = 0.0;
-float filteredDerivative = 0.0f;
-unsigned long lastControlTime = 0;
-#define CONTROL_LOOP_MS 10 // 10ms = 100Hz control loop
+
+// High-rate control scheduling
+unsigned long lastControlMicros = 0;
+#define CONTROL_LOOP_MS 1 // ms helper for places using ms-based math
+#define CONTROL_LOOP_US 1000 // 1ms = 1kHz control loop
+
+// Incremental BALANCE state
+long balanceTargetSteps = 0;
+float balanceTargetStepsF = 0.0f; // floating accumulator to preserve sub-step deltas
+float ewmaAngle = 0.0f;
+bool ewmaInitialized = false;
 
 // Live tuning removed – commands are single-key menu entries only
 
@@ -292,9 +309,9 @@ void insertionSort(uint16_t arr[], int n) {
 uint16_t readAngleMedian(AS5600 &sensor) {
   uint16_t readings[3];
   readings[0] = sensor.readAngle();
-  delayMicroseconds(100);
+  delayMicroseconds(20);
   readings[1] = sensor.readAngle();
-  delayMicroseconds(100);
+  delayMicroseconds(20);
   readings[2] = sensor.readAngle();
   insertionSort(readings, 3);
   return readings[1]; // Return median value
@@ -431,6 +448,7 @@ void performZeroing() {
   Serial.println(F("2. Hold the pendulum STRAIGHT UP (vertical)"));
   Serial.println(F("3. Press 'Z' when ready to set zero position\n"));
   
+  applyMotionProfile(JOG_SPEED, MOTOR_ACCEL);
   currentState = STATE_ZEROING;
   // Don't block - return and let main loop handle input
 }
@@ -444,6 +462,7 @@ void liveMonitorSensors() {
   Serial.println(F("Pendulum(°) | Pend Raw | Base(° est) | Steps"));
   Serial.println(F("────────────────────────────────────────────────"));
   
+  applyMotionProfile(JOG_SPEED, MOTOR_ACCEL);
   currentState = STATE_MONITORING; // Set new state
   // REMOVED BLOCKING while(true) LOOP
   // The main loop() will now handle the printing
@@ -463,8 +482,7 @@ void calibrateLimits() {
   calibrationTelemetryPending = false;
   refreshCalibrationStatus();
   setMotorEnabled(true); // Enable motor for jogging
-  stepper.setMaxSpeed(JOG_SPEED);
-  stepper.setAcceleration(MOTOR_ACCEL);
+  applyMotionProfile(JOG_SPEED, MOTOR_ACCEL);
   // REMOVED BLOCKING while(true) LOOP
   // The main loop() will now handle stepper.run() and checkSerialInput()
 }
@@ -483,7 +501,7 @@ void returnToCenter() {
   // The main loop() will run the motor
 }
 
-// ============================================================
+// =================================================
 //  CONTROL SYSTEM - BANG-BANG SWING-UP
 // ============================================================
 
@@ -506,8 +524,12 @@ void runSwingUp() {
     swingTargetDir = 0;
     currentState = STATE_BALANCE;
     integralError = 0.0;
-    filteredDerivative = 0.0f;
-    lastControlTime = millis();
+    // Initialize incremental balance state
+    balanceTargetSteps = stepper.currentPosition();
+    balanceTargetStepsF = (float)balanceTargetSteps;
+    ewmaAngle = pendulumAngle;
+    ewmaInitialized = true;
+    lastControlMicros = micros();
     requestBalanceLogStart("swing_up");
     // previousPendulumAngle is already set
     return;
@@ -536,8 +558,8 @@ void runBalance() {
   updateSensors();
   startBalanceLogIfNeeded();
   
-  // Use fixed dt for consistent control
-  const float dt = CONTROL_LOOP_MS / 1000.0;  // 0.01s
+  // Use fixed dt for consistent control (1 kHz)
+  const float dt = 0.001f;  // 1 ms
   
   // Check if pendulum fell
   if (abs(pendulumAngle) > 60.0) {
@@ -551,63 +573,93 @@ void runBalance() {
     return;
   }
   
-  // PID control on pendulum angle
-  float error = pendulumAngle; // Want it at 0°
+  // PID control on pendulum angle (treat angle and angular velocity as separate states)
+  // EWMA filter on angle for robust derivative
+  if (!ewmaInitialized) {
+    ewmaAngle = pendulumAngle;
+    ewmaInitialized = true;
+  } else {
+    float dAng = normalizeAngleDelta(pendulumAngle - ewmaAngle);
+    ewmaAngle += EWMA_ALPHA_BAL * dAng;
+  }
+
+  float error = ewmaAngle; // Track filtered angle to zero
   integralError += error * dt;
   
   // Anti-windup
   if (integralError > 100.0) integralError = 100.0;
   if (integralError < -100.0) integralError = -100.0;
   
-  float angleDelta = normalizeAngleDelta(pendulumAngle - previousPendulumAngle);
-  float rawDerivative = angleDelta / dt;
-  filteredDerivative += DERIVATIVE_FILTER_ALPHA * (rawDerivative - filteredDerivative);
-  float derivative = filteredDerivative;
+  float angleDelta = normalizeAngleDelta(ewmaAngle - previousPendulumAngle);
+  float pendulumVelocity = angleDelta / dt;      // deg/s from EWMA
   
-  previousPendulumAngle = pendulumAngle;
-  
-  float pidOutput = Kp_balance * error + Ki_balance * integralError + Kd_balance * derivative;
-  
-  // Also include motor position feedback (keep centered)
-  float motorStepError = getBaseErrorSteps();
+  previousPendulumAngle = ewmaAngle;
 
+  // Core control law: angle + angular velocity + integral
+  float pidOutput =
+      Kp_balance * error +
+      Ki_balance * integralError +
+      Kd_balance * pendulumVelocity;
+  
+  // Reintroduce gentle motor centering in BALANCE to prevent drift
+  float motorStepError = getBaseErrorSteps();
   float motorCorrection = 0.0f;
   if (motorCenteringEnabled && Kp_motor > 1e-6f) {
-    if (fabs(pendulumAngle) < MOTOR_CENTER_WINDOW_DEG) {
-      float blend = 1.0f - (fabs(pendulumAngle) / MOTOR_CENTER_WINDOW_DEG);
+    if (fabs(ewmaAngle) < MOTOR_CENTER_WINDOW_DEG) {
+      float blend = 1.0f - (fabs(ewmaAngle) / MOTOR_CENTER_WINDOW_DEG);
       motorCorrection = -Kp_motor * motorStepError * blend;
     }
   }
-
   float totalControl = pidOutput + motorCorrection;
-
   if (totalControl > BALANCE_OUTPUT_CLAMP) totalControl = BALANCE_OUTPUT_CLAMP;
   if (totalControl < -BALANCE_OUTPUT_CLAMP) totalControl = -BALANCE_OUTPUT_CLAMP;
-  
-  // CRITICAL LOGIC FIX (v4.3)
-  long targetSteps = stepsAtZero + (long)(totalControl);
-  
-  // Enforce limits
-  if (targetSteps < stepsAtLeftLimit) targetSteps = stepsAtLeftLimit;
+
+  // Compute per-tick slew clamp (steps)
+  float degPerStep = virtualDegPerStep;
+  if (degPerStep <= 1e-6f) degPerStep = DEFAULT_DEG_PER_STEP;
+  float stepsPerDeg = 1.0f / degPerStep;
+  float maxStepsPerTickByAngle = stepsPerDeg * MAX_DEG_PER_TICK_BAL;
+  float maxStepsPerTickBySpeed = BALANCE_MAX_SPEED / 1000.0f; // steps per ms at 1 kHz
+  float maxSlew = min(maxStepsPerTickByAngle, maxStepsPerTickBySpeed);
+
+  // Incremental target with per-tick clamp
+  float desiredTarget = (float)stepsAtZero + totalControl;
+  float deltaSteps = desiredTarget - balanceTargetStepsF;
+  if (deltaSteps >  maxSlew) deltaSteps =  maxSlew;
+  if (deltaSteps < -maxSlew) deltaSteps = -maxSlew;
+
+  // Accumulate target around current position (float preserves sub-step corrections)
+  balanceTargetStepsF += deltaSteps;
+  if (balanceTargetStepsF < (float)stepsAtLeftLimit)  balanceTargetStepsF = (float)stepsAtLeftLimit;
+  if (balanceTargetStepsF > (float)stepsAtRightLimit) balanceTargetStepsF = (float)stepsAtRightLimit;
+  long targetSteps = lround(balanceTargetStepsF);
+
+  // Clamp to left/right limits:
+  if (targetSteps < stepsAtLeftLimit)  targetSteps = stepsAtLeftLimit;
   if (targetSteps > stepsAtRightLimit) targetSteps = stepsAtRightLimit;
-  
+
+  balanceTargetSteps = targetSteps;
   stepper.moveTo(targetSteps);
   // stepper.run() is called in main loop
 
-  // --- Add this code for Plotter Telemetry ---
-  const float telemetryTime = millis() / 1000.0f;
-  Serial.print(telemetryTime, 3);              // Column 1: time (s)
-  Serial.print(",");
-  Serial.print(0.0f, 3);                       // Column 2: pendulum setpoint (deg)
-  Serial.print(",");
-  Serial.print(pendulumAngle, 3);              // Column 3: pendulum angle (deg)
-  Serial.print(",");
-  Serial.print(stepper.currentPosition());     // Column 4: stepper position (microsteps)
-  Serial.print(",");
-  Serial.print(motorAngle, 3);                 // Column 5: virtual motor angle (deg)
-  Serial.print(",");
-  Serial.println(totalControl, 3);             // Column 6: control output (microsteps)
-  // --- End of Plotter Code ---
+  // Telemetry (throttled to 100 Hz to avoid saturating serial at 1 kHz)
+  static unsigned long lastTelemetryMicros = 0;
+  unsigned long nowUs = micros();
+  if (nowUs - lastTelemetryMicros >= 10000) { // 10 ms
+    lastTelemetryMicros = nowUs;
+    const float telemetryTime = millis() / 1000.0f;
+    Serial.print(telemetryTime, 3);              // Column 1: time (s)
+    Serial.print(",");
+    Serial.print(0.0f, 3);                       // Column 2: pendulum setpoint (deg)
+    Serial.print(",");
+    Serial.print(pendulumAngle, 3);              // Column 3: pendulum angle (deg)
+    Serial.print(",");
+    Serial.print(stepper.currentPosition());     // Column 4: stepper position (microsteps)
+    Serial.print(",");
+    Serial.print(motorAngle, 3);                 // Column 5: virtual motor angle (deg)
+    Serial.print(",");
+    Serial.println(deltaSteps, 3);               // Column 6: control delta (steps/tick)
+  }
 }
 
 // ============================================================
@@ -666,7 +718,7 @@ void printMenu() {
   Serial.println(F("S - Start Swing-Up & Balance"));
   Serial.println(F("B - Balance Test (manual start from upright)"));
   Serial.println(F("H - Toggle motor hold (clamp/release base)"));
-  Serial.println(F("C - Toggle motor centering term"));
+  Serial.println(F("C - Toggle motor centering term (disabled in BALANCE)"));
   Serial.println(F("P<x> - Set Kp  (e.g. P1.8)"));
   Serial.println(F("I<x> - Set Ki  (e.g. I0.05)"));
   Serial.println(F("D<x> - Set Kd  (e.g. D0.3)"));
@@ -680,7 +732,7 @@ void printMenu() {
 
 // New function to run control logic at a fixed rate
 void controlTick() {
-  // This function is called every 10ms by the timer in loop()
+  // This function is called every 1ms by the timer in loop()
   if (currentState == STATE_SWING_UP) {
     runSwingUp();
   } else if (currentState == STATE_BALANCE) {
@@ -979,7 +1031,7 @@ void parseSerialCommand(String cmd) {
           swingTargetDir = 0;
           delay(1000); // Give user time to release
           currentState = STATE_SWING_UP;
-          lastControlTime = millis();
+          lastControlMicros = micros();
         }
         break;
       case 'b': case 'B':
@@ -999,11 +1051,15 @@ void parseSerialCommand(String cmd) {
           updateSensors();
           previousPendulumAngle = pendulumAngle;
           integralError = 0.0;
-          filteredDerivative = 0.0f;
           swingTargetDir = 0;
+          // Initialize incremental balance state
+          balanceTargetSteps = stepper.currentPosition();
+          balanceTargetStepsF = (float)balanceTargetSteps;
+          ewmaAngle = pendulumAngle;
+          ewmaInitialized = true;
           delay(1000); // Give user time to release
           currentState = STATE_BALANCE;
-          lastControlTime = millis();
+          lastControlMicros = micros();
           requestBalanceLogStart("manual");
         }
         break;
@@ -1080,7 +1136,7 @@ void setup() {
   
   // Initialize Hardware I2C (pendulum sensor)
   Wire.begin();
-  Wire.setClock(100000); // 100kHz for noise robustness
+  Wire.setClock(400000); // 400kHz for faster sensor reads (median at 1kHz control)
   delay(100);
   as5600_pendulum.begin();
   
@@ -1102,10 +1158,11 @@ void loop() {
   // 1. Run the non-blocking serial command checker
   checkSerialInput();
 
-  // 2. Handle control logic at a fixed rate (100Hz)
+  // 2. Handle control logic at a fixed rate (1 kHz)
   unsigned long now = millis();
-  if (now - lastControlTime >= CONTROL_LOOP_MS) {
-    lastControlTime = now;
+  unsigned long nowUs = micros();
+  if ((nowUs - lastControlMicros) >= CONTROL_LOOP_US) {
+    lastControlMicros = nowUs;
     if (currentState == STATE_SWING_UP || currentState == STATE_BALANCE) {
       controlTick();
     }

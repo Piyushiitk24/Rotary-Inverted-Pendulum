@@ -1871,4 +1871,43 @@ Good night! 🌙 Tomorrow's testing should show much better swing-up performance
 - Commit and push the tooling/documentation updates, then continue the upload → logger capture → notebook review loop for PID refinement.
 - Resume balance tuning with the streamlined workflow now in place.
 
+## November 14, 2025 – Microstepping & Limit Recalibration
+
+### TMC2209 Microstep Configuration
+- Wired the generic TMC2209 carrier’s `MS1` and `MS2` pins directly to the Arduino Mega GND rail on the breadboard, eliminating any floating configuration pins.
+- Re-ran the step-based limit calibration (menu option 4) with the pendulum parked and the base jogged via `A`/`D` in 50-step increments.
+- Calibration results:
+  - Left limit: `stepsAtLeftLimit = -200`
+  - Right limit: `stepsAtRightLimit = +200`
+  - Step range: `400` steps across the assumed ±75° travel
+  - Computed `virtualDegPerStep = 0.375°/step`
+- Conclusion: The driver is effectively operating in a coarse microstep mode (~960 steps/rev), already in the 1/4–1/8 region when combined with the mechanical transmission; we are not in an ultra-fine 1/32–1/256 microstepping regime.
+
+### Motion Profile Diagnosis
+- Verified that all control code already uses `virtualDegPerStep` (derived from the ±75° span and the measured step range) to convert between steps and degrees. No additional firmware changes were needed after rewiring MS1/MS2.
+- Noted that the existing high-performance profiles:
+  - `BALANCE_MAX_SPEED = 15000` steps/s
+  - `SWING_MAX_SPEED = 20000` steps/s
+  translate, with the new 0.375°/step scale, into ~15.6 rev/s and ~20.8 rev/s respectively at the base. These are mechanically aggressive for a 17HS4401 on a TMC2209 even at 24 V.
+- Updated our working hypothesis accordingly: the primary limitation is not “too many microsteps” but the combination of ambitious step rates and the actual torque-speed envelope of the motor/driver/arm.
+
+### Next Tuning Steps
+- Keep MS1/MS2 tied to GND so the microstepping mode is deterministic and the 0.375°/step calibration remains valid.
+- In subsequent sessions, reduce `MOTOR_SPEED`, `BALANCE_MAX_SPEED`, and `SWING_MAX_SPEED` into a more realistic 4–8 rev/s band and re-tune Kp/Kd/Km using the existing logging tools (`tools/balance_plot.py` and `tools/balance_analysis.ipynb`) to trade off responsiveness against missed steps and saturation.
+
+## November 16, 2025 – 1 kHz Control Loop & High-Authority Balance
+
+### Control Architecture Overhaul
+- Reworked the firmware to run a micros-scheduled 1 kHz control tick (`CONTROL_LOOP_US = 1000`), added an EWMA low-pass on the pendulum angle, and derive angular velocity directly from the filtered signal. This eliminated the old derivative LPF and stabilised the D-term under noisy readings.
+- Introduced an incremental balance target (`balanceTargetStepsF`) with a per-tick slew clamp so the controller commands absolute positions (like the reference designs) while AccelStepper enforces smooth motion. Telemetry now reports `control_delta_steps` so the Python notebook reflects the actual per-tick delta.
+- Boosted the pendulum sensor read rate by switching I²C to 400 kHz and shortening the median-filter delays to 20 µs, keeping three samples within ~200 µs and leaving headroom for the 1 kHz loop.
+
+### High-Speed Profile & Safety Guardrails
+- Pushed the balance motion profile to 150 k steps/s with 100 k steps/s² acceleration, widened the per-tick clamp to 120 deg (effectively deferring to the speed limit), and raised the default PID gains to `Kp=8`, `Kd=1.5`, `Ki=0.03` so the loop has enough authority to exploit the stronger actuator.
+- Kept the aggressive profile isolated to BALANCE. All other menu paths (zeroing, monitoring, calibration, return-to-center) now force the original jog profile so command `5` no longer whips the arm and knocks the center offset out of calibration.
+
+### Observations & Next Actions
+- Logs showed the previous ±0.2 step clamp was the root cause of “underpowered” behavior; the new entries exhibit ±50–70 step deltas once the clamp was removed. The next tuning session will start from the higher gains above and capture fresh runs to verify damping and drift with the faster actuator.
+- Remaining task for tomorrow: flash the updated firmware, re-run balance tests, and iterate on gains (likely Kp 7–9, Kd 1.3–1.7, Ki 0.02–0.04) while monitoring for skipped steps or derivative-induced oscillations with the new EWMA pipeline.
+
 <!-- markdownlint-enable MD022 MD024 MD032 MD009 -->
