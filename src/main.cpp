@@ -276,9 +276,97 @@ void printMenu() {
   Serial.println(F("2 - Set zero position (press 'Z' when prompted)"));
   Serial.println(F("3 - Enter jog calibration (A/D/L/R/Q)"));
   Serial.println(F("4 - Automated sensor correlation experiment"));
+  Serial.println(F("5 - High-Dynamics Stress Test (EMI Check)"));
   Serial.println(F("T - Show current status"));
   Serial.println(F("════════════════════════════════════════════"));
-  Serial.print(F("Choice: "));
+  Serial.print(F("Choice: ")); 
+}
+
+void runHighSpeedStressTest() {
+  if (!leftLimitSet || !rightLimitSet) {
+    Serial.println(F("Limits not set. Run option 3 first."));
+    return;
+  }
+  
+  Serial.println(F("╔════════════════════════════════════════════╗"));
+  Serial.println(F("║      HIGH-DYNAMICS STRESS TEST             ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝"));
+  Serial.println(F("Simulating Swing-Up/Balance conditions..."));
+  Serial.println(F("Checking for I2C errors and EMI bit-flips."));
+  
+  // Use aggressive profiles similar to final controller
+  stepper.setMaxSpeed(6000);      // ~3 rev/s
+  stepper.setAcceleration(20000); // High accel to generate current spikes
+  
+  long safeLeft = stepsAtLeftLimit + 100;
+  long safeRight = stepsAtRightLimit - 100;
+  
+  long i2cErrors = 0;
+  long glitchErrors = 0;
+  long totalSamples = 0;
+  uint16_t lastRaw = 0;
+  bool firstSample = true;
+  
+  // Run 10 full cycles
+  for (int i = 0; i < 20; i++) {
+    long target = (i % 2 == 0) ? safeLeft : safeRight;
+    stepper.moveTo(target);
+    
+    Serial.print(F("Cycle ")); Serial.print((i/2)+1); 
+    Serial.print(F("/10 -> Moving to ")); Serial.println(target);
+    
+    while (stepper.distanceToGo() != 0) {
+      stepper.run();
+      
+      // Poll sensor periodically (every ~2ms)
+      // We use single reads to catch transient noise that median filters might hide
+      static unsigned long lastPoll = 0;
+      if (millis() - lastPoll > 2) {
+        lastPoll = millis();
+        
+        uint16_t raw = readMotorRawAngleSingle();
+        totalSamples++;
+        
+        if (raw == 0xFFFF) {
+          i2cErrors++;
+        } else {
+          if (!firstSample) {
+            // Check for impossible jumps (> 45 degrees in 2ms)
+            // 45 deg = ~512 counts
+            int delta = abs((int)raw - (int)lastRaw);
+            if (delta > 2048) delta = 4096 - delta; // Handle wrap-around
+            
+            if (delta > 500) {
+              glitchErrors++;
+              Serial.print(F("GLITCH: Raw jump ")); Serial.print(lastRaw);
+              Serial.print(F(" -> ")); Serial.println(raw);
+            }
+          }
+          lastRaw = raw;
+          firstSample = false;
+        }
+      }
+    }
+  }
+  
+  disableMotor();
+  
+  Serial.println(F("══════════ TEST RESULTS ══════════"));
+  Serial.print(F("Total Samples: ")); Serial.println(totalSamples);
+  Serial.print(F("I2C Read Failures: ")); Serial.println(i2cErrors);
+  Serial.print(F("Glitch/Bit-Flips:  ")); Serial.println(glitchErrors);
+  
+  if (i2cErrors == 0 && glitchErrors == 0) {
+    Serial.println(F("✅ PASSED: Sensor is reliable under load."));
+  } else {
+    Serial.println(F("❌ FAILED: EMI interference detected."));
+    Serial.println(F("Do not use for closed-loop control yet."));
+    Serial.println(F("Check shielding, grounding, and pull-ups."));
+  }
+  printMenu();
+}
+
+void exitCalibration() {
 }
 
 void printStatus() {
@@ -676,6 +764,9 @@ void handleCommand(char cmd) {
       break;
     case '4':
       runSensorCorrelationExperiment();
+      break;
+    case '5':
+      runHighSpeedStressTest();
       break;
     case 't': case 'T':
       printStatus();
