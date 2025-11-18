@@ -1694,7 +1694,7 @@ With increased torque:
 2. **Balance**: Better disturbance rejection, more stable control
 3. **Response**: Quicker acceleration, more precise positioning
 
-### Follow-Up Actions
+### Planned Actions
 
 - Test swing-up mode (option S) to verify improved performance
 - Monitor for any overheating during extended balance tests
@@ -1911,3 +1911,85 @@ Good night! 🌙 Tomorrow's testing should show much better swing-up performance
 - Remaining task for tomorrow: flash the updated firmware, re-run balance tests, and iterate on gains (likely Kp 7–9, Kd 1.3–1.7, Ki 0.02–0.04) while monitoring for skipped steps or derivative-induced oscillations with the new EWMA pipeline.
 
 <!-- markdownlint-enable MD022 MD024 MD032 MD009 -->
+
+## November 16, 2025 – Evening Tuneup (Unit Fixes & High-Inertia Prep)
+
+### Motion & Safety Envelope Refresh
+
+- Raised the assumed base travel to ±90° so the virtual encoder scale matches the wider 210 mm arm sweep captured during today’s calibration pass.
+- Reworked every motion profile to realistic but aggressive values: general moves (`MOTOR_SPEED = 12.8 k steps/s`, `MOTOR_ACCEL = 16 k`), swing-up bursts (`19.2 k`/`32 k`), and balance duty (`16 k`/`28 k`). Calibration/jog rates remain at 1 k/2 k to keep setup tame.
+- Increased the absolute balance clamp to ±1000 steps and shortened the swing-up/balance arming delay to 500 ms so the controller reacts faster once the operator releases the pendulum.
+
+### Sensor & Loop Responsiveness
+
+- Tightened the AS5600 median filter spacing to 10 µs between samples (down from 20 µs) after confirming EMI shielding is holding, giving the 1 kHz control loop fresher pendulum data.
+- Bumped the EWMA constant to 0.65 and the per-tick slew ceiling to 200° so the higher-torque setup does not get rate-limited by software.
+
+### PID Consistency & Anti-Windup
+
+- Converted the balance PID output into steps immediately after computation, guaranteeing unit consistency with the centering term and downstream clamps.
+- Added an integral reset whenever |α| exceeds 30° so the slow bias accumulator does not fight recovery after big disturbances, and raised the default gains (`Kp=18`, `Kd=4`, `Ki=0.15`, `Kp_motor=0.25`) to match the lighter arm inertia and new torque envelope.
+
+### Status / Next Session
+
+- Firmware builds clean locally; we deferred upload/run until tomorrow to keep the bench powered down overnight.
+- Tomorrow morning: flash the new profile, re-run menu options 1–5, and capture balance logs with the updated gains to see whether the higher authority plus unit fix keep the base centered without saturation.
+
+### Parameter Corrections (late evening update)
+
+- Rechecked AccelStepper timing limits on the Mega and locked the motion profiles to MCU-safe values: 2 k/12 k for general moves, 3.5 k/18 k for swing bursts, and 3 k/15 k for balance duty. These numbers respect the observed 3–3.5 k steps/s ceiling once the 1 kHz loop and I²C work are accounted for.
+- Trimmed the filter/clamp constants to match the slower actuator (EWMA α = 0.55, slew cap = 180°/tick) and nudged the assumed base span to ±85° so the virtual encoder scale lines up with the measured travel after installing the screw.
+- Backed the default gains down to a gentle starting point (Kp/Kd/Ki/Km = 6/1/0/0.10) and lowered the balance output clamp to 900 steps; we’ll walk them up via the serial tuning commands after tomorrow’s calibration.
+
+## November 17, 2025 – Pendulum Arm Extension
+
+### Hardware Change
+
+- Replaced the lightweight M4 screw cap at the pendulum tip with a PLA coupler that mates two printed arm segments through the hollow sphere. The stack-up is now: 103 mm upper arm → 34 mm sphere → 143 mm lower insert (17 mm of overlap inside the sphere), yielding an effective Z-axis pendulum length of **280 mm**.
+- The coupler uses the same material and diameter as the existing arm so the mass distribution stays uniform; the 7 g sphere now serves purely as a mechanical joint while the added insert contributes both mass and length.
+
+### Rationale & Expected Impact
+
+- Extending the arm shifts the center of mass roughly 120 mm above the pivot (up from ~70 mm), lowering the natural frequency and giving the balance controller more reaction time per cycle.
+- The added inertia should reduce the torque required for small corrections and make the conservative 3 k steps/s motion profiles more effective than simply adding the M4 screw, which provided negligible length increase.
+
+### Follow-Up Actions
+
+- Re-run the full calibration sequence (menu 1–5) so the new geometry updates the virtual encoder scale before tomorrow’s firmware tests.
+- Begin balance tuning from the current low-gain defaults (Kp=6, Kd=1, Ki=0, Km=0.10), then walk gains upward once the longer arm demonstrates stable behavior.
+
+## November 17, 2025 – Control Strategy Review & Next Steps
+
+### Diagnosis Recap
+
+- Reviewed the most recent balance logs and confirmed that all recent failures share the same root cause: with `Kp_motor = 0` the base yaw behaves like a biased integrator, so the arm steadily drifts into a mechanical limit even when the pendulum angle is momentarily regulated.
+- Captured a written handover that documents the current firmware architecture (1 kHz control tick, EWMA-filtered derivative, swing/balance profiles) and the virtual-encoder assumptions so future tuning sessions start from a consistent mental model.
+
+### Action Plan
+
+1. **Re-enable base centering** – Keep the existing blend window (|α| < 15°) and bring `Kp_motor` back online at a gentle 0.05–0.10 so base drift remains bounded while the pendulum is upright.
+2. **Structured PD sweep** – With `Km` fixed and `Ki = 0`, run a P sweep (e.g., Kp = 6, 10, 14, 18) followed by a D sweep (Kd = 0…3) using the high-speed balance profile to identify a well-damped pair of gains before touching integral action.
+3. **Log-first workflow** – Use `tools/balance_plot.py` plus the refreshed notebook to capture every attempt, watching `base_deg` for drift and `control_delta_steps` for saturation so gain adjustments are always data-driven.
+
+### Next Session Checklist
+
+- Flash the existing firmware, run the standard calibration sequence (1–5), and verify that the longer arm still yields accurate `virtualDegPerStep` scaling.
+- Enable the centering term via the serial command menu, execute the planned PD sweeps, and archive the logs for comparison in the notebook before iterating on Ki or alternative control laws.
+
+## November 18, 2025 – Motor Sensor Correlation Campaign
+
+### Calibration Utility Swap & Backup
+- Reconnected the motor-mounted AS5600 to pins 22 (SDA) and 24 (SCL), then backed up the full control firmware as `src/main_full_control_20251118.cpp.bak` before temporarily replacing `src/main.cpp` with the dedicated `motor_sensor_cal_tool.cpp.bak` utility. This ensured the production controller stays intact while we focus on the motor sensor bring-up.
+
+### New Automated Correlation Experiment
+- Added a menu option ("4") inside the calibration tool that sweeps the stepper symmetrically (default ±600 steps or the calibrated span minus a safety margin) at conservative speed/acceleration (1200 steps/s, 6000 steps/s²) to avoid any skipped steps.
+- The routine takes 25 evenly spaced samples, logging: index, commanded steps, expected degrees (`steps × deg/step`), AS5600 relative degrees, and the error per point. After returning to center it prints summary stats (sample count, span, mean |error|, RMS error, max |error|).
+
+### Experiment Results & Diagnosis
+- Ran the experiment over ±150 steps. Output showed the AS5600 is monotonic and smooth but the firmware’s scale and zero assumptions are off: `PendulumAngle` trended +4° vs the sensor on the right limit and −5° on the left, yielding mean |error| 4.57°, RMS 4.99°, max 7.54°.
+- Interpretation: sensor hardware is healthy; we need to redo the step-to-degree calibration (option 3) and zero capture (option 2) so `deg_per_step` reflects the actual motor span and the relative zero matches the AS5600’s upright reading (~2° offset noted at center).
+
+### Plan for Tomorrow
+1. Re-run jog calibration (menu 3) to capture accurate left/right limits, then press `Q` to update `calibratedDegPerStep` automatically.
+2. Return to menu option 2 and set zero with the pendulum upright so both the AS5600 and stepper counts share the same reference.
+3. Re-run the correlation experiment (option 4) to verify mean |error| < 1° and confirm the sensor-track vs steps is within tolerance before restoring the main control firmware.
