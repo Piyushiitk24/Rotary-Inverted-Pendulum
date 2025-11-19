@@ -28,8 +28,9 @@ TELEMETRY_COLUMNS = (
     "time_s",
     "setpoint_deg",
     "pendulum_deg",
-    "stepper_steps",
     "base_deg",
+    "pendulum_vel",
+    "base_vel",
     "control_output",
 )
 
