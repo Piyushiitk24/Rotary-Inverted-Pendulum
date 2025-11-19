@@ -134,6 +134,26 @@ uint16_t motorRaw = 0;
 int swingTargetDir = 0;     // -1 = left, +1 = right
 long swingTargetSteps = 0;
 
+float normalizeAngle(float angle) {
+  while (angle > 180.0) angle -= 360.0;
+  while (angle < -180.0) angle += 360.0;
+  return angle;
+}
+
+float signedAngleDelta(float fromDeg, float toDeg) {
+  float delta = toDeg - fromDeg;
+  while (delta > 180.0f) delta -= 360.0f;
+  while (delta < -180.0f) delta += 360.0f;
+  return delta;
+}
+
+// Handle angle wraparound for derivative calculation
+float normalizeAngleDelta(float delta) {
+  while (delta > 180.0f) delta -= 360.0f;
+  while (delta < -180.0f) delta += 360.0f;
+  return delta;
+}
+
 float getBaseErrorSteps() {
   return (float)stepper.currentPosition() - (float)stepsAtZero;
 }
@@ -363,25 +383,7 @@ uint16_t readAngleMedian(AS5600 &sensor) {
   return readings[1]; // Return median value
 }
 
-float normalizeAngle(float angle) {
-  while (angle > 180.0) angle -= 360.0;
-  while (angle < -180.0) angle += 360.0;
-  return angle;
-}
 
-float signedAngleDelta(float fromDeg, float toDeg) {
-  float delta = toDeg - fromDeg;
-  while (delta > 180.0f) delta -= 360.0f;
-  while (delta < -180.0f) delta += 360.0f;
-  return delta;
-}
-
-// Handle angle wraparound for derivative calculation
-float normalizeAngleDelta(float delta) {
-  while (delta > 180.0f) delta -= 360.0f;
-  while (delta < -180.0f) delta += 360.0f;
-  return delta;
-}
 
 void updateSensors() {
   // Read pendulum sensor (Hardware I2C)
