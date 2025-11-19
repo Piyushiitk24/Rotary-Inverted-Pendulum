@@ -1,5 +1,45 @@
 # Rotary Inverted Pendulum - Development Log
 
+## November 19, 2025
+
+### AI Agent Guide Updates
+
+- Updated `.github/copilot-instructions.md` with comprehensive analysis of the codebase for guiding AI coding agents.
+- **Big Picture Architecture**: Documented hardware (Arduino Mega + TMC2209 + AS5600 sensors), control loop (1kHz), state machine, file swapping mechanism.
+- **Critical Workflows**: Build/upload with PlatformIO, tuning via serial menu, calibration sequence, logging with Python tools.
+- **Project Conventions**: Virtual encoder from steps, safety limits, median filtering for EMI, angle normalization.
+- **Integration Points**: Python `balance_plot.py` for data analysis, PlatformIO dependencies.
+- **Key Files**: Referenced `src/main.cpp`, `platformio.ini`, `docs/ProjectPinMap.md`, `tools/balance_plot.py`.
+
+### Performance Optimizations Applied
+
+- **Velocity LPF Coefficients**: Updated motor velocity filter from 0.5/0.5 to 0.7/0.3 for better responsiveness in damping.
+- **Integral Anti-Windup Range**: Tightened from ±10° to ±2° max effect to prevent excessive integrator action.
+- **Emergency Stop**: Added hardware interrupt on pin 2 (with pullup) and `emergencyStop()` function for immediate shutdown.
+
+### Code Changes Summary
+
+- **File**: `src/main.cpp`
+- **Motor Velocity Filter**: `motorVelocity = 0.7f * mVelRaw + 0.3f * motorVelocity;`
+- **Integral Windup**: `integralError = constrain(integralError, -2.0f, 2.0f);`
+- **Emergency Stop**: Added `emergencyStop()` function and interrupt setup in `setup()`.
+
+### System Status: ✅ Code Optimized, Ready for Testing
+
+**What's Working**:
+
+- Optimized control loop with improved filtering and safety
+- Emergency stop hardware interrupt
+- Updated AI agent guide for future development
+
+**Ready For**:
+
+- Upload and test optimized firmware
+- Tune gains with new velocity filtering
+- Verify emergency stop functionality
+
+---
+
 ## November 4, 2025
 
 ### Hardware Setup Completed
