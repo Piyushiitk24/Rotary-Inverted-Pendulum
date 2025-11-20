@@ -1,5 +1,24 @@
 # Rotary Inverted Pendulum - Development Log
 
+## November 20, 2025
+
+### Logger & Analysis tool fixes
+
+- Hardened `tools/balance_plot.py` and `tools/balance_analysis.ipynb` to stop losing balance runs and to prevent malformed CSV output.
+   - Parser is now tolerant to tag placement and malformed START/END lines, accepts telemetry with extra columns, and auto-creates sessions when firmware prints "Balance ON".
+   - Added immediate save-on-failure: lines containing "Pendulum fell" now trigger an immediate CSV save so failed balance runs are never silently lost.
+   - Implemented autosave timeout (2s) to persist sessions when firmware doesn't emit an END tag.
+   - CSV writing sanitized all metadata and telemetry fields, normalized row length (pad/truncate), and writes via a temporary file then atomically renames to avoid partial/malformed files.
+   - Updated `tools/balance_analysis.ipynb` to safely handle empty or malformed CSVs when loading and extracting gains/metadata.
+   - Verified `BalanceSession.save_to_csv()` locally and fixed issues with commas in metadata (fields are properly quoted now).
+
+### Development notes
+
+- Installed `pyserial` in the development venv for the logger tool and added quick unit tests for CSV save behavior.
+- Left TODOs completed: robust parsing, telemetry acceptance, autosave handling, CSV sanitization, and notebook safety checks.
+
+### System status: ✅ Logging and analysis tools now robust; ready to continue hardware verification tomorrow.
+
 ## November 19, 2025
 
 ### AI Agent Guide Updates
