@@ -6,7 +6,7 @@ Motor Driver: TMC2209 (V3.0)
 Motor Power Supply: 24V, 2A DC adapter
 Stepper Motor: 17HS4401-D (1.8° step angle, 200 steps/rev)
 Sensor 1 (Pendulum): AS5600 12-bit magnetic encoder (Hardware I2C pins 20/21)
-Sensor 2 (Motor): AS5600 12-bit magnetic encoder (Software I2C pins 22/24) - Currently unused, using step counting instead
+Sensor 2 (Motor): AS5600 12-bit magnetic encoder connected via PCA9548A channel 1 (shared hardware I2C pins 20/21 via multiplexer)
 Pin Configuration
 See docs/ProjectPinMap.md for the complete, definitive wiring details. This map is the single source of truth.
 ⚠️ CRITICAL: A common ground between the external PSU and the Arduino GND is required for the system to function.
@@ -33,9 +33,8 @@ cd Rotary-Inverted-Pendulum
 
 Open in VS Code with the PlatformIO extension.
 PlatformIO will automatically install the required libraries specified in platformio.ini:
+gin66/FastAccelStepper - High-performance stepper control (used in firmware)
 robtillaart/AS5600 - AS5600 magnetic encoder library
-waspinator/AccelStepper - Stepper motor control library
-Testato/SoftwareWire - For the secondary software I2C bus
 Running Diagnostic Tests
 To run a test, rename the corresponding file to src/main.cpp.
 Test 1: Dual Sensor Test

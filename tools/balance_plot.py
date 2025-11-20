@@ -1,414 +1,269 @@
 #!/usr/bin/env python3
-"""Balance logger for the Rotary Inverted Pendulum.
-
-This utility opens the serial connection to the Arduino, mirrors the console
-interaction so you can continue using the menu, and automatically captures each
-balance attempt into a timestamped CSV file. The CSV rows contain the raw
-telemetry emitted during balance along with the PID gains that were active for
-that session.
 """
-
-from __future__ import annotations
+Rotary Inverted Pendulum - Balance Logger & Controller
+======================================================
+Connects to the Arduino firmware, mirrors the menu interface, and 
+automatically captures balance sessions into CSV files.
+"""
 
 import argparse
 import csv
-import math
-import signal
+import queue
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import List, Optional, Dict, Any
 
 import serial
+import serial.tools.list_ports
 
-TELEMETRY_COLUMNS = (
-    "time_s",
-    "setpoint_deg",
-    "pendulum_deg",
-    "base_deg",
-    "pendulum_vel",
-    "base_vel",
-    "control_output",
-)
+# --- Configuration & Constants ---
 
-OUTPUT_COLUMNS = TELEMETRY_COLUMNS + (
-    "kp_balance",
-    "ki_balance",
-    "kd_balance",
-    "kp_motor",
-    "origin",
-    "reason",
-    "session_id",
-    "device_start_ms",
-    "host_start_iso",
-)
+DEFAULT_BAUD = 115200
+DEFAULT_LOG_DIR = Path("logs")
 
+# Protocol Tags (Must match C++ Firmware)
+TAG_START = "[BALANCE_LOG_START]"
+TAG_GAINS = "[BALANCE_GAINS]"
+TAG_END   = "[BALANCE_LOG_END]"
+TAG_COLS  = "[BALANCE_COLUMNS]"
+
+# CSV Column Definitions
+TELEMETRY_COLS = [
+    "time_s", "setpoint_deg", "pendulum_deg", "base_deg", 
+    "pendulum_vel", "base_vel", "control_output"
+]
+
+METADATA_COLS = [
+    "kp_balance", "ki_balance", "kd_balance", "kp_motor",
+    "origin", "reason", "session_id", "device_start_ms", "host_timestamp"
+]
 
 @dataclass
 class BalanceSession:
+    """Represents a single balance attempt."""
     session_id: int
     origin: str
     device_start_ms: int
-    host_start: datetime
-    gains: dict[str, float] = field(default_factory=dict)
+    host_start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    gains: Dict[str, float] = field(default_factory=dict)
     rows: List[List[float]] = field(default_factory=list)
     reason: Optional[str] = None
 
-    def host_timestamp(self) -> str:
-        return self.host_start.astimezone(timezone.utc).isoformat()
+    def save_to_csv(self, output_dir: Path) -> Path:
+        """Writes session data to a labeled CSV file."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Format filename: balance_YYYYMMDD-HHMMSS_origin_reason.csv
+        ts_str = self.host_start.astimezone().strftime("%Y%m%d-%H%M%S")
+        safe_origin = "".join([c if c.isalnum() else "-" for c in self.origin])
+        safe_reason = "".join([c if c.isalnum() else "-" for c in (self.reason or "incomplete")])
+        filename = f"balance_{ts_str}_{safe_origin}_{safe_reason}.csv"
+        filepath = output_dir / filename
 
+        # Prepare metadata values for every row
+        meta_values = [
+            self.gains.get("kp_balance", float("nan")),
+            self.gains.get("ki_balance", float("nan")),
+            self.gains.get("kd_balance", float("nan")),
+            self.gains.get("kp_motor", float("nan")),
+            self.origin,
+            self.reason or "unknown",
+            self.session_id,
+            self.device_start_ms,
+            self.host_start.isoformat()
+        ]
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Capture balance telemetry to timestamped CSV files while still "
-            "allowing interactive menu commands."
-        )
-    )
-    parser.add_argument(
-        "--port",
-        required=True,
-        help="Serial port of the Arduino (e.g. /dev/tty.usbmodem1101)",
-    )
-    parser.add_argument(
-        "--baud",
-        type=int,
-        default=115200,
-        help="Serial baud rate (default: 115200)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("logs"),
-        help="Directory where CSV logs will be written (default: logs)",
-    )
-    parser.add_argument(
-        "--flush",
-        action="store_true",
-        help="Discard any buffered serial output immediately after connecting",
-    )
-    return parser.parse_args(list(argv) if argv is not None else None)
+        with filepath.open("w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(TELEMETRY_COLS + METADATA_COLS)
+            for row in self.rows:
+                writer.writerow(row + meta_values)
+        
+        return filepath
 
+class SerialMonitor:
+    def __init__(self, port: str, baud: int, output_dir: Path, flush: bool = False):
+        self.port = port
+        self.baud = baud
+        self.output_dir = output_dir
+        self.flush_on_connect = flush
+        
+        self.ser: Optional[serial.Serial] = None
+        self.running = False
+        self.current_session: Optional[BalanceSession] = None
+        self.input_queue: queue.Queue[str] = queue.Queue()
 
-def open_serial(port: str, baud: int, *, flush_input: bool = False) -> serial.Serial:
-    tried_ports: list[tuple[str, Exception]] = []
-    candidate_ports: list[str] = [port]
-
-    if port.startswith("/dev/tty."):
-        candidate_ports.append("/dev/cu." + port[len("/dev/tty."):])
-
-    last_exc: Optional[serial.SerialException] = None
-    for candidate in candidate_ports:
+    def connect(self):
+        """Attempts to open the serial connection."""
+        print(f"[SYSTEM] Connecting to {self.port} @ {self.baud}...")
         try:
-            ser = serial.Serial(candidate, baudrate=baud, timeout=1)
-            time.sleep(2.0)
-            if flush_input:
-                ser.reset_input_buffer()
-            if candidate != port:
-                print(f"[INFO] Opened {candidate} (auto fallback from {port})")
-            return ser
-        except serial.SerialException as exc:  # pragma: no cover - hardware specific
-            tried_ports.append((candidate, exc))
-            last_exc = exc
+            self.ser = serial.Serial(self.port, self.baud, timeout=1.0)
+            time.sleep(2.0) # Allow Arduino reset
+            if self.flush_on_connect:
+                self.ser.reset_input_buffer()
+            print("[SYSTEM] Connected. Requesting menu...")
+            self.send_command("X") # Trigger menu refresh
+        except serial.SerialException as e:
+            print(f"[ERROR] Failed to connect: {e}")
+            sys.exit(1)
 
-    if tried_ports:
-        print("[DEBUG] Tried ports:")
-        for path, exc in tried_ports:
-            print(f"  - {path}: {exc}")
-    raise last_exc if last_exc else serial.SerialException("Unable to open serial port")
-
-
-def start_command_input_thread(ser: serial.Serial, stop_event: threading.Event) -> threading.Thread:
-    def worker() -> None:
-        print(
-            "\n[INPUT] Type firmware menu commands here."
-            "\n        Setup: 1,2,3,4,5    Control: S,B,X,E"
-            "\n        Gains: P#, I#, D#, M#   Toggles: H,C,T"
-            "\n        Type 'exit' or press Ctrl+C to quit.\n"
-        )
-        while not stop_event.is_set():
+    def send_command(self, cmd: str):
+        """Queues a command to be sent to the device."""
+        if self.ser and self.ser.is_open:
             try:
-                line = input()
-            except EOFError:
-                break
-            except KeyboardInterrupt:
-                stop_event.set()
-                break
-            if stop_event.is_set():
-                break
-            if line is None:
-                continue
-            line = line.strip()
-            if not line:
-                continue
-            if line.lower() in {"exit", "quit"}:
-                stop_event.set()
-                break
+                full_cmd = f"{cmd}\n".encode('utf-8')
+                self.ser.write(full_cmd)
+                self.ser.flush()
+                print(f"[CMD] > {cmd}")
+            except serial.SerialException as e:
+                print(f"[ERROR] Write failed: {e}")
+
+    def _parse_line(self, line: str):
+        """Decides if a line is protocol data, telemetry, or menu text."""
+        line = line.strip()
+        if not line:
+            return
+
+        # 1. Protocol: Start Session
+        if line.startswith(TAG_START):
+            parts = line.split(",")[1:]
+            if len(parts) >= 3:
+                self.current_session = BalanceSession(
+                    session_id=int(parts[0]),
+                    device_start_ms=int(parts[1]),
+                    origin=parts[2]
+                )
+                print(f"\n[LOG] Session #{parts[0]} Started ({parts[2]})")
+            return
+
+        # 2. Protocol: Gains
+        if line.startswith(TAG_GAINS):
+            if self.current_session:
+                parts = line.split(",")[1:]
+                keys = ["kp_balance", "ki_balance", "kd_balance", "kp_motor"]
+                for k, v in zip(keys, parts):
+                    try:
+                        self.current_session.gains[k] = float(v)
+                    except ValueError:
+                        pass
+                print(f"[LOG] Gains Captured: {self.current_session.gains}")
+            return
+
+        # 3. Protocol: End Session
+        if line.startswith(TAG_END):
+            if self.current_session:
+                parts = line.split(",")[1:]
+                self.current_session.reason = parts[2] if len(parts) > 2 else "unknown"
+                
+                path = self.current_session.save_to_csv(self.output_dir)
+                count = len(self.current_session.rows)
+                print(f"[LOG] Session Ended ({self.current_session.reason}).")
+                print(f"[LOG] Saved {count} samples to: {path.name}\n")
+                self.current_session = None
+            return
+
+        # 4. Ignore Column Headers in stream
+        if line.startswith(TAG_COLS):
+            return
+
+        # 5. Telemetry (Heuristic: Comma separated numbers)
+        if "," in line:
             try:
-                ser.write((line + "\n").encode("utf-8"))
-                ser.flush()
-                print(f"[SENT] {line}")
-            except serial.SerialException as exc:  # pragma: no cover - hardware specific
-                print(f"[ERROR] Failed to send command: {exc}")
-                stop_event.set()
-                break
-
-    thread = threading.Thread(target=worker, name="serial-input", daemon=True)
-    thread.start()
-    return thread
-
-
-def request_initial_menu(ser: serial.Serial, *, delay: float = 0.25) -> None:
-    """Send a benign command to prompt the firmware to reprint the menu."""
-
-    try:
-        time.sleep(delay)
-        ser.write(b"X\n")
-        ser.flush()
-        print("[INFO] Requested menu refresh (sent 'X')")
-    except serial.SerialException as exc:  # pragma: no cover - hardware specific
-        print(f"[WARN] Failed to request menu refresh: {exc}")
-
-
-def parse_telemetry(line: str) -> Optional[List[float]]:
-    parts = line.split(",")
-    if len(parts) != len(TELEMETRY_COLUMNS):
-        return None
-    values: List[float] = []
-    for part in (p.strip() for p in parts):
-        if part.lower() == "nan":
-            values.append(float("nan"))
-        else:
-            try:
-                values.append(float(part))
+                # Try parsing as list of floats
+                parts = [float(x) for x in line.split(",")]
+                if len(parts) == len(TELEMETRY_COLS):
+                    if self.current_session:
+                        self.current_session.rows.append(parts)
+                    return # It was telemetry, don't print to console
             except ValueError:
-                return None
-    return values
+                pass # Not telemetry, just text containing commas
 
+        # 6. Default: Print to console (Menu text, debug info)
+        print(f"[DEV] {line}")
 
-def normalise_name(component: str) -> str:
-    safe = [c if c.isalnum() or c in ("-", "_") else "-" for c in component.strip()]
-    return "".join(safe) or "unknown"
-
-
-def write_session_csv(session: BalanceSession, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = session.host_start.astimezone().strftime("%Y%m%d-%H%M%S")
-    origin = normalise_name(session.origin)
-    reason = normalise_name(session.reason or "incomplete")
-    filename = f"balance_{timestamp}_{origin}_{reason}.csv"
-    destination = output_dir / filename
-
-    kp = session.gains.get("kp_balance", math.nan)
-    ki = session.gains.get("ki_balance", math.nan)
-    kd = session.gains.get("kd_balance", math.nan)
-    km = session.gains.get("kp_motor", math.nan)
-    host_iso = session.host_timestamp()
-
-    with destination.open("w", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(OUTPUT_COLUMNS)
-        for row in session.rows:
-            writer.writerow(
-                [
-                    *row,
-                    kp,
-                    ki,
-                    kd,
-                    km,
-                    session.origin,
-                    session.reason or "unknown",
-                    session.session_id,
-                    session.device_start_ms,
-                    host_iso,
-                ]
-            )
-
-    print(f"[SAVED] {destination} ({len(session.rows)} samples)")
-    print(
-        "         Gains – Kp: {0:.4f}, Ki: {1:.4f}, Kd: {2:.4f}, Km: {3:.4f}".format(
-            kp if not math.isnan(kp) else float("nan"),
-            ki if not math.isnan(ki) else float("nan"),
-            kd if not math.isnan(kd) else float("nan"),
-            km if not math.isnan(km) else float("nan"),
-        )
-    )
-    return destination
-
-
-def handle_log_start(payload: Iterable[str]) -> BalanceSession:
-    parts = list(payload)
-    if len(parts) < 3:
-        raise ValueError("Unexpected BALANCE_LOG_START payload")
-    session_id = int(parts[0])
-    device_ms = int(parts[1])
-    origin = parts[2]
-    host_now = datetime.now().astimezone()
-    print(
-        f"\n[SESSION] #{session_id} origin={origin} device_ms={device_ms} host={host_now.isoformat()}"
-    )
-    return BalanceSession(
-        session_id=session_id,
-        origin=origin,
-        device_start_ms=device_ms,
-        host_start=host_now,
-    )
-
-
-def handle_gains(session: BalanceSession, payload: Iterable[str]) -> None:
-    values = list(payload)
-    if len(values) != 4:
-        raise ValueError("Unexpected BALANCE_GAINS payload")
-    keys = ("kp_balance", "ki_balance", "kd_balance", "kp_motor")
-    for key, raw in zip(keys, values):
-        try:
-            session.gains[key] = float(raw)
-        except ValueError:
-            session.gains[key] = math.nan
-    print(
-        "[GAINS] Kp={0:.4f} Ki={1:.4f} Kd={2:.4f} Km={3:.4f}".format(
-            session.gains.get("kp_balance", math.nan),
-            session.gains.get("ki_balance", math.nan),
-            session.gains.get("kd_balance", math.nan),
-            session.gains.get("kp_motor", math.nan),
-        )
-    )
-
-
-def handle_log_end(session: BalanceSession, payload: Iterable[str]) -> str:
-    parts = list(payload)
-    if len(parts) < 3:
-        raise ValueError("Unexpected BALANCE_LOG_END payload")
-    session_id = int(parts[0])
-    device_ms = int(parts[1])
-    reason = parts[2]
-    print(f"[END]   #{session_id} reason={reason} device_ms={device_ms}")
-    session.reason = reason
-    return reason
-
-
-def install_signal_handlers(stop_event: threading.Event) -> None:
-    def handle_sigint(_signum, _frame):
-        stop_event.set()
-
-    signal.signal(signal.SIGINT, handle_sigint)
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = parse_args(argv)
-
-    try:
-        ser = open_serial(args.port, args.baud, flush_input=args.flush)
-    except serial.SerialException as exc:
-        print(f"[ERROR] Could not open serial port {args.port}: {exc}", file=sys.stderr)
-        return 1
-
-    stop_event = threading.Event()
-    install_signal_handlers(stop_event)
-    input_thread = start_command_input_thread(ser, stop_event)
-    request_initial_menu(ser)
-
-    current_session: Optional[BalanceSession] = None
-
-    try:
-        while not stop_event.is_set():
+    def _input_worker(self):
+        """Thread to handle user keyboard input."""
+        print("\n[UI] Controls: S(tart), X(Stop), P/I/D/M (Gains). 'q' to quit.\n")
+        while self.running:
             try:
-                raw = ser.readline()
-            except serial.SerialException as exc:  # pragma: no cover - hardware specific
-                print(f"[ERROR] Serial read failed: {exc}")
-                stop_event.set()
+                # Non-blocking input approach not trivial in cross-platform Python.
+                # Using standard input() which blocks this thread.
+                cmd = input()
+                if cmd.lower() in ['q', 'quit', 'exit']:
+                    self.running = False
+                    break
+                self.input_queue.put(cmd)
+            except (EOFError, KeyboardInterrupt):
+                self.running = False
                 break
-            if not raw:
-                continue
-            try:
-                line = raw.decode(errors="ignore").strip()
-            except UnicodeDecodeError:
-                continue
-            if not line:
-                continue
 
-            if line.startswith("[BALANCE_LOG_START],"):
-                payload = line.split(",")[1:]
-                current_session = handle_log_start(payload)
-                continue
-            if line.startswith("[BALANCE_GAINS],"):
-                if current_session is None:
-                    print("[WARN] Received gains before log start; ignoring")
-                else:
-                    handle_gains(current_session, line.split(",")[1:])
-                continue
-            if line.startswith("[BALANCE_COLUMNS],"):
-                print(line)
-                continue
-            if line.startswith("[BALANCE_LOG_END],"):
-                if current_session is None:
-                    print("[WARN] Received log end with no active session")
-                    continue
-                handle_log_end(current_session, line.split(",")[1:])
-                if current_session.rows:
-                    write_session_csv(current_session, args.output_dir)
-                else:
-                    print("[WARN] Session contained no telemetry samples; skipping save")
-                current_session = None
-                continue
+    def run(self):
+        """Main loop."""
+        self.connect()
+        self.running = True
 
-            telemetry = parse_telemetry(line)
-            if telemetry:
-                if current_session is not None:
-                    current_session.rows.append(telemetry)
-                continue
+        # Start input thread
+        t_input = threading.Thread(target=self._input_worker, daemon=True)
+        t_input.start()
 
-            print(line)
-
-    finally:
-        stop_event.set()
         try:
-            ser.close()
-        except serial.SerialException:  # pragma: no cover - hardware specific
-            pass
-        if input_thread.is_alive():
-            input_thread.join(timeout=0.5)
+            while self.running:
+                # 1. Process Input Queue
+                while not self.input_queue.empty():
+                    cmd = self.input_queue.get()
+                    self.send_command(cmd)
 
-    return 0
+                # 2. Read Serial
+                if self.ser.in_waiting:
+                    try:
+                        # Read line, decode, ignore errors
+                        raw = self.ser.readline()
+                        line = raw.decode('utf-8', errors='replace')
+                        self._parse_line(line)
+                    except serial.SerialException:
+                        print("[ERROR] Serial disconnected.")
+                        self.running = False
+                else:
+                    time.sleep(0.005) # Prevent CPU spin
 
+        except KeyboardInterrupt:
+            print("\n[SYSTEM] Stopping...")
+        finally:
+            self.running = False
+            if self.ser:
+                self.ser.close()
+            print("[SYSTEM] Closed.")
 
-def find_recent_logs(
-    limit: Optional[int] = 5,
-    directory: Optional[Path] = None,
-    pattern: str = "balance_*.csv",
-) -> List[Path]:
-    """Return the most recent log files saved by this tool."""
+def auto_detect_port() -> str:
+    """Helper to find Arduino ports automatically."""
+    ports = list(serial.tools.list_ports.comports())
+    for p in ports:
+        # Common keywords for Arduino devices
+        if "usbmodem" in p.device or "USB Serial" in p.description or "Arduino" in p.description:
+            return p.device
+    return ""
 
-    base_dir = Path(directory) if directory is not None else Path("logs")
-    if not base_dir.is_absolute():
-        base_dir = Path.cwd() / base_dir
-    if not base_dir.exists():
-        return []
-
-    files = sorted(base_dir.glob(pattern))
-    if limit is None or limit <= 0:
-        return files
-    return files[-limit:]
-
-
-def load_log_dataframe(path: Path | str):
-    """Load a log CSV as a pandas DataFrame (importing pandas on demand)."""
-
-    try:
-        import pandas as pd  # type: ignore
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise RuntimeError(
-            "pandas is required to load log CSV files. Install it in the analysis environment."
-        ) from exc
-
-    csv_path = Path(path)
-    if not csv_path.exists():
-        return pd.DataFrame(columns=OUTPUT_COLUMNS)
-    return pd.read_csv(csv_path)
-
+# --- Entry Point ---
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    parser = argparse.ArgumentParser(description="Rotary Pendulum Balance Logger")
+    parser.add_argument("--port", help="Serial port (e.g. COM3, /dev/ttyUSB0)")
+    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help="Baud rate")
+    parser.add_argument("--out", type=Path, default=DEFAULT_LOG_DIR, help="Output directory")
+    args = parser.parse_args()
+
+    target_port = args.port or auto_detect_port()
+    
+    if not target_port:
+        print("[ERROR] No port specified and none found automatically.")
+        print("Available ports:")
+        for p in serial.tools.list_ports.comports():
+            print(f" - {p.device} ({p.description})")
+        sys.exit(1)
+
+    monitor = SerialMonitor(target_port, args.baud, args.out)
+    monitor.run()
