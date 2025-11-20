@@ -7,14 +7,14 @@
 #include <ctype.h>
 
 // ============================================================
-// ROTARY INVERTED PENDULUM – V6.7 (ROBUST TUNED)
+// ROTARY INVERTED PENDULUM – V6.9 (NOISE-ROBUST)
 // ============================================================
-// Architecture: Cascade Control with Setpoint Modulation
-// Updates:
-// - Correct Anti-Windup Logic (Saturation detection)
-// - Physical Integral Clamp (+/- 30 deg)
-// - Derivative on Measurement (No Setpoint Kick)
-// - Wider Soft Limits (60 deg)
+// Architecture: Cascade Control (V6.8) + Dual Filtering (V6.9)
+// Features:
+// - Unfiltered Position (Fast reaction)
+// - Heavily Filtered Velocity (Noise rejection)
+// - Deadzones to prevent "hunting" and buzzing
+// - Friction Compensation (Stiction Kick)
 // ============================================================
 
 // --- PINS ---
@@ -36,18 +36,27 @@ void tcaSelect(uint8_t i) {
 const float DEG_PER_STEP = 0.225f;     
 const float PEND_LIMIT_DEG = 45.0f;    
 const float BASE_LIMIT_DEG = 90.0f;    // Hard Stop
-const float SOFT_LIMIT_DEG = 60.0f;    // V6.7: Widened Braking Zone
+const float SOFT_LIMIT_DEG = 60.0f;    // Soft Brake
 
-// --- GAINS (V6.7 TUNING) ---
+// --- FILTERING & DEADZONES (V6.9) ---
+// History Weight: 0.95 means "Trust 95% history, 5% new". Very Smooth.
+const float ALPHA_VEL = 0.95f;      
+// Position Alpha: 1.0 means "Trust 100% new". No lag.
+const float ALPHA_POS = 1.0f;       
+
+const float VEL_DEADZONE = 5.0f;    // Ignore velocity noise < 5 deg/s
+const float HZ_DEADZONE  = 15.0f;   // Ignore motor commands < 15 Hz
+
+// --- GAINS (SAFE START) ---
 float Kp_balance = 8.0f;    
-float Ki_balance = 0.02f;   // Enabled with proper clamping
-float Kd_balance = 1.5f;    
+float Ki_balance = 0.002f;  
+float Kd_balance = 0.5f;    // Start low due to heavy filtering
 
-float Kp_center  = 0.08f;   // Setpoint modulation gain
+float Kp_center  = 0.05f;   // Gentle setpoint modulation
 
-// --- ANTI-WINDUP (V6.7 FIXED) ---
-const float INTEGRAL_MAX_DEG = 30.0f;  // Physical clamping limit
-const float AW_GAIN = 0.5f;            // Strong back-calculation
+// --- ANTI-WINDUP ---
+const float INTEGRAL_MAX_DEG = 15.0f;  
+const float AW_GAIN = 1.0f;            
 
 // --- TIMING ---
 const unsigned long LOOP_INTERVAL_US = 5000; // 5ms (200Hz)
@@ -55,7 +64,6 @@ const float DT_FIXED = 0.005f;
 bool balanceEnabled = false;
 volatile uint8_t controlTickCnt = 0; 
 const float MAX_MOTOR_HZ = 25000.0f;
-const float ALPHA_VEL = 0.7f; 
 
 // --- SAFETY ---
 unsigned long lastMagnetCheckMs = 0;
@@ -87,6 +95,9 @@ float motorAngle = 0.0f;
 float motorVelocity = 0.0f;
 float lastMotorAngle = 0.0f;
 
+// Friction Comp State
+float lastTargetHz = 0.0f;
+
 String serialBuffer;
 
 // ============================================================
@@ -107,7 +118,7 @@ float normalizeDelta(float angleNew, float angleOld) {
 }
 
 // ============================================================
-// SENSOR UPDATE
+// SENSOR UPDATE (DUAL FILTERING)
 // ============================================================
 
 void updateSensors() {
@@ -125,9 +136,21 @@ void updateSensors() {
   uint16_t pRaw = pendulumSensor.readAngle();
   float pDeg = (pRaw * 360.0f) / 4096.0f - PENDULUM_ZERO;
   float currentPendAngle = normalizeAngle(pDeg);
+
+  // A. Position Filtering (Light/None)
+  // Keeps P-Term responsive
+  pendAngle = (ALPHA_POS * currentPendAngle) + ((1.0f - ALPHA_POS) * pendAngle);
+
+  // B. Velocity Filtering (Heavy)
+  // Reduces D-Term noise
   float pVelRaw = normalizeDelta(currentPendAngle, lastPendAngle) / DT_FIXED;
-  pendVelocity = ALPHA_VEL * pVelRaw + (1.0f - ALPHA_VEL) * pendVelocity;
-  pendAngle = currentPendAngle;
+  
+  // Apply Deadzone to raw velocity BEFORE filtering
+  if (fabs(pVelRaw) < VEL_DEADZONE) {
+    pVelRaw = 0.0f;
+  }
+
+  pendVelocity = (ALPHA_VEL * pendVelocity) + ((1.0f - ALPHA_VEL) * pVelRaw);
   lastPendAngle = currentPendAngle;
 
   // --- 2. MOTOR ---
@@ -139,8 +162,11 @@ void updateSensors() {
   uint16_t mRaw = motorSensor.readAngle();
   float mDeg = (mRaw * 360.0f) / 4096.0f - MOTOR_ZERO;
   float currentMotorAngle = normalizeAngle(mDeg);
+  
+  // Motor doesn't need as much filtering, but we apply some for consistency
   float mVelRaw = normalizeDelta(currentMotorAngle, lastMotorAngle) / DT_FIXED;
-  motorVelocity = ALPHA_VEL * mVelRaw + (1.0f - ALPHA_VEL) * motorVelocity;
+  motorVelocity = (0.8f * motorVelocity) + (0.2f * mVelRaw); // Moderate smoothing
+  
   motorAngle = currentMotorAngle;
   lastMotorAngle = currentMotorAngle;
 
@@ -152,7 +178,7 @@ void updateSensors() {
 }
 
 // ============================================================
-// CONTROL LOOP (V6.7 FIXED)
+// CONTROL FUNCTIONS
 // ============================================================
 
 void setMotorVelocity(float targetHz) {
@@ -160,16 +186,25 @@ void setMotorVelocity(float targetHz) {
   if (targetHz > MAX_HZ) targetHz = MAX_HZ;
   else if (targetHz < -MAX_HZ) targetHz = -MAX_HZ;
 
-  // Dead zone 10Hz
-  if (fabs(targetHz) < 10.0f) {
+  // 1. Deadzone: Prevent micro-jitter around zero
+  if (fabs(targetHz) < HZ_DEADZONE) {
     stepper->setSpeedInHz(0);
     stepper->stopMove();
+    lastTargetHz = 0;
     return;
   }
 
+  // 2. Friction Compensation (Stiction Kick)
+  // If we change direction, add a small boost to break static friction
+  if ((targetHz > 0 && lastTargetHz < 0) || (targetHz < 0 && lastTargetHz > 0)) {
+      // Add a 50Hz kick in the new direction
+      targetHz += (targetHz > 0) ? 50.0f : -50.0f;
+  }
+  lastTargetHz = targetHz;
+
   stepper->setSpeedInHz(fabs(targetHz));
   
-  // Direction Logic (V6.3 Verified)
+  // Direction Logic
   if (targetHz > 0) {
     stepper->runBackward(); 
   } else {
@@ -178,7 +213,7 @@ void setMotorVelocity(float targetHz) {
 }
 
 void runBalanceControl() {
-  // 1. Safety Check
+  // 1. Safety
   if (fabs(pendAngle) > PEND_LIMIT_DEG) {
     balanceEnabled = false;
     stepper->forceStopAndNewPosition(0);
@@ -187,48 +222,41 @@ void runBalanceControl() {
     return;
   }
 
-  // 2. Setpoint Modulation (Cascade Control)
+  // 2. Cascade Setpoint
   float pendulumSetpoint = 0.0f;
   if (fabs(motorAngle) > 10.0f) {
       pendulumSetpoint = -Kp_center * motorAngle;
-      // Limit the tilt to +/- 5 degrees to prevent instability
       pendulumSetpoint = constrain(pendulumSetpoint, -5.0f, 5.0f);
   }
 
-  // 3. Error Calculation
+  // 3. PID
   float error = pendAngle - pendulumSetpoint;
 
-  // 4. Integral with Physical Clamping (V6.7 Fix)
   integralError += error * DT_FIXED;
   integralError = constrain(integralError, -INTEGRAL_MAX_DEG, INTEGRAL_MAX_DEG);
 
-  // 5. PID Calculation (Derivative on Measurement)
-  // Using (-pendVelocity) instead of (errorVelocity) avoids "Derivative Kick" 
-  // when the setpoint changes abruptly.
+  // Derivative is on Velocity (Measurement), not Error (Setpoint)
   float balanceOutput = (Kp_balance * error) + (Ki_balance * integralError) + (Kd_balance * (-pendVelocity));
 
-  // 6. Output Mapping
   float targetHz = balanceOutput / DEG_PER_STEP;
 
-  // 7. Back-Calculation Anti-Windup (V6.7 Fix)
+  // 4. Anti-Windup (Back Calc)
   float saturatedHz = constrain(targetHz, -MAX_MOTOR_HZ, MAX_MOTOR_HZ);
-  
-  // If the command exceeds the motor's physical limit, unwind the integral term
   if (fabs(targetHz) > MAX_MOTOR_HZ) {
       integralError -= AW_GAIN * (targetHz - saturatedHz) * DT_FIXED;
   }
   targetHz = saturatedHz;
 
-  // 8. Soft Limits (Wider Zone V6.7)
+  // 5. Soft Limits (Exponential)
   if (fabs(motorAngle) > SOFT_LIMIT_DEG) {
       float distanceToWall = BASE_LIMIT_DEG - fabs(motorAngle);
-      // Scale braking from 1.0 (at 60 deg) to 0.2 (at 90 deg)
-      // Never go to 0.0 completely, or we lose control authority before the hard stop
-      float brakeFactor = constrain(distanceToWall / (BASE_LIMIT_DEG - SOFT_LIMIT_DEG), 0.2f, 1.0f);
+      // Exp braking
+      float brakeFactor = exp(-3.0f * (fabs(motorAngle) - SOFT_LIMIT_DEG) / (BASE_LIMIT_DEG - SOFT_LIMIT_DEG));
+      brakeFactor = constrain(brakeFactor, 0.05f, 1.0f);
       targetHz *= brakeFactor;
   }
 
-  // 9. Hard Limit
+  // 6. Hard Limit
   if (fabs(motorAngle) > BASE_LIMIT_DEG) {
      balanceEnabled = false;
      stepper->forceStopAndNewPosition(0);
@@ -270,22 +298,21 @@ void handleCommand(const String &cmd) {
     case 'M': Kp_center = val; Serial.print(F("Kp_C=")); Serial.println(val); break;
     case 'T': 
       {
-        // Telemetry updated to show Setpoint
         float pendulumSetpoint = 0.0f;
         if (fabs(motorAngle) > 10.0f) {
              pendulumSetpoint = constrain(-Kp_center * motorAngle, -5.0f, 5.0f);
         }
         float error = pendAngle - pendulumSetpoint;
-        float outputHz = (Kp_balance * error) / DEG_PER_STEP;
+        float outputHz = (Kp_balance * error + Ki_balance * integralError + Kd_balance * (-pendVelocity)) / DEG_PER_STEP;
         
         Serial.print(F("P:")); Serial.print(pendAngle, 2);
         Serial.print(F(" M:")); Serial.print(motorAngle, 2);
         Serial.print(F(" Err:")); Serial.print(error, 2);
-        Serial.print(F(" Set:")); Serial.print(pendulumSetpoint, 2);
+        Serial.print(F(" Vel:")); Serial.print(pendVelocity, 2); // Debug filtered velocity
         Serial.print(F(" Hz:")); Serial.println(outputHz, 0);
       }
       break;
-    default: Serial.println(F("Cmds: S, X, P#, I#, D#, M#, V#, T"));
+    default: Serial.println(F("Cmds: S, X, P#, I#, D#, M#, T"));
   }
 }
 
@@ -340,7 +367,7 @@ void setup() {
   TIMSK3 |= (1 << OCIE3A);
   interrupts();
 
-  Serial.println(F("\nRotary Inverted Pendulum V6.7 (Robust Tuned)"));
+  Serial.println(F("\nRotary Inverted Pendulum V6.9 (Noise-Robust)"));
   Serial.println(F("Sensors OK. Hold upright, Check 'T', Send 'S'."));
 }
 
