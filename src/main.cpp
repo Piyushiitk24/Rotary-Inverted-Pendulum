@@ -1,3 +1,4 @@
+#include <avr/interrupt.h>
 #include <Arduino.h>
 #include <Wire.h>
 #include <AS5600.h>
@@ -36,6 +37,11 @@ void tcaSelect(uint8_t i) {
   Wire.endTransmission();
 }
 
+// Timer3 Compare Match A ISR: increment control tick counter
+ISR(TIMER3_COMPA_vect) {
+  if (controlTickCnt < 250) controlTickCnt++; // prevent roll-over
+}
+
 // --- MECHANICAL CONSTANTS ---
 const float DEG_PER_STEP = 0.225f;     // 1.8 deg / 8 microsteps
 const float PEND_LIMIT_DEG = 45.0f;    // Fall limit
@@ -54,6 +60,9 @@ const unsigned long LOOP_INTERVAL_US = 5000; // 5ms (200Hz)
 const float DT_FIXED = 0.005f;               
 unsigned long lastLoopMicros = 0;
 bool balanceEnabled = false;
+volatile uint8_t controlTickCnt = 0; // incremented by timer ISR
+const float MAX_MOTOR_HZ = 25000.0f;
+const float ALPHA_VEL = 0.7f; // velocity EMA coefficient
 const float ALPHA_VEL = 0.7f; // velocity EMA coefficient
 
 // --- SENSORS ---
@@ -137,7 +146,7 @@ void updateSensors() {
 // ============================================================
 
 void setMotorVelocity(float targetHz) {
-  const float MAX_HZ = 25000.0f;
+  const float MAX_HZ = MAX_MOTOR_HZ;
   if (targetHz > MAX_HZ) targetHz = MAX_HZ;
   else if (targetHz < -MAX_HZ) targetHz = -MAX_HZ;
 
@@ -154,6 +163,15 @@ void setMotorVelocity(float targetHz) {
 }
 
 void runBalanceControl() {
+  // Runtime magnet presence check for pendulum & motor
+  tcaSelect(0);
+  if (!pendulumSensor.detectMagnet()) {
+    Serial.println(F("⚠ Pendulum magnet lost! Stopping balance."));
+    balanceEnabled = false;
+    stepper->forceStopAndNewPosition(0);
+    digitalWrite(EN_PIN, HIGH);
+    return;
+  }
   // Check Base Limits (Reduced to 35 deg)
   if (fabs(motorAngle) > BASE_LIMIT_DEG) {
     balanceEnabled = false;
@@ -174,7 +192,9 @@ void runBalanceControl() {
   }
 
   integralError += pendAngle * DT_FIXED;
-  integralError = constrain(integralError, -10.0f, 10.0f);
+  // Anti-windup: scale to motor torque capability if Ki non-zero
+  float maxIntegral = (Ki_balance != 0.0f) ? ((MAX_MOTOR_HZ * DEG_PER_STEP) / Ki_balance) : 10.0f;
+  integralError = constrain(integralError, -maxIntegral, maxIntegral);
 
   float balanceOutput = (Kp_balance * pendAngle) + (Ki_balance * integralError) + (Kd_balance * pendVelocity);
   
@@ -276,6 +296,18 @@ void setup() {
 
   Serial.println(F("\nRotary Inverted Pendulum V6.1 (Multiplexer)"));
   Serial.println(F("Sensors OK. Hold upright, Check 'T', Send 'S'."));
+  // Initialize Timer3 for 5ms ticks (200Hz) — do not call heavy functions in ISR
+  noInterrupts();
+  TCCR3A = 0;              // CTC mode
+  TCCR3B = 0;
+  TCNT3 = 0;              // reset counter
+  // CTC mode with OCR3A as top
+  TCCR3B |= (1 << WGM32);
+  // Prescaler 64
+  TCCR3B |= (1 << CS31) | (1 << CS30);
+  OCR3A = 1249; // 16MHz/64 = 250k ticks/sec -> 250k * 0.005 = 1250 -> OCR = 1249
+  TIMSK3 |= (1 << OCIE3A); // enable compare interrupt
+  interrupts();
   // Initialize control loop timing
   lastLoopMicros = micros();
 }
@@ -293,12 +325,23 @@ void loop() {
     }
   }
 
+  // Allow Serial input to be handled rapidly; process control ticks thereafter
+
   // FIX 6: Timer Overflow Safe Logic
-  unsigned long now = micros();
-  // Catch up on missed control ticks (safe against timer drift)
-  while (now - lastLoopMicros >= LOOP_INTERVAL_US) {
-    lastLoopMicros += LOOP_INTERVAL_US;
-    updateSensors(); 
+  unsigned long loopStart = micros();
+
+  // Process pending fixed-rate control ticks set by Timer3 ISR
+  while (controlTickCnt > 0) {
+    noInterrupts();
+    if (controlTickCnt > 0) controlTickCnt--; // consume 1 tick
+    interrupts();
+    updateSensors();
     if (balanceEnabled) runBalanceControl();
+  }
+
+  unsigned long loopDuration = micros() - loopStart;
+  if (loopDuration > LOOP_INTERVAL_US) {
+    Serial.print(F("⚠ Loop overrun (us): "));
+    Serial.println(loopDuration);
   }
 }
