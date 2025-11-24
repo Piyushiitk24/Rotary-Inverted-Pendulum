@@ -628,7 +628,7 @@ void setup() {
   
   // Initialize Hardware I2C (pendulum sensor)
   Wire.begin();
-  Wire.setClock(100000); // 100kHz for noise robustness
+  Wire.setClock(40000); // 40kHz: improved reliability vs EMI
   delay(100);
   as5600_pendulum.begin();
   

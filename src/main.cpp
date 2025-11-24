@@ -7,18 +7,18 @@
 #include <ctype.h>
 
 // ============================================================
-// ROTARY INVERTED PENDULUM – V6.9 (NOISE-ROBUST)
+// ROTARY INVERTED PENDULUM – V7.1 (CALIBRATABLE ZEROS)
 // ============================================================
-// Architecture: Cascade Control (V6.8) + Dual Filtering (V6.9)
-// Features:
-// - Unfiltered Position (Fast reaction)
-// - Heavily Filtered Velocity (Noise rejection)
-// - Deadzones to prevent "hunting" and buzzing
-// - Friction Compensation (Stiction Kick)
+// - Pendulum & Motor zeros can be calibrated at runtime:
+//     Y -> set current pendulum angle as 0° (upright)
+//     Z -> set current motor angle as 0° (base center)
+// - Direction convention kept consistent with your current
+//   observations (pendulum right -> base moves under it).
+// - Angle wrapping and sign paths carefully checked.
 // ============================================================
 
 // --- PINS ---
-#define STEP_PIN 11  
+#define STEP_PIN 11
 #define DIR_PIN  6
 #define EN_PIN   7
 
@@ -33,72 +33,87 @@ void tcaSelect(uint8_t i) {
 }
 
 // --- MECHANICAL CONSTANTS ---
-const float DEG_PER_STEP = 0.225f;     
-const float PEND_LIMIT_DEG = 45.0f;    
-const float BASE_LIMIT_DEG = 90.0f;    // Hard Stop
-const float SOFT_LIMIT_DEG = 60.0f;    // Soft Brake
+const float DEG_PER_STEP   = 0.225f;   // assumed; should be close
+const float PEND_LIMIT_DEG = 45.0f;    // pendulum safety shutoff
+const float BASE_LIMIT_DEG = 90.0f;    // hard base limit (mechanical stop)
+const float SOFT_LIMIT_DEG = 60.0f;    // soft brake onset
 
-// --- FILTERING & DEADZONES (V6.9) ---
-// History Weight: 0.95 means "Trust 95% history, 5% new". Very Smooth.
-const float ALPHA_VEL = 0.95f;      
-// Position Alpha: 1.0 means "Trust 100% new". No lag.
-const float ALPHA_POS = 1.0f;       
+// --- FILTERING & DEADZONES ---
+const float ALPHA_VEL = 0.3f;          // velocity low-pass (reduced lag)
+const float ALPHA_POS = 1.0f;          // no smoothing on angle
 
-const float VEL_DEADZONE = 5.0f;    // Ignore velocity noise < 5 deg/s
-const float HZ_DEADZONE  = 15.0f;   // Ignore motor commands < 15 Hz
+const float VEL_DEADZONE = 0.0f;       // unused for now
+const float HZ_DEADZONE  = 0.0f;       // deadzone on motor Hz (0 for tuning)
 
-// --- GAINS (SAFE START) ---
-float Kp_balance = 8.0f;    
-float Ki_balance = 0.002f;  
-float Kd_balance = 0.5f;    // Start low due to heavy filtering
+// --- GAINS ---
+float Kp_balance = 30.0f;              // P (will be changed via serial)
+float Ki_balance = 0.0f;               // integral off by default
+float Kd_balance = 0.5f;               // D (will be changed via serial)
 
-float Kp_center  = 0.05f;   // Gentle setpoint modulation
+float Kp_center  = 0.0f;               // base-centering coupling (small)
 
 // --- ANTI-WINDUP ---
-const float INTEGRAL_MAX_DEG = 15.0f;  
-const float AW_GAIN = 1.0f;            
+const float INTEGRAL_MAX_DEG = 15.0f;
+const float AW_GAIN          = 1.0f;
 
 // --- TIMING ---
-const unsigned long LOOP_INTERVAL_US = 5000; // 5ms (200Hz)
-const float DT_FIXED = 0.005f;               
+const unsigned long LOOP_INTERVAL_US = 8000; // 8ms -> 125 Hz
+const float DT_FIXED = 0.008f;
+
+volatile uint8_t controlTickCnt = 0;
 bool balanceEnabled = false;
-volatile uint8_t controlTickCnt = 0; 
-const float MAX_MOTOR_HZ = 25000.0f;
+
+const float MAX_MOTOR_HZ = 5000.0f;
 
 // --- SAFETY ---
 unsigned long lastMagnetCheckMs = 0;
 const unsigned long MAGNET_CHECK_INTERVAL_MS = 100;
+volatile bool magnetCheckPending = false;
+
+// --- TELEMETRY ---
+unsigned long lastTelemetryMs = 0;
+const unsigned long TELEMETRY_INTERVAL_MS = 50;
 
 // --- SENSORS ---
 AS5600 pendulumSensor(&Wire);
 AS5600 motorSensor(&Wire);
 
+// --- STATE ---
+float pendAngle      = 0.0f;
+float pendVelocity   = 0.0f;
+float lastPendAngle  = 0.0f;
+float integralError  = 0.0f;
+
+float motorAngle     = 0.0f;
+float motorVelocity  = 0.0f;
+float lastMotorAngle = 0.0f;
+
+float lastTargetHz   = 0.0f;
+float lastCommandHz  = 0.0f;
+
+bool sensorsPresent  = true;
+
+String serialBuffer;
+
+// ============================================================
+// TIMER ISR
+// ============================================================
+
 ISR(TIMER3_COMPA_vect) {
   controlTickCnt++;
 }
 
-// *** CALIBRATION (VERIFY WITH 'T') ***
-const float PENDULUM_ZERO = 64.16f; 
-const float MOTOR_ZERO = 31.38f;    
+// ============================================================
+// CALIBRATION
+// ============================================================
 
-// --- OBJECTS ---
-FastAccelStepperEngine engine;
-FastAccelStepper *stepper = nullptr;
+// Defaults from your latest tuning / sine test.
+const float PENDULUM_ZERO_DEFAULT = 64.34f;   // "up is up"
+const float MOTOR_ZERO_DEFAULT    = 274.834f; // base center
 
-// --- STATE ---
-float pendAngle = 0.0f;
-float pendVelocity = 0.0f;
-float lastPendAngle = 0.0f;
-float integralError = 0.0f;
-
-float motorAngle = 0.0f;
-float motorVelocity = 0.0f;
-float lastMotorAngle = 0.0f;
-
-// Friction Comp State
-float lastTargetHz = 0.0f;
-
-String serialBuffer;
+// Runtime-calibratable zeros:
+float pendulumZeroDeg = PENDULUM_ZERO_DEFAULT;
+float motorZeroDeg    = MOTOR_ZERO_DEFAULT;
 
 // ============================================================
 // HELPER FUNCTIONS
@@ -118,58 +133,53 @@ float normalizeDelta(float angleNew, float angleOld) {
 }
 
 // ============================================================
-// SENSOR UPDATE (DUAL FILTERING)
+// SENSOR UPDATE
 // ============================================================
 
 void updateSensors() {
-  bool checkMagnetsThisCycle = (millis() - lastMagnetCheckMs >= MAGNET_CHECK_INTERVAL_MS);
-  if (checkMagnetsThisCycle) lastMagnetCheckMs = millis();
+  bool doMagnetCheck = false;
+  noInterrupts();
+  doMagnetCheck = magnetCheckPending;
+  magnetCheckPending = false;
+  interrupts();
 
   bool sensorsHealthy = true;
 
   // --- 1. PENDULUM ---
   tcaSelect(0);
-  if (checkMagnetsThisCycle && !pendulumSensor.detectMagnet()) {
-    Serial.println(F("⚠ Pendulum magnet lost!"));
+  if (doMagnetCheck && !pendulumSensor.detectMagnet()) {
     sensorsHealthy = false;
   }
   uint16_t pRaw = pendulumSensor.readAngle();
-  float pDeg = (pRaw * 360.0f) / 4096.0f - PENDULUM_ZERO;
+  float pDegRaw = (pRaw * 360.0f) / 4096.0f;
+  float pDeg    = pDegRaw - pendulumZeroDeg;
   float currentPendAngle = normalizeAngle(pDeg);
 
-  // A. Position Filtering (Light/None)
-  // Keeps P-Term responsive
-  pendAngle = (ALPHA_POS * currentPendAngle) + ((1.0f - ALPHA_POS) * pendAngle);
+  pendAngle = (ALPHA_POS * currentPendAngle) +
+              ((1.0f - ALPHA_POS) * pendAngle);
 
-  // B. Velocity Filtering (Heavy)
-  // Reduces D-Term noise
   float pVelRaw = normalizeDelta(currentPendAngle, lastPendAngle) / DT_FIXED;
-  
-  // Apply Deadzone to raw velocity BEFORE filtering
-  if (fabs(pVelRaw) < VEL_DEADZONE) {
-    pVelRaw = 0.0f;
-  }
-
-  pendVelocity = (ALPHA_VEL * pendVelocity) + ((1.0f - ALPHA_VEL) * pVelRaw);
+  pendVelocity = (ALPHA_VEL * pendVelocity) +
+                 ((1.0f - ALPHA_VEL) * pVelRaw);
   lastPendAngle = currentPendAngle;
 
   // --- 2. MOTOR ---
   tcaSelect(1);
-  if (checkMagnetsThisCycle && !motorSensor.detectMagnet()) {
-    Serial.println(F("⚠ Motor magnet lost!"));
+  if (doMagnetCheck && !motorSensor.detectMagnet()) {
     sensorsHealthy = false;
   }
   uint16_t mRaw = motorSensor.readAngle();
-  float mDeg = (mRaw * 360.0f) / 4096.0f - MOTOR_ZERO;
+  float mDegRaw = (mRaw * 360.0f) / 4096.0f;
+  float mDeg    = mDegRaw - motorZeroDeg;
   float currentMotorAngle = normalizeAngle(mDeg);
-  
-  // Motor doesn't need as much filtering, but we apply some for consistency
+
   float mVelRaw = normalizeDelta(currentMotorAngle, lastMotorAngle) / DT_FIXED;
-  motorVelocity = (0.8f * motorVelocity) + (0.2f * mVelRaw); // Moderate smoothing
-  
-  motorAngle = currentMotorAngle;
+  motorVelocity = (0.8f * motorVelocity) + (0.2f * mVelRaw);
+
+  motorAngle     = currentMotorAngle;
   lastMotorAngle = currentMotorAngle;
 
+  // --- SENSOR FAILURE HANDLING ---
   if (!sensorsHealthy) {
     balanceEnabled = false;
     stepper->forceStopAndNewPosition(0);
@@ -178,200 +188,358 @@ void updateSensors() {
 }
 
 // ============================================================
-// CONTROL FUNCTIONS
+// MOTOR COMMAND
 // ============================================================
 
 void setMotorVelocity(float targetHz) {
-  const float MAX_HZ = MAX_MOTOR_HZ;
-  if (targetHz > MAX_HZ) targetHz = MAX_HZ;
-  else if (targetHz < -MAX_HZ) targetHz = -MAX_HZ;
+  // Saturate
+  if (targetHz >  MAX_MOTOR_HZ) targetHz =  MAX_MOTOR_HZ;
+  if (targetHz < -MAX_MOTOR_HZ) targetHz = -MAX_MOTOR_HZ;
 
-  // 1. Deadzone: Prevent micro-jitter around zero
+  // Deadzone (can be 0.0 during tuning)
   if (fabs(targetHz) < HZ_DEADZONE) {
     stepper->setSpeedInHz(0);
     stepper->stopMove();
-    lastTargetHz = 0;
+    lastTargetHz   = 0.0f;
+    lastCommandHz  = 0.0f;
     return;
   }
 
-  // 2. Friction Compensation (Stiction Kick)
-  // If we change direction, add a small boost to break static friction
-  if ((targetHz > 0 && lastTargetHz < 0) || (targetHz < 0 && lastTargetHz > 0)) {
-      // Add a 50Hz kick in the new direction
-      targetHz += (targetHz > 0) ? 50.0f : -50.0f;
-  }
-  lastTargetHz = targetHz;
+  // Track last requested command (after saturation & deadzone)
+  lastTargetHz  = targetHz;
+  lastCommandHz = targetHz;
 
   stepper->setSpeedInHz(fabs(targetHz));
-  
-  // Direction Logic
+
+  // IMPORTANT: keep this mapping consistent with hardware
   if (targetHz > 0) {
-    stepper->runBackward(); 
+    stepper->runBackward();
   } else {
     stepper->runForward();
   }
 }
 
+// ============================================================
+// TELEMETRY (CSV)
+// ============================================================
+
+void sendTelemetryCSV() {
+  if (millis() - lastTelemetryMs < TELEMETRY_INTERVAL_MS) return;
+  lastTelemetryMs = millis();
+  if (!balanceEnabled) return;
+
+  // Recompute setpoint exactly like main control (for logging)
+  float pendulumSetpoint = 0.0f;
+  if (fabs(motorAngle) > 10.0f) {
+    pendulumSetpoint = -Kp_center * motorAngle;
+    pendulumSetpoint = constrain(pendulumSetpoint, -5.0f, 5.0f);
+  }
+
+  Serial.print(millis() / 1000.0f, 3); Serial.print(",");
+  Serial.print(pendulumSetpoint, 2);   Serial.print(",");
+  Serial.print(pendAngle, 2);          Serial.print(",");
+  Serial.print(motorAngle, 2);         Serial.print(",");
+  Serial.print(pendVelocity, 2);       Serial.print(",");
+  Serial.print(motorVelocity, 2);      Serial.print(",");
+  Serial.println((int)lastCommandHz);  // actual commanded Hz
+}
+
+// ============================================================
+// BALANCE CONTROL
+// ============================================================
+
 void runBalanceControl() {
-  // 1. Safety
+  // 1. Pendulum safety
   if (fabs(pendAngle) > PEND_LIMIT_DEG) {
     balanceEnabled = false;
     stepper->forceStopAndNewPosition(0);
     digitalWrite(EN_PIN, HIGH);
     Serial.println(F("⚠ Pendulum fell!"));
+    Serial.println(F("[BALANCE_LOG_END],0,pendulum_fell"));
     return;
   }
 
-  // 2. Cascade Setpoint
+  // 2. Pendulum setpoint (for base centering)
   float pendulumSetpoint = 0.0f;
   if (fabs(motorAngle) > 10.0f) {
-      pendulumSetpoint = -Kp_center * motorAngle;
-      pendulumSetpoint = constrain(pendulumSetpoint, -5.0f, 5.0f);
+    pendulumSetpoint = -Kp_center * motorAngle;
+    pendulumSetpoint = constrain(pendulumSetpoint, -5.0f, 5.0f);
   }
 
-  // 3. PID
+  // 3. PID on pendulum angle (upright = 0°)
   float error = pendAngle - pendulumSetpoint;
 
   integralError += error * DT_FIXED;
   integralError = constrain(integralError, -INTEGRAL_MAX_DEG, INTEGRAL_MAX_DEG);
 
-  // Derivative is on Velocity (Measurement), not Error (Setpoint)
-  float balanceOutput = (Kp_balance * error) + (Ki_balance * integralError) + (Kd_balance * (-pendVelocity));
+  float balanceOutput =
+    (Kp_balance * error) +
+    (Ki_balance * integralError) +
+    (Kd_balance * (-pendVelocity));
 
   float targetHz = balanceOutput / DEG_PER_STEP;
 
-  // 4. Anti-Windup (Back Calc)
+  // 4. Anti-windup based on saturation (Ki is zero, so this is inert now)
   float saturatedHz = constrain(targetHz, -MAX_MOTOR_HZ, MAX_MOTOR_HZ);
   if (fabs(targetHz) > MAX_MOTOR_HZ) {
-      integralError -= AW_GAIN * (targetHz - saturatedHz) * DT_FIXED;
+    integralError -= AW_GAIN * (targetHz - saturatedHz) * DT_FIXED;
   }
   targetHz = saturatedHz;
 
-  // 5. Soft Limits (Exponential)
+  // 5. Soft base limits – exponential braking
   if (fabs(motorAngle) > SOFT_LIMIT_DEG) {
-      float distanceToWall = BASE_LIMIT_DEG - fabs(motorAngle);
-      // Exp braking
-      float brakeFactor = exp(-3.0f * (fabs(motorAngle) - SOFT_LIMIT_DEG) / (BASE_LIMIT_DEG - SOFT_LIMIT_DEG));
-      brakeFactor = constrain(brakeFactor, 0.05f, 1.0f);
-      targetHz *= brakeFactor;
+    float over        = fabs(motorAngle) - SOFT_LIMIT_DEG;
+    float span        = BASE_LIMIT_DEG - SOFT_LIMIT_DEG;
+    float brakeFactor = exp(-3.0f * (over / span));
+    brakeFactor       = constrain(brakeFactor, 0.05f, 1.0f);
+    targetHz         *= brakeFactor;
   }
 
-  // 6. Hard Limit
+  // 6. Hard base limit – shutdown
   if (fabs(motorAngle) > BASE_LIMIT_DEG) {
-     balanceEnabled = false;
-     stepper->forceStopAndNewPosition(0);
-     digitalWrite(EN_PIN, HIGH);
-     Serial.print(F("⚠ Base limit hit: ")); 
-     Serial.println(motorAngle);
-     return;
+    balanceEnabled = false;
+    stepper->forceStopAndNewPosition(0);
+    digitalWrite(EN_PIN, HIGH);
+    Serial.print(F("⚠ Base limit hit: "));
+    Serial.println(motorAngle);
+    Serial.println(F("[BALANCE_LOG_END],0,base_limit"));
+    return;
   }
 
+  // 7. Apply motor command
   setMotorVelocity(targetHz);
+
+  // 8. Telemetry (throttled)
+  sendTelemetryCSV();
 }
 
 // ============================================================
-// SERIAL & SETUP
+// SERIAL COMMAND HANDLER
 // ============================================================
 
 void handleCommand(const String &cmd) {
   if (cmd.length() == 0) return;
   char c = toupper(cmd.charAt(0));
   float val = cmd.substring(1).toFloat();
+
   switch (c) {
-    case 'S': 
-      pendVelocity = 0.0f; motorVelocity = 0.0f; integralError = 0.0f;
-      updateSensors(); 
-      lastPendAngle = pendAngle; lastMotorAngle = motorAngle;
+    case 'S': {  // start balancing
+      pendVelocity   = 0.0f;
+      motorVelocity  = 0.0f;
+      integralError  = 0.0f;
+
+      updateSensors();
+      lastPendAngle  = pendAngle;
+      lastMotorAngle = motorAngle;
+
       balanceEnabled = true;
       digitalWrite(EN_PIN, LOW);
+
+      Serial.println(F("[BALANCE_LOG_START],0,firmware"));
+      Serial.print(F("[BALANCE_GAINS],"));
+      Serial.print(Kp_balance, 2); Serial.print(",");
+      Serial.print(Ki_balance, 2); Serial.print(",");
+      Serial.print(Kd_balance, 2); Serial.print(",");
+      Serial.println(Kp_center, 3);
+      Serial.println(F("[BALANCE_COLUMNS],time_s,setpoint_deg,pendulum_deg,base_deg,pendulum_vel,base_vel,control_output"));
       Serial.println(F("✓ Balance ON"));
       break;
-    case 'X': 
+    }
+
+    case 'X': {  // stop balancing
       balanceEnabled = false;
       stepper->forceStop();
       digitalWrite(EN_PIN, HIGH);
+      Serial.println(F("[BALANCE_LOG_END],0,user_stop"));
       Serial.println(F("✗ Balance OFF"));
       break;
-    case 'P': Kp_balance = val; Serial.print(F("Kp=")); Serial.println(val); break;
-    case 'I': Ki_balance = val; Serial.print(F("Ki=")); Serial.println(val); break;
-    case 'D': Kd_balance = val; Serial.print(F("Kd=")); Serial.println(val); break;
-    case 'M': Kp_center = val; Serial.print(F("Kp_C=")); Serial.println(val); break;
-    case 'T': 
-      {
-        float pendulumSetpoint = 0.0f;
-        if (fabs(motorAngle) > 10.0f) {
-             pendulumSetpoint = constrain(-Kp_center * motorAngle, -5.0f, 5.0f);
-        }
-        float error = pendAngle - pendulumSetpoint;
-        float outputHz = (Kp_balance * error + Ki_balance * integralError + Kd_balance * (-pendVelocity)) / DEG_PER_STEP;
-        
-        Serial.print(F("P:")); Serial.print(pendAngle, 2);
-        Serial.print(F(" M:")); Serial.print(motorAngle, 2);
-        Serial.print(F(" Err:")); Serial.print(error, 2);
-        Serial.print(F(" Vel:")); Serial.print(pendVelocity, 2); // Debug filtered velocity
-        Serial.print(F(" Hz:")); Serial.println(outputHz, 0);
-      }
+    }
+
+    case 'P':
+      Kp_balance = val;
+      Serial.print(F("Kp=")); Serial.println(val);
       break;
-    default: Serial.println(F("Cmds: S, X, P#, I#, D#, M#, T"));
+
+    case 'I':
+      Ki_balance = val;
+      Serial.print(F("Ki=")); Serial.println(val);
+      break;
+
+    case 'D':
+      Kd_balance = val;
+      Serial.print(F("Kd=")); Serial.println(val);
+      break;
+
+    case 'M':
+      Kp_center = val;
+      Serial.print(F("Kp_C=")); Serial.println(val);
+      break;
+
+    case 'Y': { // calibrate pendulum zero (upright)
+      tcaSelect(0);
+      uint16_t pRaw = pendulumSensor.readAngle();
+      float pDegRaw = (pRaw * 360.0f) / 4096.0f;
+      pendulumZeroDeg = pDegRaw;
+      Serial.print(F("New pendulumZeroDeg = "));
+      Serial.println(pendulumZeroDeg, 4);
+      break;
+    }
+
+    case 'Z': { // calibrate motor zero (base center)
+      tcaSelect(1);
+      uint16_t mRaw = motorSensor.readAngle();
+      float mDegRaw = (mRaw * 360.0f) / 4096.0f;
+      motorZeroDeg = mDegRaw;
+      Serial.print(F("New motorZeroDeg = "));
+      Serial.println(motorZeroDeg, 4);
+      break;
+    }
+
+    case 'T': {  // diagnostic snapshot
+      float pendulumSetpoint = 0.0f;
+      if (fabs(motorAngle) > 10.0f) {
+        pendulumSetpoint = -Kp_center * motorAngle;
+        pendulumSetpoint = constrain(pendulumSetpoint, -5.0f, 5.0f);
+      }
+      float error = pendAngle - pendulumSetpoint;
+      float outputHz =
+        (Kp_balance * error +
+         Ki_balance * integralError +
+         Kd_balance * (-pendVelocity)) / DEG_PER_STEP;
+
+      Serial.print(F("P:"));   Serial.print(pendAngle, 2);
+      Serial.print(F(" M:"));  Serial.print(motorAngle, 2);
+      Serial.print(F(" Err:"));Serial.print(error, 2);
+      Serial.print(F(" Vel:"));Serial.print(pendVelocity, 2);
+      Serial.print(F(" Hz:")); Serial.println(outputHz, 0);
+      break;
+    }
+
+    case 'C': { // connection check for motor/stepper
+      Serial.println(F("--- CONNECTION CHECK ---"));
+      if (stepper) Serial.println(F("Stepper: OK"));
+      else         Serial.println(F("Stepper: MISSING or init failed"));
+
+      pinMode(EN_PIN, INPUT_PULLUP);
+      int enState = digitalRead(EN_PIN);
+      Serial.print(F("EN_PIN (pullup-read): "));
+      Serial.println(enState == HIGH ? F("DISABLED/HIGH") : F("ENABLED/LOW"));
+      pinMode(EN_PIN, OUTPUT); // restore
+
+      tcaSelect(1);
+      bool motorMag = motorSensor.detectMagnet();
+      Serial.print(F("Motor sensor magnet: "));
+      Serial.println(motorMag ? F("OK") : F("NOT DETECTED"));
+
+      Serial.print(F("Motor zero (deg): "));
+      Serial.println(motorZeroDeg, 4);
+      Serial.print(F("Motor angle (deg): "));
+      Serial.println(motorAngle, 4);
+
+      tcaSelect(0);
+      bool pendMag = pendulumSensor.detectMagnet();
+      Serial.print(F("Pendulum sensor magnet: "));
+      Serial.println(pendMag ? F("OK") : F("NOT DETECTED"));
+
+      Serial.println(F("--- END CHECK ---"));
+      break;
+    }
+
+    default:
+      Serial.println(F("Cmds: S,X,P#,I#,D#,M#,Y,Z,T"));
+      break;
   }
 }
 
+// ============================================================
+// SETUP
+// ============================================================
+
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(500000);          // high baud to reduce blocking
   Wire.begin();
-  Wire.setClock(100000);
-  #if defined(WIRE_HAS_ENDTRANSMISSION_TIMEOUT)
-    Wire.setWireTimeout(5000, true);
-  #endif
-  
+  Wire.setClock(400000);         // fast I2C
+
+#if defined(WIRE_HAS_ENDTRANSMISSION_TIMEOUT)
+  Wire.setWireTimeout(5000, true);
+#endif
+
   Serial.println(F("Init Sensors..."));
-  
+
+  // Pendulum sensor (TCA channel 0)
   tcaSelect(0);
   pendulumSensor.begin();
   delay(10);
   if (!pendulumSensor.detectMagnet()) {
     Serial.println(F("⚠ ERROR: Pendulum Magnet (Ch0) NOT detected!"));
-    while(1); 
+    sensorsPresent = false;
   }
-  
+
+  // Motor sensor (TCA channel 1)
   tcaSelect(1);
   motorSensor.begin();
   delay(10);
   if (!motorSensor.detectMagnet()) {
     Serial.println(F("⚠ ERROR: Motor Magnet (Ch1) NOT detected!"));
-    while(1); 
+    sensorsPresent = false;
   }
-  
+
+  if (!sensorsPresent) {
+    Serial.println(F("Continuing in DIAGNOSTIC mode — sensors not fully detected."));
+    Serial.println(F("Use 'C' command to inspect motor/stepper status."));
+  }
+
+  // Stepper setup
   pinMode(EN_PIN, OUTPUT);
-  digitalWrite(EN_PIN, HIGH); 
+  digitalWrite(EN_PIN, HIGH);  // disabled initially
 
-  if (TCCR1A != 0 || TCCR1B != 0 || TIMSK1 != 0) {
-    TCCR1A = 0; TCCR1B = 0; TIMSK1 = 0; TCNT1  = 0;
-  }
-
+  static FastAccelStepperEngine engine;
   engine.init();
   stepper = engine.stepperConnectToPin(STEP_PIN);
-  if (!stepper) { Serial.println(F("Stepper init failed! Check Pin 11.")); while (1); }
-  
+  if (!stepper) {
+    Serial.println(F("Stepper init failed! Check STEP_PIN wiring."));
+    while (1) { /* halt */ }
+  }
+
   stepper->setDirectionPin(DIR_PIN);
   stepper->setEnablePin(EN_PIN, true);
   stepper->setAutoEnable(false);
-  stepper->setAcceleration(100000); 
+  stepper->setAcceleration(100000);
   stepper->setSpeedInHz(0);
 
+  // Timer3 -> 8ms tick (125 Hz)
   noInterrupts();
-  TCCR3A = 0; TCCR3B = 0; TCNT3 = 0;
-  TCCR3B |= (1 << WGM32); 
-  TCCR3B |= (1 << CS31) | (1 << CS30); 
-  OCR3A = 1249; 
-  TIMSK3 |= (1 << OCIE3A);
+  TCCR3A = 0;
+  TCCR3B = 0;
+  TCNT3  = 0;
+  TCCR3B |= (1 << WGM32);              // CTC mode
+  TCCR3B |= (1 << CS31) | (1 << CS30); // prescaler 64
+  OCR3A   = 1999;                      // 8ms at 16MHz/64
+  TIMSK3 |= (1 << OCIE3A);             // enable compare A interrupt
   interrupts();
 
-  Serial.println(F("\nRotary Inverted Pendulum V6.9 (Noise-Robust)"));
-  Serial.println(F("Sensors OK. Hold upright, Check 'T', Send 'S'."));
+  Serial.println(F("\nRotary Inverted Pendulum V7.1"));
+  Serial.println(F("Ready."));
+  Serial.println(F("1) Center base, hold pendulum upright."));
+  Serial.println(F("2) Optional: send 'Y' (pendulum zero) and 'Z' (motor zero)."));
+  Serial.println(F("3) Send 'T' to verify P~0 and M~0."));
+  Serial.println(F("4) Send 'S' to start balance tests."));
 }
 
+// ============================================================
+// MAIN LOOP
+// ============================================================
+
 void loop() {
+  // 1. Periodic magnet check
+  if (millis() - lastMagnetCheckMs >= MAGNET_CHECK_INTERVAL_MS) {
+    noInterrupts();
+    lastMagnetCheckMs = millis();
+    magnetCheckPending = true;
+    interrupts();
+  }
+
+  // 2. Serial command handling
   while (Serial.available() > 0) {
     char ch = Serial.read();
     if (ch == '\n' || ch == '\r') {
@@ -384,6 +552,7 @@ void loop() {
     }
   }
 
+  // 3. Control loop – at most one tick per main loop iteration
   uint8_t ticksToProcess;
   noInterrupts();
   ticksToProcess = controlTickCnt;
@@ -391,17 +560,10 @@ void loop() {
   interrupts();
 
   if (ticksToProcess > 0) {
-    unsigned long loopStart = micros();
-    while (ticksToProcess--) {
-      updateSensors();
-      if (balanceEnabled) {
-          runBalanceControl();
-      } 
+    updateSensors();
+    if (balanceEnabled) {
+      runBalanceControl();
     }
-    unsigned long loopDuration = micros() - loopStart;
-    if (loopDuration > LOOP_INTERVAL_US) {
-      Serial.print(F("⚠ Control loop overrun (us): "));
-      Serial.println(loopDuration);
-    }
+    // No prints here: keep loop lean.
   }
 }

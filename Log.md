@@ -12,6 +12,18 @@
    - Updated `tools/balance_analysis.ipynb` to safely handle empty or malformed CSVs when loading and extracting gains/metadata.
    - Verified `BalanceSession.save_to_csv()` locally and fixed issues with commas in metadata (fields are properly quoted now).
 
+   ## November 21, 2025
+
+   ### Telemetry and Logger Improvements
+
+   - Firmware: Added CSV telemetry at 20Hz (time_s,setpoint_deg,pendulum_deg,base_deg,pendulum_vel,base_vel,control_output). This emits plain CSV rows during balance mode so the Python logger can record telemetry robustly.
+   - Python logger: Updated to parse both CSV lines and labelled telemetry (e.g., "P:12.34 M:5.67") by extracting numeric tokens. Added immediate auto-save on 'pendulum fell' and 'base limit' reasons and improved auto-save handling.
+   - Verified CSV writing via atomic write and sanitized metadata fields. Logger is now robust to malformed lines and avoids dropping failed runs.
+
+   ### Next Steps
+
+   - Hardware test: Run a live balance attempt and confirm logs appear in `tools/` as timestamped CSV files. If missing, capture the last ~30 serial lines and provide them for parser tuning.
+
 ### Development notes
 
 - Installed `pyserial` in the development venv for the logger tool and added quick unit tests for CSV save behavior.

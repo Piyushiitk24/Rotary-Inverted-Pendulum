@@ -68,7 +68,7 @@
 
 **Configuration:**
 - I2C Address: 0x36 (fixed)
-- Clock Speed: 400kHz (fast mode)
+- Clock Speed: 400kHz (fast mode; main firmware uses 400kHz)
 - Magnet Distance: 2-3mm from chip
 
 ---
