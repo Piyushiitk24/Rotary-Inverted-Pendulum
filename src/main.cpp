@@ -39,22 +39,29 @@ const float BASE_LIMIT_DEG = 90.0f;    // hard base limit (mechanical stop)
 const float SOFT_LIMIT_DEG = 60.0f;    // soft brake onset
 
 // --- FILTERING & DEADZONES ---
-const float ALPHA_VEL = 0.3f;          // velocity low-pass (reduced lag)
+const float ALPHA_VEL = 0.2f;          // velocity low-pass (reduced lag)
 const float ALPHA_POS = 1.0f;          // no smoothing on angle
 
 const float VEL_DEADZONE = 0.0f;       // unused for now
 const float HZ_DEADZONE  = 0.0f;       // deadzone on motor Hz (0 for tuning)
 
 // --- GAINS ---
-float Kp_balance = 30.0f;              // P (will be changed via serial)
-float Ki_balance = 0.0f;               // integral off by default
-float Kd_balance = 0.5f;               // D (will be changed via serial)
+// IMPORTANT: these are *incremental* gains: ΔHz per tick per deg / (deg/s)
+// From model: ΔHz_k = Kp_balance*α_deg + Kd_balance*αdot_deg_s
+float Kp_balance = 5.74f;              // ΔHz / deg
+float Ki_balance = 0.0f;               // integral OFF (not used in control)
+float Kd_balance = 0.68f;              // ΔHz / (deg/s)
 
 float Kp_center  = 0.0f;               // base-centering coupling (small)
 
 // --- ANTI-WINDUP ---
+// Kept for future use if Ki_balance is used; not active now.
 const float INTEGRAL_MAX_DEG = 15.0f;
 const float AW_GAIN          = 1.0f;
+
+// D-term velocity clamp (deg/s) — prevents noisy velocity spikes from
+// causing excessive derivative action.
+const float D_VEL_CLAMP = 200.0f;   // deg/s, tweak later
 
 // --- TIMING ---
 const unsigned long LOOP_INTERVAL_US = 8000; // 8ms -> 125 Hz
@@ -72,17 +79,22 @@ volatile bool magnetCheckPending = false;
 
 // --- TELEMETRY ---
 unsigned long lastTelemetryMs = 0;
-const unsigned long TELEMETRY_INTERVAL_MS = 50;
+// At 500k baud and ~80chars/line, 8ms (~125Hz) is tight but acceptable.
+const unsigned long TELEMETRY_INTERVAL_MS = 8; // ~125Hz
 
 // --- SENSORS ---
 AS5600 pendulumSensor(&Wire);
 AS5600 motorSensor(&Wire);
 
+// --- STEPPER OBJECTS (GLOBAL) ---
+FastAccelStepperEngine engine;
+FastAccelStepper *stepper = nullptr;
+
 // --- STATE ---
 float pendAngle      = 0.0f;
 float pendVelocity   = 0.0f;
 float lastPendAngle  = 0.0f;
-float integralError  = 0.0f;
+float integralError  = 0.0f;   // currently unused in control law
 
 float motorAngle     = 0.0f;
 float motorVelocity  = 0.0f;
@@ -90,6 +102,9 @@ float lastMotorAngle = 0.0f;
 
 float lastTargetHz   = 0.0f;
 float lastCommandHz  = 0.0f;
+
+// *** NEW: integrated speed command (Hz) implementing acceleration control ***
+float cmdHz          = 0.0f;
 
 bool sensorsPresent  = true;
 
@@ -170,7 +185,7 @@ void updateSensors() {
   }
   uint16_t mRaw = motorSensor.readAngle();
   float mDegRaw = (mRaw * 360.0f) / 4096.0f;
-  float mDeg    = mDegRaw - motorZeroDeg;
+  float mDeg    = -(mDegRaw - motorZeroDeg);
   float currentMotorAngle = normalizeAngle(mDeg);
 
   float mVelRaw = normalizeDelta(currentMotorAngle, lastMotorAngle) / DT_FIXED;
@@ -254,6 +269,7 @@ void runBalanceControl() {
     balanceEnabled = false;
     stepper->forceStopAndNewPosition(0);
     digitalWrite(EN_PIN, HIGH);
+    cmdHz = 0.0f;
     Serial.println(F("⚠ Pendulum fell!"));
     Serial.println(F("[BALANCE_LOG_END],0,pendulum_fell"));
     return;
@@ -266,33 +282,38 @@ void runBalanceControl() {
     pendulumSetpoint = constrain(pendulumSetpoint, -5.0f, 5.0f);
   }
 
-  // 3. PID on pendulum angle (upright = 0°)
+  // 3. Incremental "acceleration-like" PD on pendulum angle (upright = 0°)
   float error = pendAngle - pendulumSetpoint;
 
+  // Integral kept but not used in control (Ki_balance = 0)
   integralError += error * DT_FIXED;
   integralError = constrain(integralError, -INTEGRAL_MAX_DEG, INTEGRAL_MAX_DEG);
 
-  float balanceOutput =
+  // Clamp velocity used in derivative term to avoid excessive action
+  float velForD = constrain(pendVelocity, -D_VEL_CLAMP, D_VEL_CLAMP);
+
+  // ΔHz per tick from PD (derived from state-space / acceleration model)
+  float deltaHz =
     (Kp_balance * error) +
-    (Ki_balance * integralError) +
-    (Kd_balance * (-pendVelocity));
+    (Kd_balance * velForD);
 
-  float targetHz = balanceOutput / DEG_PER_STEP;
+  // Integrate "acceleration" to speed command
+  cmdHz += deltaHz;
 
-  // 4. Anti-windup based on saturation (Ki is zero, so this is inert now)
-  float saturatedHz = constrain(targetHz, -MAX_MOTOR_HZ, MAX_MOTOR_HZ);
-  if (fabs(targetHz) > MAX_MOTOR_HZ) {
-    integralError -= AW_GAIN * (targetHz - saturatedHz) * DT_FIXED;
-  }
-  targetHz = saturatedHz;
+  // 4. Saturate speed command
+  if (cmdHz >  MAX_MOTOR_HZ) cmdHz =  MAX_MOTOR_HZ;
+  if (cmdHz < -MAX_MOTOR_HZ) cmdHz = -MAX_MOTOR_HZ;
 
-  // 5. Soft base limits – exponential braking
+  float targetHz = cmdHz;
+
+  // 5. Soft base limits – exponential braking (also applied to cmdHz)
   if (fabs(motorAngle) > SOFT_LIMIT_DEG) {
     float over        = fabs(motorAngle) - SOFT_LIMIT_DEG;
     float span        = BASE_LIMIT_DEG - SOFT_LIMIT_DEG;
     float brakeFactor = exp(-3.0f * (over / span));
     brakeFactor       = constrain(brakeFactor, 0.05f, 1.0f);
-    targetHz         *= brakeFactor;
+    cmdHz            *= brakeFactor;
+    targetHz          = cmdHz;
   }
 
   // 6. Hard base limit – shutdown
@@ -300,6 +321,7 @@ void runBalanceControl() {
     balanceEnabled = false;
     stepper->forceStopAndNewPosition(0);
     digitalWrite(EN_PIN, HIGH);
+    cmdHz = 0.0f;
     Serial.print(F("⚠ Base limit hit: "));
     Serial.println(motorAngle);
     Serial.println(F("[BALANCE_LOG_END],0,base_limit"));
@@ -327,6 +349,9 @@ void handleCommand(const String &cmd) {
       pendVelocity   = 0.0f;
       motorVelocity  = 0.0f;
       integralError  = 0.0f;
+      cmdHz          = 0.0f;
+      lastTargetHz   = 0.0f;
+      lastCommandHz  = 0.0f;
 
       updateSensors();
       lastPendAngle  = pendAngle;
@@ -350,6 +375,7 @@ void handleCommand(const String &cmd) {
       balanceEnabled = false;
       stepper->forceStop();
       digitalWrite(EN_PIN, HIGH);
+      cmdHz = 0.0f;
       Serial.println(F("[BALANCE_LOG_END],0,user_stop"));
       Serial.println(F("✗ Balance OFF"));
       break;
@@ -357,7 +383,7 @@ void handleCommand(const String &cmd) {
 
     case 'P':
       Kp_balance = val;
-      Serial.print(F("Kp=")); Serial.println(val);
+      Serial.print(F("Kp_inc=")); Serial.println(val);
       break;
 
     case 'I':
@@ -367,7 +393,7 @@ void handleCommand(const String &cmd) {
 
     case 'D':
       Kd_balance = val;
-      Serial.print(F("Kd=")); Serial.println(val);
+      Serial.print(F("Kd_inc=")); Serial.println(val);
       break;
 
     case 'M':
@@ -401,17 +427,19 @@ void handleCommand(const String &cmd) {
         pendulumSetpoint = -Kp_center * motorAngle;
         pendulumSetpoint = constrain(pendulumSetpoint, -5.0f, 5.0f);
       }
-      float error = pendAngle - pendulumSetpoint;
-      float outputHz =
-        (Kp_balance * error +
-         Ki_balance * integralError +
-         Kd_balance * (-pendVelocity)) / DEG_PER_STEP;
+      float error   = pendAngle - pendulumSetpoint;
+      float velForD = constrain(pendVelocity, -D_VEL_CLAMP, D_VEL_CLAMP);
 
-      Serial.print(F("P:"));   Serial.print(pendAngle, 2);
-      Serial.print(F(" M:"));  Serial.print(motorAngle, 2);
-      Serial.print(F(" Err:"));Serial.print(error, 2);
-      Serial.print(F(" Vel:"));Serial.print(pendVelocity, 2);
-      Serial.print(F(" Hz:")); Serial.println(outputHz, 0);
+      // For diagnostics: show incremental command and resulting next Hz
+      float deltaHz   = (Kp_balance * error) + (Kd_balance * velForD);
+      float nextCmdHz = cmdHz + deltaHz;
+
+      Serial.print(F("P:"));     Serial.print(pendAngle, 2);
+      Serial.print(F(" M:"));    Serial.print(motorAngle, 2);
+      Serial.print(F(" Err:"));  Serial.print(error, 2);
+      Serial.print(F(" Vel:"));  Serial.print(pendVelocity, 2);
+      Serial.print(F(" dHz:"));  Serial.print(deltaHz, 1);
+      Serial.print(F(" Hz:"));   Serial.println(nextCmdHz, 1);
       break;
     }
 
@@ -493,7 +521,6 @@ void setup() {
   pinMode(EN_PIN, OUTPUT);
   digitalWrite(EN_PIN, HIGH);  // disabled initially
 
-  static FastAccelStepperEngine engine;
   engine.init();
   stepper = engine.stepperConnectToPin(STEP_PIN);
   if (!stepper) {
