@@ -85,9 +85,10 @@ const unsigned long MAGNET_CHECK_INTERVAL_MS = 100;
 volatile bool magnetCheckPending = false;
 
 // --- TELEMETRY ---
+const bool TELEMETRY_ENABLED = false; // disable telemetry to remove serial latency
 unsigned long lastTelemetryMs = 0;
-// At 500k baud and ~80chars/line, 8ms (~125Hz) is tight but OK if loop stays lean.
-const unsigned long TELEMETRY_INTERVAL_MS = 40; // ~125Hz
+// At 500k baud and ~80chars/line, 4ms (250Hz) is tight, so keep disabled by default.
+const unsigned long TELEMETRY_INTERVAL_MS = 40; // ~125Hz when enabled
 
 // --- SENSORS ---
 AS5600 pendulumSensor(&Wire);
@@ -177,8 +178,7 @@ void updateSensors() {
   pendAngle = (ALPHA_POS * currentPendAngle) +
               ((1.0f - ALPHA_POS) * pendAngle);
 
-  // FIXED: Correct low-pass filter formula
-  // ALPHA_VEL is weight on NEW reading
+  // Correct low-pass filter formula: ALPHA_VEL is weight on NEW reading
   float pVelRaw = normalizeDelta(currentPendAngle, lastPendAngle) / DT_FIXED;
   pendVelocity = (ALPHA_VEL * pVelRaw) + ((1.0f - ALPHA_VEL) * pendVelocity);
   lastPendAngle = currentPendAngle;
@@ -193,7 +193,7 @@ void updateSensors() {
   float mDeg    = -(mDegRaw - motorZeroDeg);
   float currentMotorAngle = normalizeAngle(mDeg);
 
-  // FIXED: Consistent filter formula for motor velocity
+  // Consistent filter formula for motor velocity (heavier smoothing is OK)
   float mVelRaw = normalizeDelta(currentMotorAngle, lastMotorAngle) / DT_FIXED;
   motorVelocity = (0.2f * mVelRaw) + (0.8f * motorVelocity);
 
@@ -245,6 +245,7 @@ void setMotorVelocity(float targetHz) {
 // ============================================================
 
 void sendTelemetryCSV() {
+  if (!TELEMETRY_ENABLED) return; // hard-disable to keep loop lean
   if (millis() - lastTelemetryMs < TELEMETRY_INTERVAL_MS) return;
   lastTelemetryMs = millis();
   if (!balanceEnabled) return;
@@ -534,18 +535,18 @@ void setup() {
   stepper->setEnablePin(EN_PIN, true);
   stepper->setAutoEnable(false);
 
-  // Softer acceleration for tuning (reduce step loss and violence)
-  stepper->setAcceleration(200000);
+  // High acceleration to minimize ramp lag; lower if you observe step loss
+  stepper->setAcceleration(500000);
   stepper->setSpeedInHz(0);
 
-  // Timer3 -> 8ms tick (125 Hz)
+  // Timer3 -> 4ms tick (250 Hz)
   noInterrupts();
   TCCR3A = 0;
   TCCR3B = 0;
   TCNT3  = 0;
   TCCR3B |= (1 << WGM32);              // CTC mode
   TCCR3B |= (1 << CS31) | (1 << CS30); // prescaler 64
-  OCR3A   = 1999;                      // 8ms at 16MHz/64
+  OCR3A   = 999;                       // 4ms at 16MHz/64
   TIMSK3 |= (1 << OCIE3A);             // enable compare A interrupt
   interrupts();
 
