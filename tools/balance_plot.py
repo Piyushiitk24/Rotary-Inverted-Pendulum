@@ -75,6 +75,7 @@ class BalanceSession:
     reason: str = ""
     gains: Dict[str, float] = field(default_factory=dict)
     rows: List[List[float]] = field(default_factory=list)
+    telemetry_cols: List[str] = field(default_factory=lambda: TELEMETRY_COLS.copy())
     host_start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def save_to_csv(self, output_dir: Path) -> Optional[Path]:
@@ -108,14 +109,12 @@ class BalanceSession:
 
         with filepath.open("w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(TELEMETRY_COLS + METADATA_COLS)
+            writer.writerow(self.telemetry_cols + METADATA_COLS)
 
             for row in self.rows:
-                if len(row) < len(TELEMETRY_COLS):
-                    row = row + [float("nan")] * (len(TELEMETRY_COLS) - len(row))
-                elif len(row) > len(TELEMETRY_COLS):
-                    row = row[:len(TELEMETRY_COLS)]
-                writer.writerow(row + meta_values_raw)
+                if len(row) < len(self.telemetry_cols):
+                    row = row + [float("nan")] * (len(self.telemetry_cols) - len(row))
+                writer.writerow(row[:len(self.telemetry_cols)] + meta_values_raw)
 
         print(f"[LOG] Successfully saved: {filepath}")
         return filepath
@@ -126,11 +125,21 @@ class BalanceSession:
 # --------------------------------------------------------------------
 
 class SerialMonitor:
-    def __init__(self, port: str, baud: int, output_dir: Path, flush: bool = False):
+    def __init__(
+        self,
+        port: str,
+        baud: int,
+        output_dir: Path,
+        flush: bool = False,
+        echo_telemetry: bool = False,
+        save_sessions: bool = True,
+    ):
         self.port = port
         self.baud = baud
         self.output_dir = output_dir
         self.flush_on_connect = flush
+        self.echo_telemetry = echo_telemetry
+        self.save_sessions = save_sessions
 
         self.ser: Optional[serial.Serial] = None
         self.running = False
@@ -185,7 +194,6 @@ class SerialMonitor:
             return
 
         self.last_line_time = time.time()
-        # print(f"[RAW] {line}")  # uncomment if you want to debug raw output
 
         # 1. Explicit session start tag
         if TAG_START in line:
@@ -224,29 +232,61 @@ class SerialMonitor:
                 reason = parts[2] if len(parts) > 2 else "end"
                 self.current_session.reason = reason
                 print(f"[LOG] END tag received, reason={reason}")
-                self._save_session()
+                if self.save_sessions:
+                    self._save_session()
+                else:
+                    self.current_session = None
             else:
-                print("[WARN] END tag received but no active session.")
+                # was: print("[WARN] END tag received but no active session.")
+                print(f"[DEV] {line}")
             return
 
         # 4. Column header line
         if line.startswith(TAG_COLS):
+            # Always print the columns line so terminal shows the schema
+            print(line)
+            if self.current_session:
+                cols = [c.strip() for c in line.split(",")[1:] if c.strip()]
+                if cols:
+                    self.current_session.telemetry_cols = cols
+            return
+
+        # NEW: If the line is bracketed like [INFO] or [RESULT], print it but DO NOT parse as telemetry.
+        if line.startswith("["):
             print(f"[DEV] {line}")
             return
 
         # 5. Telemetry CSV (numeric CSV line)
-        if "," in line and not any(
-            tag in line for tag in [TAG_START, TAG_END, TAG_GAINS, TAG_COLS]
-        ):
+        if "," in line:
+            # If we are NOT in a BALANCE_LOG session, don't try to parse/save—just print it.
+            if not self.current_session:
+                print(f"[DEV] {line}")
+                return
+
+            # If we are in a session, parse strictly as numeric CSV matching the session's columns
             try:
-                nums = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", line)
-                if len(nums) >= len(TELEMETRY_COLS):
-                    vals = [float(x) for x in nums[: len(TELEMETRY_COLS)]]
-                    if self.current_session:
-                        self.current_session.rows.append(vals)
-                    return  # don't echo telemetry
+                parts = [p.strip() for p in line.split(",")]
+                ncols = len(self.current_session.telemetry_cols)
+                if len(parts) < ncols:
+                    # Not enough columns; treat as normal device output
+                    print(f"[DEV] {line}")
+                    return
+
+                vals: List[float] = []
+                for i in range(ncols):
+                    vals.append(float(parts[i]))
+
+                if self.echo_telemetry:
+                    print(line)
+
+                if self.save_sessions:
+                    self.current_session.rows.append(vals)
+
+                return
             except Exception:
-                pass
+                # If it isn't purely numeric telemetry, treat as normal device output
+                print(f"[DEV] {line}")
+                return
 
         # 6. Plain-text device output
         print(f"[DEV] {line}")
@@ -360,15 +400,18 @@ def auto_detect_port() -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Rotary Pendulum Balance Logger")
-    parser.add_argument(
-        "--port", type=str, default="", help="Serial port (if empty, auto-detect)"
-    )
+    parser.add_argument("--port", type=str, default="", help="Serial port (if empty, auto-detect)")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD)
+    parser.add_argument("--out", type=Path, default=DEFAULT_LOG_DIR, help="Output directory (default: logs/)")
     parser.add_argument(
-        "--out",
-        type=Path,
-        default=DEFAULT_LOG_DIR,
-        help="Output directory (default: logs/)",
+        "--echo-telemetry",
+        action="store_true",
+        help="Print numeric telemetry CSV rows to terminal (as device prints them).",
+    )
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Do not write CSV files (terminal-only mode).",
     )
     args = parser.parse_args()
 
@@ -381,5 +424,11 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print(f"[SYSTEM] Starting logger on {port} @ {args.baud}")
-    monitor = SerialMonitor(port, args.baud, args.out)
+    monitor = SerialMonitor(
+        port,
+        args.baud,
+        args.out,
+        echo_telemetry=args.echo_telemetry,
+        save_sessions=(not args.no_save),
+    )
     monitor.run()

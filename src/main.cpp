@@ -1,19 +1,17 @@
-#include <avr/interrupt.h>
 #include <Arduino.h>
 #include <Wire.h>
 #include <AS5600.h>
 #include <FastAccelStepper.h>
 #include <math.h>
 #include <ctype.h>
+#include <stdlib.h>
 
 // ============================================================
-// ROTARY INVERTED PENDULUM – V7.3 (DIAGNOSTIC / LATENCY FIX)
-// ============================================================
-// CHANGES:
-// - Added P-only mode for testing (D=0)
-// - Added direct manual step test
-// - Reduced loop to 2ms (500Hz) with single sensor read
-// - Option to skip motor sensor (use stepper position instead)
+// Hysteresis Sweep Test (60° span, 5° steps, high speed/accel)
+// - Span: [-30°, +30°] (60° total)
+// - Step size: 5° (commanded by step count via DEG_PER_STEP)
+// - Logs at each point after dwell: steps + expected_deg + sensor angle + raw counts
+// - Repeats NUM_CYCLES full cycles (one cycle = -end -> +end -> -end)
 // ============================================================
 
 // --- PINS ---
@@ -21,478 +19,300 @@
 #define DIR_PIN  6
 #define EN_PIN   7
 
-// --- I2C MULTIPLEXER ---
-#define TCA_ADDR 0x70
+static const uint32_t SERIAL_BAUD = 500000;
 
-void tcaSelect(uint8_t i) {
+// --- I2C MUX ---
+static const uint8_t TCA_ADDR = 0x70;
+static inline void tcaSelect(uint8_t i) {
   if (i > 7) return;
   Wire.beginTransmission(TCA_ADDR);
   Wire.write(1 << i);
   Wire.endTransmission();
 }
 
-// --- MECHANICAL CONSTANTS ---
-const float DEG_PER_STEP   = 0.225f;
-const float PEND_LIMIT_DEG = 45.0f;
-const float BASE_LIMIT_DEG = 90.0f;
-const float SOFT_LIMIT_DEG = 60.0f;
-
-// --- FILTERING ---
-const float ALPHA_VEL = 0.9f;   // Very fast velocity response (0.9 = 90% new)
-const float ALPHA_POS = 1.0f;   // No position filtering
-
-// --- GAINS ---
-// INCREASED SIGNIFICANTLY - the push test showed we need more authority
-float Kp_balance = 100.0f;      // Was 25 - now 6x higher
-float Ki_balance = 0.0f;
-float Kd_balance = 40.0f;        // Add some damping back
-float Kp_center  = 0.0f;
-
-// --- TIMING ---
-// 4ms loop (250 Hz) - read only pendulum sensor each tick
-const unsigned long LOOP_INTERVAL_US = 4000;
-const float DT_FIXED = 0.004f;
-
-volatile uint8_t controlTickCnt = 0;
-bool balanceEnabled = false;
-
-const float MAX_MOTOR_HZ = 4000.0f;  // Allow higher speeds
-
-// --- SAFETY ---
-unsigned long lastMagnetCheckMs = 0;
-const unsigned long MAGNET_CHECK_INTERVAL_MS = 500; // Less frequent
-volatile bool magnetCheckPending = false;
-
-// --- TELEMETRY ---
-const bool TELEMETRY_ENABLED = false;
-unsigned long lastTelemetryMs = 0;
-const unsigned long TELEMETRY_INTERVAL_MS = 50;
-
-// --- SENSORS ---
-AS5600 pendulumSensor(&Wire);
+// --- SENSOR ---
 AS5600 motorSensor(&Wire);
 
-// --- STEPPER ---
+// --- MECHANICS / SIGNS ---
+static const float DEG_PER_STEP = 0.225f; // microstep geometry
+static const int   SENSOR_SIGN  = -1;     // if target and sensor have opposite signs, flip this
+static const int   STEP_SIGN    = +1;
+
+// --- TEST SETTINGS ---
+static const float SPAN_DEG      = 60.0f;     // total span
+static const float STEP_DEG      = 5.0f;      // sample spacing
+static const float HALF_SPAN_DEG = SPAN_DEG * 0.5f; // 30 deg
+
+// NUM_CYCLES: one cycle = -end -> +end -> -end
+static const uint8_t NUM_CYCLES  = 5;
+
+static const float BASE_LIMIT_DEG = 80.0f;    // safety limit (encoder-based)
+static const uint32_t DWELL_MS = 150;
+
+// "Higher speed & accel"
+static const uint32_t MAX_SPEED_HZ = 6000;
+static const uint32_t ACCEL_HZ2    = 80000;
+
+// --- LOGGING TAGS (so tools/balance_plot.py can save it) ---
+static const char* TAG_START = "[BALANCE_LOG_START]";
+static const char* TAG_COLS  = "[BALANCE_COLUMNS]";
+static const char* TAG_END   = "[BALANCE_LOG_END]";
+
+// --- Objects ---
 FastAccelStepperEngine engine;
-FastAccelStepper *stepper = nullptr;
+FastAccelStepper* stepper = nullptr;
 
-// --- STATE ---
-float pendAngle      = 0.0f;
-float pendVelocity   = 0.0f;
-float lastPendAngle  = 0.0f;
-float integralError  = 0.0f;
+// --- Zero reference ---
+static uint16_t motorZeroRaw = 0;
+static float    motorZeroDegRaw = 0.0f;
 
-float motorAngle     = 0.0f;
-float motorVelocity  = 0.0f;
-float lastMotorAngle = 0.0f;
+// --- Sweep state ---
+static bool running = false;
+static int8_t dir = +1;            // +1: idx increasing, -1: idx decreasing
+static uint8_t cycle = 0;          // completed full cycles
+static uint32_t lastMoveMs = 0;
+static bool waitingForSettle = false;
 
-float lastTargetHz   = 0.0f;
-float lastCommandHz  = 0.0f;
+// We avoid float comparisons by stepping an integer index.
+static const int N_STEPS = (int)lroundf(SPAN_DEG / STEP_DEG); // 60/5 = 12
+static int idx = 0; // 0..N_STEPS, where 0 => -30deg, N_STEPS => +30deg
 
-bool sensorsPresent  = true;
-
-// NEW: Option to use stepper position instead of motor sensor
-bool useStepperPosition = true;  // Skip motor I2C read for speed
-
-String serialBuffer;
-
-// --- CALIBRATION ---
-const float PENDULUM_ZERO_DEFAULT = 64.34f;
-const float MOTOR_ZERO_DEFAULT    = 274.834f;
-float pendulumZeroDeg = PENDULUM_ZERO_DEFAULT;
-float motorZeroDeg    = MOTOR_ZERO_DEFAULT;
-
-// ============================================================
-// TIMER ISR
-// ============================================================
-ISR(TIMER3_COMPA_vect) {
-  controlTickCnt++;
+// ---------------- Helpers ----------------
+static inline float normalizeAngle(float deg) {
+  while (deg > 180.0f) deg -= 360.0f;
+  while (deg < -180.0f) deg += 360.0f;
+  return deg;
 }
 
-// ============================================================
-// HELPER FUNCTIONS
-// ============================================================
-float normalizeAngle(float angle) {
-  while (angle > 180.0f) angle -= 360.0f;
-  while (angle < -180.0f) angle += 360.0f;
-  return angle;
+static inline float rawCountToDeg(uint16_t raw) {
+  return (raw * 360.0f) / 4096.0f;
 }
 
-float normalizeDelta(float angleNew, float angleOld) {
-  float diff = angleNew - angleOld;
-  while (diff > 180.0f) diff -= 360.0f;
-  while (diff < -180.0f) diff += 360.0f;
-  return diff;
+static inline long degToSteps(float deg) {
+  float s = (deg / DEG_PER_STEP) * (float)STEP_SIGN;
+  return lroundf(s);
 }
 
-// ============================================================
-// SENSOR UPDATE - OPTIMIZED
-// ============================================================
-void updateSensors() {
-  // --- PENDULUM ONLY (fast path) ---
-  tcaSelect(0);
-  
-  // Skip magnet check most of the time
-  bool doMagnetCheck = false;
-  noInterrupts();
-  doMagnetCheck = magnetCheckPending;
-  magnetCheckPending = false;
-  interrupts();
-  
-  if (doMagnetCheck && !pendulumSensor.detectMagnet()) {
-    balanceEnabled = false;
-    stepper->forceStopAndNewPosition(0);
-    digitalWrite(EN_PIN, HIGH);
-    Serial.println(F("Magnet lost!"));
-    return;
-  }
-
-  uint16_t pRaw = pendulumSensor.readAngle();
-  float pDegRaw = (pRaw * 360.0f) / 4096.0f;
-  float pDeg = pDegRaw - pendulumZeroDeg;
-  float currentPendAngle = normalizeAngle(pDeg);
-
-  // No position filtering
-  pendAngle = currentPendAngle;
-
-  // Velocity with fast filter
-  float pVelRaw = normalizeDelta(currentPendAngle, lastPendAngle) / DT_FIXED;
-  pendVelocity = (ALPHA_VEL * pVelRaw) + ((1.0f - ALPHA_VEL) * pendVelocity);
-  lastPendAngle = currentPendAngle;
-
-  // --- MOTOR: Use stepper position (no I2C delay) ---
-  if (useStepperPosition) {
-    // Convert stepper steps to degrees
-    long steps = stepper->getCurrentPosition();
-    motorAngle = steps * DEG_PER_STEP;
-    motorAngle = normalizeAngle(motorAngle);
-    
-    float mVelRaw = normalizeDelta(motorAngle, lastMotorAngle) / DT_FIXED;
-    motorVelocity = (0.3f * mVelRaw) + (0.7f * motorVelocity);
-    lastMotorAngle = motorAngle;
-  } else {
-    // Original motor sensor read (slower)
-    tcaSelect(1);
-    uint16_t mRaw = motorSensor.readAngle();
-    float mDegRaw = (mRaw * 360.0f) / 4096.0f;
-    float mDeg = -(mDegRaw - motorZeroDeg);
-    float currentMotorAngle = normalizeAngle(mDeg);
-    
-    float mVelRaw = normalizeDelta(currentMotorAngle, lastMotorAngle) / DT_FIXED;
-    motorVelocity = (0.2f * mVelRaw) + (0.8f * motorVelocity);
-    motorAngle = currentMotorAngle;
-    lastMotorAngle = currentMotorAngle;
-  }
+static inline float stepsToDeg(long steps) {
+  return ((float)steps * DEG_PER_STEP) / (float)STEP_SIGN;
 }
 
-// ============================================================
-// MOTOR COMMAND - SIMPLIFIED
-// ============================================================
-void setMotorVelocity(float targetHz) {
-  // Saturate
-  if (targetHz > MAX_MOTOR_HZ) targetHz = MAX_MOTOR_HZ;
-  if (targetHz < -MAX_MOTOR_HZ) targetHz = -MAX_MOTOR_HZ;
-
-  lastTargetHz = targetHz;
-  lastCommandHz = targetHz;
-
-  // REMOVED deadzone - we need response even at small angles
-  if (fabs(targetHz) < 10.0f) {
-    stepper->stopMove();
-    return;
-  }
-
-  stepper->setSpeedInHz((uint32_t)fabs(targetHz));
-
-  if (targetHz > 0) {
-    stepper->runBackward();
-  } else {
-    stepper->runForward();
-  }
+static inline float idxToTargetDeg(int idxVal) {
+  // idx=0 => -HALF_SPAN, idx=N_STEPS => +HALF_SPAN
+  return -HALF_SPAN_DEG + (float)idxVal * STEP_DEG;
 }
 
-// ============================================================
-// BALANCE CONTROL - SIMPLIFIED
-// ============================================================
-void runBalanceControl() {
-  // Safety check
-  if (fabs(pendAngle) > PEND_LIMIT_DEG) {
-    balanceEnabled = false;
-    stepper->forceStopAndNewPosition(0);
-    digitalWrite(EN_PIN, HIGH);
-    Serial.println(F("Pendulum fell!"));
-    return;
-  }
-
-  // Simple PD control - no setpoint adjustment for now
-  float error = pendAngle;  // Target is 0 (upright)
-
-  // Clamp velocity for D-term
-  float velForD = constrain(pendVelocity, -150.0f, 150.0f);
-
-  // PD output
-  float targetHz = (Kp_balance * error) - (Kd_balance * velForD);
-
-  // Base limit safety (simplified)
-  if (fabs(motorAngle) > BASE_LIMIT_DEG) {
-    balanceEnabled = false;
-    stepper->forceStopAndNewPosition(0);
-    digitalWrite(EN_PIN, HIGH);
-    Serial.println(F("Base limit!"));
-    return;
-  }
-
-  setMotorVelocity(targetHz);
+static void readMotor(uint16_t& raw, float& degRaw, float& angleDeg) {
+  tcaSelect(1);
+  raw = motorSensor.readAngle();
+  degRaw = rawCountToDeg(raw);
+  float delta = degRaw - motorZeroDegRaw;
+  angleDeg = normalizeAngle((float)SENSOR_SIGN * delta);
 }
 
-// ============================================================
-// COMMAND HANDLER
-// ============================================================
-void handleCommand(const String &cmd) {
-  if (cmd.length() == 0) return;
-  char c = toupper(cmd.charAt(0));
-  float val = cmd.substring(1).toFloat();
+static void logRow() {
+  const uint32_t nowMs = millis();
 
+  const float targetDeg = idxToTargetDeg(idx);
+  const long targetSteps = degToSteps(targetDeg);
+
+  const long stepPos = stepper ? stepper->getCurrentPosition() : 0;
+  const float expectedDeg = stepsToDeg(stepPos);
+
+  uint16_t encRaw = 0;
+  float encDegRaw = 0.0f;
+  float sensorDeg = 0.0f;
+  readMotor(encRaw, encDegRaw, sensorDeg);
+
+  const float errorDeg = expectedDeg - sensorDeg;
+
+  // NUMERIC-ONLY columns (logger-friendly):
+  // time_ms,cycle,dir,idx,target_deg,target_steps,step_pos,expected_deg,sensor_deg,enc_raw,enc_deg_raw,error_deg
+  Serial.print(nowMs); Serial.print(",");
+  Serial.print((int)cycle); Serial.print(",");
+  Serial.print((int)dir); Serial.print(",");
+  Serial.print(idx); Serial.print(",");
+  Serial.print(targetDeg, 2); Serial.print(",");
+  Serial.print(targetSteps); Serial.print(",");
+  Serial.print(stepPos); Serial.print(",");
+  Serial.print(expectedDeg, 2); Serial.print(",");
+  Serial.print(sensorDeg, 2); Serial.print(",");
+  Serial.print(encRaw); Serial.print(",");
+  Serial.print(encDegRaw, 3); Serial.print(",");
+  Serial.println(errorDeg, 2);
+}
+
+static void stopTest(const __FlashStringHelper* reason) {
+  running = false;
+  waitingForSettle = false;
+  if (stepper) stepper->forceStop();
+  digitalWrite(EN_PIN, HIGH);
+  Serial.print(TAG_END); Serial.print(",0,"); Serial.println(reason);
+}
+
+static void commandCurrentIdxMove() {
+  const float targetDeg = idxToTargetDeg(idx);
+  const long targetSteps = degToSteps(targetDeg);
+  stepper->moveTo(targetSteps);
+  lastMoveMs = millis();
+  waitingForSettle = true;
+}
+
+static void startTest() {
+  if (!stepper) return;
+
+  digitalWrite(EN_PIN, LOW); // enable motor
+
+  running = true;
+  cycle = 0;
+  dir = +1;
+  idx = 0; // start at -end
+
+  Serial.print(TAG_START); Serial.println(",0,hysteresis_60deg_5deg");
+  Serial.print(TAG_COLS);
+  Serial.println(",time_ms,cycle,dir,idx,target_deg,target_steps,step_pos,expected_deg,sensor_deg,enc_raw,enc_deg_raw,error_deg");
+
+  commandCurrentIdxMove(); // go to start point (in case you're not already there)
+}
+
+// ---------------- Commands ----------------
+static void doZero() {
+  tcaSelect(1);
+  motorZeroRaw = motorSensor.readAngle();
+  motorZeroDegRaw = rawCountToDeg(motorZeroRaw);
+
+  if (stepper) stepper->setCurrentPosition(0);
+
+  Serial.print(F("[INFO],zero_enc_raw,")); Serial.println(motorZeroRaw);
+  Serial.print(F("[INFO],zero_enc_deg_raw,")); Serial.println(motorZeroDegRaw, 3);
+  Serial.println(F("[INFO],stepper_pos_set_to_0"));
+}
+
+static void printHelp() {
+  Serial.println(F("Commands:"));
+  Serial.println(F("  Z : zero encoder + set stepper position to 0 (do this at center)"));
+  Serial.println(F("  S : start sweep test"));
+  Serial.println(F("  X : stop test"));
+  Serial.println(F("  T : snapshot"));
+}
+
+static void snapshot() {
+  uint16_t encRaw = 0; float encDegRaw = 0; float sensorDeg = 0;
+  readMotor(encRaw, encDegRaw, sensorDeg);
+  long stepPos = stepper ? stepper->getCurrentPosition() : 0;
+  float expectedDeg = stepsToDeg(stepPos);
+
+  Serial.print(F("[SNAP],steps,")); Serial.print(stepPos);
+  Serial.print(F(",expected_deg,")); Serial.print(expectedDeg, 2);
+  Serial.print(F(",sensor_deg,")); Serial.print(sensorDeg, 2);
+  Serial.print(F(",enc_raw,")); Serial.print(encRaw);
+  Serial.print(F(",enc_deg_raw,")); Serial.println(encDegRaw, 3);
+}
+
+static void handleCommand(char c) {
+  c = (char)toupper((unsigned char)c);
   switch (c) {
-    case 'S': {
-      pendVelocity = 0.0f;
-      motorVelocity = 0.0f;
-      integralError = 0.0f;
-      
-      // Reset stepper position to 0 at start
-      stepper->forceStopAndNewPosition(0);
-      
-      updateSensors();
-      lastPendAngle = pendAngle;
-      lastMotorAngle = 0.0f;
-
-      balanceEnabled = true;
-      digitalWrite(EN_PIN, LOW);
-      
-      Serial.print(F("Balance ON. Kp=")); Serial.print(Kp_balance);
-      Serial.print(F(" Kd=")); Serial.println(Kd_balance);
-      break;
-    }
-
-    case 'X': {
-      balanceEnabled = false;
-      stepper->forceStop();
-      digitalWrite(EN_PIN, HIGH);
-      Serial.println(F("Balance OFF"));
-      break;
-    }
-
-    case 'P':
-      Kp_balance = val;
-      Serial.print(F("Kp=")); Serial.println(val);
-      break;
-
-    case 'D':
-      Kd_balance = val;
-      Serial.print(F("Kd=")); Serial.println(val);
-      break;
-
-    case 'Y': {
-      tcaSelect(0);
-      uint16_t pRaw = pendulumSensor.readAngle();
-      pendulumZeroDeg = (pRaw * 360.0f) / 4096.0f;
-      Serial.print(F("Pendulum zero=")); Serial.println(pendulumZeroDeg);
-      break;
-    }
-
-    case 'Z': {
-      tcaSelect(1);
-      uint16_t mRaw = motorSensor.readAngle();
-      motorZeroDeg = (mRaw * 360.0f) / 4096.0f;
-      Serial.print(F("Motor zero=")); Serial.println(motorZeroDeg);
-      break;
-    }
-
-    case 'T': {
-      updateSensors();
-      float hz = (Kp_balance * pendAngle) - (Kd_balance * pendVelocity);
-      Serial.print(F("P:")); Serial.print(pendAngle, 1);
-      Serial.print(F(" V:")); Serial.print(pendVelocity, 0);
-      Serial.print(F(" Hz:")); Serial.println(hz, 0);
-      break;
-    }
-
-    // NEW: Manual motor test
-    case 'L': {  // Test motor left
-      Serial.println(F("Motor LEFT 1000Hz for 500ms"));
-      digitalWrite(EN_PIN, LOW);
-      stepper->setSpeedInHz(1000);
-      stepper->runForward();
-      delay(500);
-      stepper->forceStop();
-      digitalWrite(EN_PIN, HIGH);
-      Serial.println(F("Done"));
-      break;
-    }
-
-    case 'R': {  // Test motor right
-      Serial.println(F("Motor RIGHT 1000Hz for 500ms"));
-      digitalWrite(EN_PIN, LOW);
-      stepper->setSpeedInHz(1000);
-      stepper->runBackward();
-      delay(500);
-      stepper->forceStop();
-      digitalWrite(EN_PIN, HIGH);
-      Serial.println(F("Done"));
-      break;
-    }
-
-    // NEW: Test P-only control (no D-term)
-    case 'Q': {
-      Kd_balance = 0.0f;
-      Serial.println(F("D-term disabled (Kd=0). P-only mode."));
-      break;
-    }
-
-    // NEW: Push test - verify direction mapping
-    case 'W': {
-      Serial.println(F("PUSH TEST: Tilt pendulum and watch motor direction"));
-      Serial.println(F("Pendulum RIGHT (+angle) -> Motor should go RIGHT (under pendulum)"));
-      Serial.println(F("Press X to stop"));
-      
-      pendVelocity = 0.0f;
-      stepper->forceStopAndNewPosition(0);
-      balanceEnabled = true;
-      digitalWrite(EN_PIN, LOW);
-      
-      // Temporarily disable D-term for clearer direction test
-      float savedKd = Kd_balance;
-      Kd_balance = 0.0f;
-      
-      unsigned long start = millis();
-      while (millis() - start < 10000) {  // 10 second test
-        updateSensors();
-        float hz = Kp_balance * pendAngle;
-        setMotorVelocity(hz);
-        
-        // Print every 200ms
-        static unsigned long lastPrint = 0;
-        if (millis() - lastPrint > 200) {
-          Serial.print(F("Angle:")); Serial.print(pendAngle, 1);
-          Serial.print(F(" -> Hz:")); Serial.println(hz, 0);
-          lastPrint = millis();
-        }
-        
-        // Check for X command
-        if (Serial.available() && toupper(Serial.read()) == 'X') break;
-      }
-      
-      Kd_balance = savedKd;
-      balanceEnabled = false;
-      stepper->forceStop();
-      digitalWrite(EN_PIN, HIGH);
-      Serial.println(F("Push test done"));
-      break;
-    }
-
+    case 'H': printHelp(); break;
+    case 'Z': doZero(); break;
+    case 'S': if (!running) startTest(); break;
+    case 'X': stopTest(F("user_stop")); break;
+    case 'T': snapshot(); break;
     default:
-      Serial.println(F("S:Start X:Stop P#:Kp D#:Kd Y:Zero-pend Z:Zero-mot T:Diag L/R:MotorTest W:PushTest Q:P-only"));
+      Serial.print(F("[ERR],unknown_cmd,")); Serial.println(c);
+      printHelp();
       break;
   }
 }
 
-// ============================================================
-// SETUP
-// ============================================================
+// ---------------- Setup / Loop ----------------
 void setup() {
-  Serial.begin(500000);
+  Serial.begin(SERIAL_BAUD);
+
   Wire.begin();
   Wire.setClock(400000);
+  Wire.setWireTimeout(3000, true);
 
-  Serial.println(F("V7.3 Diagnostic"));
-
-  // Init pendulum sensor
-  tcaSelect(0);
-  pendulumSensor.begin();
-  delay(10);
-  if (!pendulumSensor.detectMagnet()) {
-    Serial.println(F("WARNING: Pendulum magnet not detected!"));
-  }
-
-  // Init motor sensor (even if we don't use it)
   tcaSelect(1);
   motorSensor.begin();
-  delay(10);
-  if (!motorSensor.detectMagnet()) {
-    Serial.println(F("Note: Motor sensor not detected (using stepper position)"));
-  }
 
-  // Stepper
   pinMode(EN_PIN, OUTPUT);
-  digitalWrite(EN_PIN, HIGH);
+  digitalWrite(EN_PIN, HIGH); // disabled by default (active-low)
 
   engine.init();
   stepper = engine.stepperConnectToPin(STEP_PIN);
   if (!stepper) {
-    Serial.println(F("Stepper init failed!"));
-    while(1);
+    Serial.println(F("[FATAL] stepperConnectToPin failed"));
+    while (1) delay(100);
   }
-
   stepper->setDirectionPin(DIR_PIN);
   stepper->setEnablePin(EN_PIN, true);
   stepper->setAutoEnable(false);
-  
-  // CRITICAL: High but not excessive acceleration
-  // Too high = motor stalls with "tick"
-  // Too low = delayed response
-  stepper->setAcceleration(50000);  // 50k - balanced choice
-  stepper->setSpeedInHz(0);
 
-  // Timer3: 4ms (250 Hz)
-  noInterrupts();
-  TCCR3A = 0;
-  TCCR3B = 0;
-  TCNT3 = 0;
-  TCCR3B |= (1 << WGM32);
-  TCCR3B |= (1 << CS31) | (1 << CS30);
-  OCR3A = 999;  // 4ms
-  TIMSK3 |= (1 << OCIE3A);
-  interrupts();
+  stepper->setSpeedInHz(MAX_SPEED_HZ);
+  stepper->setAcceleration(ACCEL_HZ2);
 
-  Serial.println(F("Ready. Commands: S X P# D# Y Z T L R W Q"));
-  Serial.println(F("1) Do Y (zero pendulum upright)"));
-  Serial.println(F("2) Do W (push test) to verify direction"));
-  Serial.println(F("3) Do S to start balance"));
+  Serial.println(F("Hysteresis Sweep Test Ready."));
+  Serial.print(F("[INFO],SPAN_DEG,")); Serial.println(SPAN_DEG, 1);
+  Serial.print(F("[INFO],STEP_DEG,")); Serial.println(STEP_DEG, 1);
+  Serial.print(F("[INFO],N_STEPS,")); Serial.println(N_STEPS);
+  Serial.print(F("[INFO],NUM_CYCLES,")); Serial.println(NUM_CYCLES);
+  Serial.print(F("[INFO],MAX_SPEED_HZ,")); Serial.println(MAX_SPEED_HZ);
+  Serial.print(F("[INFO],ACCEL_HZ2,")); Serial.println(ACCEL_HZ2);
+  Serial.print(F("[INFO],DEG_PER_STEP,")); Serial.println(DEG_PER_STEP, 6);
+  Serial.print(F("[INFO],SENSOR_SIGN,")); Serial.println(SENSOR_SIGN);
+  Serial.print(F("[INFO],STEP_SIGN,")); Serial.println(STEP_SIGN);
+  printHelp();
 }
 
-// ============================================================
-// MAIN LOOP
-// ============================================================
 void loop() {
-  // Magnet check (infrequent)
-  if (millis() - lastMagnetCheckMs >= MAGNET_CHECK_INTERVAL_MS) {
-    lastMagnetCheckMs = millis();
-    magnetCheckPending = true;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') continue;
+    handleCommand(c);
   }
 
-  // Serial
-  while (Serial.available() > 0) {
-    char ch = Serial.read();
-    if (ch == '\n' || ch == '\r') {
-      if (serialBuffer.length() > 0) {
-        handleCommand(serialBuffer);
-        serialBuffer = "";
+  if (!running || !stepper) return;
+
+  // Safety
+  uint16_t encRaw = 0; float encDegRaw = 0.0f; float sensorDeg = 0.0f;
+  readMotor(encRaw, encDegRaw, sensorDeg);
+  if (fabs(sensorDeg) > BASE_LIMIT_DEG) {
+    stopTest(F("base_limit"));
+    return;
+  }
+
+  // Wait until movement finishes, then dwell, then log & advance
+  if (!stepper->isRunning()) {
+    if (!waitingForSettle) {
+      waitingForSettle = true;
+      lastMoveMs = millis();
+      return;
+    }
+
+    if (millis() - lastMoveMs < DWELL_MS) return;
+
+    // Log this point
+    logRow();
+
+    // Advance index
+    if (dir > 0) {
+      if (idx < N_STEPS) idx++;
+      else dir = -1; // already at +end: reverse
+    } else { // dir < 0
+      if (idx > 0) idx--;
+      else {
+        // We arrived back at -end => completed one full cycle
+        cycle++;
+        if (cycle >= NUM_CYCLES) {
+          stopTest(F("test_complete"));
+          return;
+        }
+        dir = +1; // start next cycle
       }
-    } else if (isPrintable(ch)) {
-      serialBuffer += ch;
     }
-  }
 
-  // Control - run once per timer tick, discard backlog
-  noInterrupts();
-  uint8_t ticks = controlTickCnt;
-  controlTickCnt = 0;
-  interrupts();
-
-  if (ticks > 0) {
-    updateSensors();
-    if (balanceEnabled) {
-      runBalanceControl();
-    }
+    commandCurrentIdxMove();
+  } else {
+    waitingForSettle = false; // moving
   }
 }
