@@ -3,15 +3,9 @@
 #include <AS5600.h>
 #include <FastAccelStepper.h>
 #include <math.h>
-#include <ctype.h>
-#include <stdlib.h>
 
 // ============================================================
-// Hysteresis Sweep Test (60° span, 5° steps, high speed/accel)
-// - Span: [-30°, +30°] (60° total)
-// - Step size: 5° (commanded by step count via DEG_PER_STEP)
-// - Logs at each point after dwell: steps + expected_deg + sensor angle + raw counts
-// - Repeats NUM_CYCLES full cycles (one cycle = -end -> +end -> -end)
+// MOTOR POSITION TRACKING TESTER (Position Sine / moveTo())
 // ============================================================
 
 // --- PINS ---
@@ -19,212 +13,224 @@
 #define DIR_PIN  6
 #define EN_PIN   7
 
-static const uint32_t SERIAL_BAUD = 500000;
+#define SERIAL_BAUD 500000
+#define TCA_ADDR 0x70
+
+// --- MECHANICS ---
+const float DEG_PER_STEP   = 0.225f;   // degrees per (micro)step
+const float BASE_LIMIT_DEG = 80.0f;    // hard safety limit
+
+// --- SIGN CONVENTION (IMPORTANT) ---
+// Goal: Positive target_deg should produce positive actual_deg.
+//
+// SENSOR_SIGN:
+//   +1 => angle = (rawDeg - zeroDeg)
+//   -1 => angle = -(rawDeg - zeroDeg)
+//
+// STEP_SIGN:
+//   +1 => positive target_deg -> positive step position (moveTo +steps)
+//   -1 => positive target_deg -> negative step position (moveTo -steps)
+const int SENSOR_SIGN = +1;
+const int STEP_SIGN   = +1;
+
+// --- STEPPER LIMITS (span-limited realistic) ---
+const uint32_t MAX_SPEED_HZ = 2500;     // steps/s cap
+const uint32_t ACCEL_HZ2    = 20000;    // steps/s^2
+
+// --- TEST SETTINGS ---
+const float AMPLITUDE_DEG   = 20.0f;    // keep within your physical travel
+const float FREQ_HZ         = 1.0f;     // sine frequency
+const float TEST_DURATION_S = 10.0f;
+
+const uint32_t CONTROL_PERIOD_MS = 5;   // how often we update moveTo()
+const uint32_t LOG_PERIOD_MS     = 5;  // telemetry rate
+
+// --- STATE ---
+FastAccelStepperEngine engine;
+FastAccelStepper* stepper = nullptr;
+
+AS5600 motorSensor(&Wire);
+float motorZeroDeg = 0.0f;
+float motorAngleDeg = 0.0f;
+
+bool testRunning = false;
+unsigned long testStartMs = 0;
+unsigned long lastControlMs = 0;
+unsigned long lastLogMs = 0;
 
 // --- I2C MUX ---
-static const uint8_t TCA_ADDR = 0x70;
-static inline void tcaSelect(uint8_t i) {
+void tcaSelect(uint8_t i) {
   if (i > 7) return;
   Wire.beginTransmission(TCA_ADDR);
   Wire.write(1 << i);
   Wire.endTransmission();
 }
 
-// --- SENSOR ---
-AS5600 motorSensor(&Wire);
-
-// --- MECHANICS / SIGNS ---
-static const float DEG_PER_STEP = 0.225f; // microstep geometry
-static const int   SENSOR_SIGN  = -1;     // if target and sensor have opposite signs, flip this
-static const int   STEP_SIGN    = +1;
-
-// --- TEST SETTINGS ---
-static const float SPAN_DEG      = 60.0f;     // total span
-static const float STEP_DEG      = 5.0f;      // sample spacing
-static const float HALF_SPAN_DEG = SPAN_DEG * 0.5f; // 30 deg
-
-// NUM_CYCLES: one cycle = -end -> +end -> -end
-static const uint8_t NUM_CYCLES  = 5;
-
-static const float BASE_LIMIT_DEG = 80.0f;    // safety limit (encoder-based)
-static const uint32_t DWELL_MS = 150;
-
-// "Higher speed & accel"
-static const uint32_t MAX_SPEED_HZ = 6000;
-static const uint32_t ACCEL_HZ2    = 80000;
-
-// --- LOGGING TAGS (so tools/balance_plot.py can save it) ---
-static const char* TAG_START = "[BALANCE_LOG_START]";
-static const char* TAG_COLS  = "[BALANCE_COLUMNS]";
-static const char* TAG_END   = "[BALANCE_LOG_END]";
-
-// --- Objects ---
-FastAccelStepperEngine engine;
-FastAccelStepper* stepper = nullptr;
-
-// --- Zero reference ---
-static uint16_t motorZeroRaw = 0;
-static float    motorZeroDegRaw = 0.0f;
-
-// --- Sweep state ---
-static bool running = false;
-static int8_t dir = +1;            // +1: idx increasing, -1: idx decreasing
-static uint8_t cycle = 0;          // completed full cycles
-static uint32_t lastMoveMs = 0;
-static bool waitingForSettle = false;
-
-// We avoid float comparisons by stepping an integer index.
-static const int N_STEPS = (int)lroundf(SPAN_DEG / STEP_DEG); // 60/5 = 12
-static int idx = 0; // 0..N_STEPS, where 0 => -30deg, N_STEPS => +30deg
-
-// ---------------- Helpers ----------------
-static inline float normalizeAngle(float deg) {
-  while (deg > 180.0f) deg -= 360.0f;
-  while (deg < -180.0f) deg += 360.0f;
-  return deg;
+// --- HELPERS ---
+float normalizeAngle(float angle) {
+  while (angle > 180.0f) angle -= 360.0f;
+  while (angle < -180.0f) angle += 360.0f;
+  return angle;
 }
 
-static inline float rawCountToDeg(uint16_t raw) {
-  return (raw * 360.0f) / 4096.0f;
+float readMotorAngleDeg() {
+  tcaSelect(1);
+  uint16_t raw = motorSensor.readAngle();
+  float degRaw = (raw * 360.0f) / 4096.0f;
+  float deg = SENSOR_SIGN * (degRaw - motorZeroDeg);
+  return normalizeAngle(deg);
 }
 
-static inline long degToSteps(float deg) {
-  float s = (deg / DEG_PER_STEP) * (float)STEP_SIGN;
-  return lroundf(s);
+inline long angleDegToSteps(float angleDeg) {
+  // Convert degrees -> steps, applying sign mapping for the stepper direction convention
+  float stepsF = (angleDeg / DEG_PER_STEP) * (float)STEP_SIGN;
+  return lroundf(stepsF);
 }
 
-static inline float stepsToDeg(long steps) {
+inline float stepsToAngleDeg(long steps) {
+  // Inverse of angleDegToSteps()
   return ((float)steps * DEG_PER_STEP) / (float)STEP_SIGN;
 }
 
-static inline float idxToTargetDeg(int idxVal) {
-  // idx=0 => -HALF_SPAN, idx=N_STEPS => +HALF_SPAN
-  return -HALF_SPAN_DEG + (float)idxVal * STEP_DEG;
-}
+// ============================================================
+// POSITION SINE LOOP
+// ============================================================
+void runTestLoop() {
+  unsigned long now = millis();
+  float t = (now - testStartMs) / 1000.0f;
 
-static void readMotor(uint16_t& raw, float& degRaw, float& angleDeg) {
-  tcaSelect(1);
-  raw = motorSensor.readAngle();
-  degRaw = rawCountToDeg(raw);
-  float delta = degRaw - motorZeroDegRaw;
-  angleDeg = normalizeAngle((float)SENSOR_SIGN * delta);
-}
+  if (t > TEST_DURATION_S) {
+    testRunning = false;
+    stepper->stopMove();
+    digitalWrite(EN_PIN, HIGH);
+    Serial.println(F("[BALANCE_LOG_END],0,test_complete"));
+    return;
+  }
 
-static void logRow() {
-  const uint32_t nowMs = millis();
+  // Update command at CONTROL_PERIOD_MS
+  if (now - lastControlMs >= CONTROL_PERIOD_MS) {
+    lastControlMs = now;
 
-  const float targetDeg = idxToTargetDeg(idx);
-  const long targetSteps = degToSteps(targetDeg);
+    // target angle command (position)
+    float omega = 2.0f * (float)M_PI * FREQ_HZ;
+    float targetAngleDeg = AMPLITUDE_DEG * sinf(omega * t);
 
-  const long stepPos = stepper ? stepper->getCurrentPosition() : 0;
-  const float expectedDeg = stepsToDeg(stepPos);
+    // Safety guard on the commanded target too (in case settings change)
+    if (fabs(targetAngleDeg) > BASE_LIMIT_DEG) {
+      testRunning = false;
+      stepper->forceStop();
+      digitalWrite(EN_PIN, HIGH);
+      Serial.println(F("[BALANCE_LOG_END],0,target_limit"));
+      return;
+    }
 
-  uint16_t encRaw = 0;
-  float encDegRaw = 0.0f;
-  float sensorDeg = 0.0f;
-  readMotor(encRaw, encDegRaw, sensorDeg);
+    long targetSteps = angleDegToSteps(targetAngleDeg);
+    stepper->moveTo(targetSteps);
+  }
 
-  const float errorDeg = expectedDeg - sensorDeg;
+  // Read sensor (for safety + telemetry)
+  motorAngleDeg = readMotorAngleDeg();
 
-  // NUMERIC-ONLY columns (logger-friendly):
-  // time_ms,cycle,dir,idx,target_deg,target_steps,step_pos,expected_deg,sensor_deg,enc_raw,enc_deg_raw,error_deg
-  Serial.print(nowMs); Serial.print(",");
-  Serial.print((int)cycle); Serial.print(",");
-  Serial.print((int)dir); Serial.print(",");
-  Serial.print(idx); Serial.print(",");
-  Serial.print(targetDeg, 2); Serial.print(",");
-  Serial.print(targetSteps); Serial.print(",");
-  Serial.print(stepPos); Serial.print(",");
-  Serial.print(expectedDeg, 2); Serial.print(",");
-  Serial.print(sensorDeg, 2); Serial.print(",");
-  Serial.print(encRaw); Serial.print(",");
-  Serial.print(encDegRaw, 3); Serial.print(",");
-  Serial.println(errorDeg, 2);
-}
+  if (fabs(motorAngleDeg) > BASE_LIMIT_DEG) {
+    testRunning = false;
+    stepper->forceStop();
+    digitalWrite(EN_PIN, HIGH);
+    Serial.println(F("[BALANCE_LOG_END],0,base_limit"));
+    return;
+  }
 
-static void stopTest(const __FlashStringHelper* reason) {
-  running = false;
-  waitingForSettle = false;
-  if (stepper) stepper->forceStop();
-  digitalWrite(EN_PIN, HIGH);
-  Serial.print(TAG_END); Serial.print(",0,"); Serial.println(reason);
-}
+  // Telemetry
+  if (now - lastLogMs >= LOG_PERIOD_MS) {
+    lastLogMs = now;
 
-static void commandCurrentIdxMove() {
-  const float targetDeg = idxToTargetDeg(idx);
-  const long targetSteps = degToSteps(targetDeg);
-  stepper->moveTo(targetSteps);
-  lastMoveMs = millis();
-  waitingForSettle = true;
-}
+    float omega = 2.0f * (float)M_PI * FREQ_HZ;
+    float targetAngleDeg = AMPLITUDE_DEG * sinf(omega * t);
+    float targetVelDeg_s = AMPLITUDE_DEG * omega * cosf(omega * t);
+    float targetHz_ff = (targetVelDeg_s / DEG_PER_STEP) * (float)STEP_SIGN;
 
-static void startTest() {
-  if (!stepper) return;
+    long targetSteps = angleDegToSteps(targetAngleDeg);
+    long stepPos = stepper->getCurrentPosition();
 
-  digitalWrite(EN_PIN, LOW); // enable motor
+    float expectedDegFromSteps = stepsToAngleDeg(stepPos);
 
-  running = true;
-  cycle = 0;
-  dir = +1;
-  idx = 0; // start at -end
+    float errDeg = targetAngleDeg - motorAngleDeg;                 // tracking error vs target
+    long  errSteps = targetSteps - stepPos;                        // stepper lag vs commanded target
+    float stepSensorDegMismatch = expectedDegFromSteps - motorAngleDeg; // encoder vs step-derived angle
 
-  Serial.print(TAG_START); Serial.println(",0,hysteresis_60deg_5deg");
-  Serial.print(TAG_COLS);
-  Serial.println(",time_ms,cycle,dir,idx,target_deg,target_steps,step_pos,expected_deg,sensor_deg,enc_raw,enc_deg_raw,error_deg");
-
-  commandCurrentIdxMove(); // go to start point (in case you're not already there)
-}
-
-// ---------------- Commands ----------------
-static void doZero() {
-  tcaSelect(1);
-  motorZeroRaw = motorSensor.readAngle();
-  motorZeroDegRaw = rawCountToDeg(motorZeroRaw);
-
-  if (stepper) stepper->setCurrentPosition(0);
-
-  Serial.print(F("[INFO],zero_enc_raw,")); Serial.println(motorZeroRaw);
-  Serial.print(F("[INFO],zero_enc_deg_raw,")); Serial.println(motorZeroDegRaw, 3);
-  Serial.println(F("[INFO],stepper_pos_set_to_0"));
-}
-
-static void printHelp() {
-  Serial.println(F("Commands:"));
-  Serial.println(F("  Z : zero encoder + set stepper position to 0 (do this at center)"));
-  Serial.println(F("  S : start sweep test"));
-  Serial.println(F("  X : stop test"));
-  Serial.println(F("  T : snapshot"));
-}
-
-static void snapshot() {
-  uint16_t encRaw = 0; float encDegRaw = 0; float sensorDeg = 0;
-  readMotor(encRaw, encDegRaw, sensorDeg);
-  long stepPos = stepper ? stepper->getCurrentPosition() : 0;
-  float expectedDeg = stepsToDeg(stepPos);
-
-  Serial.print(F("[SNAP],steps,")); Serial.print(stepPos);
-  Serial.print(F(",expected_deg,")); Serial.print(expectedDeg, 2);
-  Serial.print(F(",sensor_deg,")); Serial.print(sensorDeg, 2);
-  Serial.print(F(",enc_raw,")); Serial.print(encRaw);
-  Serial.print(F(",enc_deg_raw,")); Serial.println(encDegRaw, 3);
-}
-
-static void handleCommand(char c) {
-  c = (char)toupper((unsigned char)c);
-  switch (c) {
-    case 'H': printHelp(); break;
-    case 'Z': doZero(); break;
-    case 'S': if (!running) startTest(); break;
-    case 'X': stopTest(F("user_stop")); break;
-    case 'T': snapshot(); break;
-    default:
-      Serial.print(F("[ERR],unknown_cmd,")); Serial.println(c);
-      printHelp();
-      break;
+    Serial.print(t, 3); Serial.print(",");
+    Serial.print(targetAngleDeg, 2); Serial.print(",");
+    Serial.print(motorAngleDeg, 2); Serial.print(",");
+    Serial.print(stepPos); Serial.print(",");
+    Serial.print(targetSteps); Serial.print(",");
+    Serial.print(expectedDegFromSteps, 2); Serial.print(",");
+    Serial.print(errDeg, 2); Serial.print(",");
+    Serial.print(errSteps); Serial.print(",");
+    Serial.print(stepSensorDegMismatch, 2); Serial.print(",");
+    Serial.print(targetHz_ff, 1); Serial.print(",");
+    Serial.println(FREQ_HZ, 2);
   }
 }
 
-// ---------------- Setup / Loop ----------------
+// ============================================================
+// COMMANDS
+// ============================================================
+void handleCommand(char c) {
+  switch (c) {
+    case 'Z': { // Zero motor + zero stepper position
+      tcaSelect(1);
+      motorZeroDeg = (motorSensor.readAngle() * 360.0f) / 4096.0f;
+      motorAngleDeg = 0.0f;
+
+      if (stepper) stepper->setCurrentPosition(0);
+
+      Serial.print(F("Zero Set (degRaw): "));
+      Serial.println(motorZeroDeg, 3);
+      Serial.println(F("Stepper position set to 0."));
+      break;
+    }
+
+    case 'T': { // quick check
+      float ang = readMotorAngleDeg();
+      long steps = stepper ? stepper->getCurrentPosition() : 0;
+      Serial.print(F("Angle(deg): ")); Serial.print(ang, 2);
+      Serial.print(F(" | Steps: ")); Serial.println(steps);
+      break;
+    }
+
+    case 'S': { // start
+      Serial.println(F("[BALANCE_LOG_START],0,motor_position_sine_test"));
+      Serial.println(F("[BALANCE_COLUMNS],time_s,target_deg,actual_deg,step_pos,target_steps,expected_deg_from_steps,err_deg,err_steps,step_sensor_deg_mismatch,target_hz_ff,freq_hz"));
+
+      digitalWrite(EN_PIN, LOW);
+
+      testStartMs = millis();
+      lastControlMs = 0;
+      lastLogMs = 0;
+      testRunning = true;
+
+      // Print settings (human-readable)
+      Serial.print(F("[INFO],MAX_SPEED_HZ,")); Serial.println(MAX_SPEED_HZ);
+      Serial.print(F("[INFO],ACCEL_HZ2,"));    Serial.println(ACCEL_HZ2);
+      Serial.print(F("[INFO],AMPLITUDE_DEG,")); Serial.println(AMPLITUDE_DEG, 2);
+      Serial.print(F("[INFO],FREQ_HZ,"));       Serial.println(FREQ_HZ, 2);
+      Serial.print(F("[INFO],SENSOR_SIGN,"));   Serial.println(SENSOR_SIGN);
+      Serial.print(F("[INFO],STEP_SIGN,"));     Serial.println(STEP_SIGN);
+      break;
+    }
+
+    case 'X': { // stop
+      testRunning = false;
+      if (stepper) stepper->forceStop();
+      digitalWrite(EN_PIN, HIGH);
+      Serial.println(F("[BALANCE_LOG_END],0,user_abort"));
+      break;
+    }
+  }
+}
+
+// ============================================================
+// SETUP / LOOP
+// ============================================================
 void setup() {
   Serial.begin(SERIAL_BAUD);
 
@@ -236,14 +242,10 @@ void setup() {
   motorSensor.begin();
 
   pinMode(EN_PIN, OUTPUT);
-  digitalWrite(EN_PIN, HIGH); // disabled by default (active-low)
+  digitalWrite(EN_PIN, HIGH); // disabled by default (EN active-low)
 
   engine.init();
   stepper = engine.stepperConnectToPin(STEP_PIN);
-  if (!stepper) {
-    Serial.println(F("[FATAL] stepperConnectToPin failed"));
-    while (1) delay(100);
-  }
   stepper->setDirectionPin(DIR_PIN);
   stepper->setEnablePin(EN_PIN, true);
   stepper->setAutoEnable(false);
@@ -251,68 +253,17 @@ void setup() {
   stepper->setSpeedInHz(MAX_SPEED_HZ);
   stepper->setAcceleration(ACCEL_HZ2);
 
-  Serial.println(F("Hysteresis Sweep Test Ready."));
-  Serial.print(F("[INFO],SPAN_DEG,")); Serial.println(SPAN_DEG, 1);
-  Serial.print(F("[INFO],STEP_DEG,")); Serial.println(STEP_DEG, 1);
-  Serial.print(F("[INFO],N_STEPS,")); Serial.println(N_STEPS);
-  Serial.print(F("[INFO],NUM_CYCLES,")); Serial.println(NUM_CYCLES);
-  Serial.print(F("[INFO],MAX_SPEED_HZ,")); Serial.println(MAX_SPEED_HZ);
-  Serial.print(F("[INFO],ACCEL_HZ2,")); Serial.println(ACCEL_HZ2);
-  Serial.print(F("[INFO],DEG_PER_STEP,")); Serial.println(DEG_PER_STEP, 6);
-  Serial.print(F("[INFO],SENSOR_SIGN,")); Serial.println(SENSOR_SIGN);
-  Serial.print(F("[INFO],STEP_SIGN,")); Serial.println(STEP_SIGN);
-  printHelp();
+  Serial.println(F("Motor Position Sine Test (moveTo)."));
+  Serial.println(F("Commands: Z=zero, T=angle, S=start, X=stop"));
 }
 
 void loop() {
-  while (Serial.available()) {
-    char c = (char)Serial.read();
-    if (c == '\n' || c == '\r') continue;
-    handleCommand(c);
+  if (Serial.available()) {
+    char c = toupper(Serial.read());
+    if (strchr("SXZT", c)) handleCommand(c);
   }
 
-  if (!running || !stepper) return;
-
-  // Safety
-  uint16_t encRaw = 0; float encDegRaw = 0.0f; float sensorDeg = 0.0f;
-  readMotor(encRaw, encDegRaw, sensorDeg);
-  if (fabs(sensorDeg) > BASE_LIMIT_DEG) {
-    stopTest(F("base_limit"));
-    return;
-  }
-
-  // Wait until movement finishes, then dwell, then log & advance
-  if (!stepper->isRunning()) {
-    if (!waitingForSettle) {
-      waitingForSettle = true;
-      lastMoveMs = millis();
-      return;
-    }
-
-    if (millis() - lastMoveMs < DWELL_MS) return;
-
-    // Log this point
-    logRow();
-
-    // Advance index
-    if (dir > 0) {
-      if (idx < N_STEPS) idx++;
-      else dir = -1; // already at +end: reverse
-    } else { // dir < 0
-      if (idx > 0) idx--;
-      else {
-        // We arrived back at -end => completed one full cycle
-        cycle++;
-        if (cycle >= NUM_CYCLES) {
-          stopTest(F("test_complete"));
-          return;
-        }
-        dir = +1; // start next cycle
-      }
-    }
-
-    commandCurrentIdxMove();
-  } else {
-    waitingForSettle = false; // moving
+  if (testRunning) {
+    runTestLoop();
   }
 }
