@@ -1,10 +1,10 @@
 /*
- * Staircase Position Test
+ * Sine Wave Position Control Test
  * 
  * Purpose: Compare stepper motor position tracking vs AS5600 sensor readings
- * Test Profile: Step 50 steps (~11.25 deg), wait 150ms for settling, log, repeat
- * Range: +/- 250 steps (~56 deg)
- * Logging: 1 line per step after settling
+ * Test Profile: Sine wave (Amplitude: 20 deg, Frequency: 1 Hz)
+ * Control Loop: 200 Hz (5 ms)
+ * Logging Rate: 200 Hz (5 ms)
  * 
  * Hardware:
  * - Arduino Mega 2560
@@ -15,7 +15,7 @@
  * Command Sequence (prevents startup jumps):
  *   E - Enable motor (hold torque)
  *   Z - Zero sensor and stepper counters relative to hold position
- *   S - Start staircase test
+ *   S - Start sine wave test
  *   X - Stop test
  * 
  * Serial: 500000 baud
@@ -42,15 +42,14 @@
 #define DEG_PER_STEP    (360.0 / (STEPS_PER_REV * MICROSTEPS))  // 0.225 deg/step
 #define STEPS_PER_DEG   (1.0 / DEG_PER_STEP)                   // ~4.444 steps/deg
 
-// Serial Configuration
-#define SERIAL_BAUD     500000
+// Control Loop Configuration
+#define LOOP_INTERVAL_US    5000    // 5 ms = 200 Hz
+#define SERIAL_BAUD         500000
 
-// Staircase Test Parameters
-#define STEP_SIZE       50      // steps per move (~11.25 degrees)
-#define SETTLE_TIME_MS  150     // settling time after each move
-#define LOG_INTERVAL_MS 20      // log every 20ms during settling (for staircase visualization)
-#define MAX_STEPS       250     // +/- range limit
-#define TOTAL_POSITIONS 21      // -250 to +250 and back: 11 up + 10 down
+// Sine Wave Test Parameters
+#define SINE_AMPLITUDE_DEG  20.0    // +/- 20 degrees
+#define SINE_FREQ_HZ        5.0     // 1 Hz
+// Note: TWO_PI is already defined in Arduino.h
 
 // ========== Global Objects ==========
 FastAccelStepperEngine engine = FastAccelStepperEngine();
@@ -61,23 +60,15 @@ AS5600 motorSensor;
 enum SystemState {
   STATE_IDLE,
   STATE_ENABLED,
-  STATE_RUNNING,
-  STATE_MOVING,
-  STATE_SETTLING
+  STATE_RUNNING
 };
 
 SystemState currentState = STATE_IDLE;
 unsigned long testStartTime = 0;
-unsigned long settleStartTime = 0;
-unsigned long lastLogTime = 0;
+unsigned long lastLoopTime = 0;
 
 float sensorZeroAngle = 0.0;
 long stepperZeroPosition = 0;
-
-// Test progression
-int currentStepIndex = 0;
-long targetPositions[TOTAL_POSITIONS];
-int testDirection = 1;  // 1 = forward, -1 = backward
 
 // ========== I2C Multiplexer Helper ==========
 void tcaSelect(uint8_t channel) {
@@ -107,26 +98,6 @@ float readMotorAngle() {
   while (calibratedAngle < -180.0) calibratedAngle += 360.0;
   
   return calibratedAngle;
-}
-
-// ========== Test Initialization ==========
-void initializeTestPositions() {
-  // Generate positions: -250 to +250 (climbing), then +200 to -250 (descending)
-  // Climbing: -250, -200, -150, -100, -50, 0, 50, 100, 150, 200, 250 (11 positions)
-  // Descending: 200, 150, 100, 50, 0, -50, -100, -150, -200, -250 (10 positions)
-  
-  int pos = 0;
-  // Climbing phase (11 positions)
-  for (int i = -5; i <= 5; i++) {
-    targetPositions[pos++] = stepperZeroPosition + i * STEP_SIZE;
-  }
-  // Descending phase (10 positions, skip +250 since we just did it)
-  for (int i = 4; i >= -5; i--) {
-    targetPositions[pos++] = stepperZeroPosition + i * STEP_SIZE;
-  }
-  
-  currentStepIndex = 0;
-  testDirection = 1;
 }
 
 // ========== Command Handlers ==========
@@ -161,7 +132,7 @@ void handleZeroPosition() {
     Serial.print(currentRawAngle, 2);
     Serial.print(" deg, Stepper pos: ");
     Serial.println(stepperZeroPosition);
-    Serial.println("# Use 'S' to start staircase test");
+    Serial.println("# Use 'S' to start sine wave test");
     
     if (currentState == STATE_IDLE) {
       currentState = STATE_ENABLED;
@@ -173,16 +144,14 @@ void handleZeroPosition() {
 
 void handleStartTest() {
   if (currentState == STATE_ENABLED) {
-    initializeTestPositions();
     currentState = STATE_RUNNING;
     testStartTime = millis();
+    lastLoopTime = micros();
     
     Serial.println("# ========================================");
-    Serial.println("# Staircase Position Test Started");
-    Serial.println("# Step Size: 50 steps (~11.25 deg)");
-    Serial.println("# Range: +/- 250 steps (~56 deg)");
-    Serial.println("# Settling Time: 150 ms");
-    Serial.println("# Bidirectional: Climb up, then descend back");
+    Serial.println("# Sine Wave Position Control Test Started");
+    Serial.println("# Amplitude: 20 deg, Frequency: 1 Hz");
+    Serial.println("# Control Rate: 200 Hz (5 ms)");
     Serial.println("# ========================================");
     Serial.println("timestamp_ms,target_deg,sensor_deg,stepper_deg,error_deg");
   } else if (currentState == STATE_IDLE) {
@@ -193,7 +162,7 @@ void handleStartTest() {
 }
 
 void handleStopTest() {
-  if (currentState == STATE_RUNNING || currentState == STATE_MOVING || currentState == STATE_SETTLING) {
+  if (currentState == STATE_RUNNING) {
     currentState = STATE_ENABLED;
     
     // Stop stepper smoothly
@@ -205,10 +174,6 @@ void handleStopTest() {
     Serial.print("# Duration: ");
     Serial.print(duration / 1000.0, 2);
     Serial.println(" seconds");
-    Serial.print("# Completed steps: ");
-    Serial.print(currentStepIndex);
-    Serial.print(" / ");
-    Serial.println(TOTAL_POSITIONS);
     Serial.println("# ========================================");
   } else {
     Serial.println("# No test running");
@@ -217,7 +182,7 @@ void handleStopTest() {
 
 void handleDisableMotor() {
   if (currentState != STATE_IDLE) {
-    if (currentState == STATE_RUNNING || currentState == STATE_MOVING || currentState == STATE_SETTLING) {
+    if (currentState == STATE_RUNNING) {
       stepper->stopMove();
       currentState = STATE_ENABLED;
       Serial.println("# Test stopped");
@@ -268,9 +233,7 @@ void handleCommand() {
         Serial.print("# State: ");
         if (currentState == STATE_IDLE) Serial.println("IDLE");
         else if (currentState == STATE_ENABLED) Serial.println("ENABLED");
-        else if (currentState == STATE_RUNNING) Serial.println("RUNNING");
-        else if (currentState == STATE_MOVING) Serial.println("MOVING");
-        else Serial.println("SETTLING");
+        else Serial.println("RUNNING");
         break;
         
       default:
@@ -283,108 +246,55 @@ void handleCommand() {
   }
 }
 
-// ========== Test Logic ==========
-void runTestLogic() {
-  if (currentState == STATE_RUNNING) {
-    // Check if we've completed all positions
-    if (currentStepIndex >= TOTAL_POSITIONS) {
-      Serial.println("# ========================================");
-      Serial.println("# Test COMPLETED - All positions visited");
-      unsigned long duration = millis() - testStartTime;
-      Serial.print("# Duration: ");
-      Serial.print(duration / 1000.0, 2);
-      Serial.println(" seconds");
-      Serial.println("# ========================================");
-      currentState = STATE_ENABLED;
-      return;
-    }
-    
-    // Move to next target position
-    long targetSteps = targetPositions[currentStepIndex];
-    stepper->moveTo(targetSteps);
-    
-    // Transition to moving state - wait for motion to complete
-    currentState = STATE_MOVING;
-    
-  } else if (currentState == STATE_MOVING) {
-    // Wait for stepper to reach target position
-    if (stepper->isRunning()) {
-      return;  // Still moving, keep waiting
-    }
-    
-    // Motion complete - start settling timer and log immediately
-    currentState = STATE_SETTLING;
-    settleStartTime = millis();
-    lastLogTime = millis();
-    
-    // Log first point at start of settling
-    long currentSteps = stepper->getCurrentPosition();
-    float stepperAngle = (currentSteps - stepperZeroPosition) * DEG_PER_STEP;
-    float targetAngle = (targetPositions[currentStepIndex] - stepperZeroPosition) * DEG_PER_STEP;
-    float sensorAngle = readMotorAngle();
-    float error = sensorAngle - targetAngle;
-    
-    Serial.print(millis());
-    Serial.print(",");
-    Serial.print(targetAngle, 4);
-    Serial.print(",");
-    if (isnan(sensorAngle)) {
-      Serial.print("NaN");
-    } else {
-      Serial.print(sensorAngle, 4);
-    }
-    Serial.print(",");
-    Serial.print(stepperAngle, 4);
-    Serial.print(",");
-    if (isnan(sensorAngle)) {
-      Serial.print("NaN");
-    } else {
-      Serial.print(error, 4);
-    }
-    Serial.println();
-    
-  } else if (currentState == STATE_SETTLING) {
-    unsigned long elapsed = millis() - settleStartTime;
-    
-    // Log periodically during settling (every LOG_INTERVAL_MS)
-    if (millis() - lastLogTime >= LOG_INTERVAL_MS && elapsed < SETTLE_TIME_MS) {
-      lastLogTime = millis();
-      
-      long currentSteps = stepper->getCurrentPosition();
-      float stepperAngle = (currentSteps - stepperZeroPosition) * DEG_PER_STEP;
-      float targetAngle = (targetPositions[currentStepIndex] - stepperZeroPosition) * DEG_PER_STEP;
-      float sensorAngle = readMotorAngle();
-      float error = sensorAngle - targetAngle;
-      
-      Serial.print(millis());
-      Serial.print(",");
-      Serial.print(targetAngle, 4);
-      Serial.print(",");
-      if (isnan(sensorAngle)) {
-        Serial.print("NaN");
-      } else {
-        Serial.print(sensorAngle, 4);
-      }
-      Serial.print(",");
-      Serial.print(stepperAngle, 4);
-      Serial.print(",");
-      if (isnan(sensorAngle)) {
-        Serial.print("NaN");
-      } else {
-        Serial.print(error, 4);
-      }
-      Serial.println();
-    }
-    
-    // Check if settling time is complete
-    if (elapsed < SETTLE_TIME_MS) {
-      return;
-    }
-    
-    // Settling complete - move to next position
-    currentStepIndex++;
-    currentState = STATE_RUNNING;
+// ========== Control Loop ==========
+void runControlLoop() {
+  if (currentState != STATE_RUNNING) return;
+  
+  unsigned long now = micros();
+  if (now - lastLoopTime < LOOP_INTERVAL_US) return;
+  lastLoopTime = now;
+  
+  // Calculate elapsed time in seconds
+  float elapsedTime = (millis() - testStartTime) / 1000.0;
+  
+  // Generate sine wave target position
+  float targetAngle = SINE_AMPLITUDE_DEG * sin(TWO_PI * SINE_FREQ_HZ * elapsedTime);
+  
+  // Convert target angle to stepper steps
+  long targetSteps = (long)(targetAngle * STEPS_PER_DEG) + stepperZeroPosition;
+  
+  // Move stepper to target position
+  stepper->moveTo(targetSteps);
+  
+  // Read current sensor angle
+  float sensorAngle = readMotorAngle();
+  
+  // Calculate stepper angle from steps
+  long currentSteps = stepper->getCurrentPosition();
+  float stepperAngle = (currentSteps - stepperZeroPosition) * DEG_PER_STEP;
+  
+  // Calculate error (sensor reading vs target)
+  float error = sensorAngle - targetAngle;
+  
+  // Log data: timestamp_ms,target_deg,sensor_deg,stepper_deg,error_deg
+  Serial.print(millis());
+  Serial.print(",");
+  Serial.print(targetAngle, 4);
+  Serial.print(",");
+  if (isnan(sensorAngle)) {
+    Serial.print("NaN");
+  } else {
+    Serial.print(sensorAngle, 4);
   }
+  Serial.print(",");
+  Serial.print(stepperAngle, 4);
+  Serial.print(",");
+  if (isnan(sensorAngle)) {
+    Serial.print("NaN");
+  } else {
+    Serial.print(error, 4);
+  }
+  Serial.println();
 }
 
 // ========== Setup ==========
@@ -393,7 +303,7 @@ void setup() {
   delay(1000);
   
   Serial.println("# ========================================");
-  Serial.println("# Staircase Position Test");
+  Serial.println("# Sine Wave Position Control Test");
   Serial.println("# Stepper vs AS5600 Tracking Comparison");
   Serial.println("# ========================================");
   
@@ -427,17 +337,12 @@ void setup() {
     stepper->setAutoEnable(false);  // Manual control of enable pin
     
     // Set speed and acceleration limits
-    stepper->setSpeedInHz(2000);      // Max 2000 steps/sec (smoother for staircase)
-    stepper->setAcceleration(5000);   // steps/sec^2
+    stepper->setSpeedInHz(4000);      // Max 4000 steps/sec
+    stepper->setAcceleration(10000);  // steps/sec^2
     
     Serial.println("# Stepper motor initialized (FastAccelStepper)");
     Serial.print("# Steps per degree: ");
     Serial.println(STEPS_PER_DEG, 4);
-    Serial.print("# Step size: ");
-    Serial.print(STEP_SIZE);
-    Serial.print(" steps = ");
-    Serial.print(STEP_SIZE * DEG_PER_STEP, 2);
-    Serial.println(" deg");
   } else {
     Serial.println("# ERROR: Failed to initialize stepper");
   }
@@ -446,7 +351,7 @@ void setup() {
   Serial.println("# Ready for commands:");
   Serial.println("#   E - Enable motor (hold torque)");
   Serial.println("#   Z - Zero position");
-  Serial.println("#   S - Start staircase test");
+  Serial.println("#   S - Start sine wave test");
   Serial.println("#   X - Stop test");
   Serial.println("#   D - Disable motor");
   Serial.println("#   C - Connection check");
@@ -459,5 +364,5 @@ void loop() {
   
   // FastAccelStepper uses interrupts - no run() call needed
   
-  runTestLogic();
+  runControlLoop();
 }
