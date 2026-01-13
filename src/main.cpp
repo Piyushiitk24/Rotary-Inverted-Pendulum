@@ -48,7 +48,7 @@
 
 // Sine Wave Test Parameters
 #define SINE_AMPLITUDE_DEG  20.0    // +/- 20 degrees
-#define SINE_FREQ_HZ        5.0     // 1 Hz
+#define SINE_FREQ_HZ        10.0     // 1 Hz
 // Note: TWO_PI is already defined in Arduino.h
 
 // ========== Global Objects ==========
