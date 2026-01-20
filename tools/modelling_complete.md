@@ -1,6 +1,5 @@
 ---
 title: "Mathematical Modelling of a Rotary Inverted Pendulum (Furuta)"
-author: "Piyush"
 date: "January 21, 2026"
 geometry: margin=1in
 fontsize: 11pt
