@@ -29,6 +29,8 @@ Let
 $\hat J_1$: yaw inertia about motor axis (arm-side).
 
 $\hat J_2$: pendulum hinge inertia.
+
+$J_p$: pendulum inertia about its center of mass, about an axis perpendicular to the swing plane.
 $$\hat J_0 \triangleq \hat J_1 + m_p L_r^2$$
 
 Rigid links; frictionless joints.
@@ -237,6 +239,8 @@ Potential energy:
 
 $$V=m_p g z = m_p g l_p\cos\alpha = G\cos\alpha$$
 
+The zero of potential energy is chosen at the pendulum hinge; any constant offset does not affect the equations of motion.
+
 Lagrangian:
 
 $$\mathcal L=T-V$$
@@ -300,6 +304,8 @@ $$K\cos\alpha\,\ddot\theta + \hat J_2\ddot\alpha - \frac{1}{2}\hat J_2\sin(2\alp
 $$ (\hat J_0+\hat J_2\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + \hat J_2\sin(2\alpha)\dot\theta\dot\alpha - K\sin\alpha\,\dot\alpha^2 = \tau$$
 
 $$K\cos\alpha\,\ddot\theta + \hat J_2\ddot\alpha - \frac{1}{2}\hat J_2\sin(2\alpha)\dot\theta^2 - G\sin\alpha = 0$$
+
+The derived equations are structurally consistent with classical Furuta pendulum models, with the distinction that actuator dynamics are treated at the acceleration level rather than torque level.
 
 ---
 
@@ -394,6 +400,8 @@ With $\omega_c=15$, $\zeta=0.8$, $A=100.8$, $B=1.952$:
 
 $$k_p=-166.9,\qquad k_d=-12.3$$
 
+Negative gains arise from the sign convention $\alpha=0$ upright; the controller provides restoring acceleration opposing the unstable gravitational term.
+
 Stepper conversion ($N=1600$ microsteps/rev):
 
 $$\mathrm{steps/rad}=\frac{N}{2\pi}=254.65,\qquad \mathrm{steps/deg}=\frac{N}{360}=4.444$$
@@ -401,3 +409,98 @@ $$\mathrm{steps/rad}=\frac{N}{2\pi}=254.65,\qquad \mathrm{steps/deg}=\frac{N}{36
 Degree variables ($\alpha_{\deg}=\alpha\,180/\pi$):
 
 $$\ddot\theta_{\mathrm{steps}}=-(742\,\alpha_{\deg}+54.6\,\dot\alpha_{\deg})$$
+
+---
+
+## 10. State-space representation and LQR design
+
+### 10.1 State definition
+
+Define the state vector as
+
+$$\mathbf{x}=\begin{bmatrix}x_1\\x_2\\x_3\\x_4\end{bmatrix}=\begin{bmatrix}\theta\\\alpha\\\dot\theta\\\dot\alpha\end{bmatrix}$$
+
+The control input is chosen as the commanded arm angular acceleration
+
+$$u\equiv \ddot\theta$$
+
+---
+
+### 10.2 Linearized state-space model
+
+The state equations are
+
+$$\dot x_1=x_3$$
+$$\dot x_2=x_4$$
+$$\dot x_3=u$$
+$$\dot x_4=A\,x_2-B\,u$$
+
+where
+
+$$A\equiv \frac{G}{J_1},\qquad B\equiv \frac{K}{J_1}$$
+
+Collecting terms, the state-space model is
+
+$$\dot{\mathbf{x}}=\mathbf{A}\mathbf{x}+\mathbf{B}u$$
+
+with
+
+$$\mathbf{A}=\begin{bmatrix}
+0 & 0 & 1 & 0\\
+0 & 0 & 0 & 1\\
+0 & 0 & 0 & 0\\
+0 & A & 0 & 0
+\end{bmatrix},\qquad
+\mathbf{B}=\begin{bmatrix}0\\0\\1\\-B\end{bmatrix}$$
+
+Numerically,
+
+$$\mathbf{A}=\begin{bmatrix}
+0 & 0 & 1 & 0\\
+0 & 0 & 0 & 1\\
+0 & 0 & 0 & 0\\
+0 & 100.8 & 0 & 0
+\end{bmatrix},\qquad
+\mathbf{B}=\begin{bmatrix}0\\0\\1\\-1.952\end{bmatrix}$$
+
+---
+
+### 10.3 LQR formulation
+
+A continuous-time linear quadratic regulator (LQR) is designed with the control law
+
+$$u=-\mathbf{K}\mathbf{x}$$
+
+minimizing the cost function
+
+$$J=\int_0^\infty\left(\mathbf{x}^\mathsf{T}\mathbf{Q}\mathbf{x}+u^\mathsf{T}\mathbf{R}u\right)\,dt$$
+
+---
+
+### 10.4 LQR gain
+
+Solving the continuous-time algebraic Riccati equation yields the state-feedback gain
+
+$$\mathbf{K}=\begin{bmatrix}-0.70710678 & -117.18259227 & -1.3583044 & -11.86304115\end{bmatrix}$$
+
+The resulting control law is
+
+$$u=-(-0.7071\,\theta-117.183\,\alpha-1.3583\,\dot\theta-11.8630\,\dot\alpha)$$
+
+Stepper units using degree variables. Let
+
+$$\mathbf{x}_{\deg}=\begin{bmatrix}\theta_{\deg}\\\alpha_{\deg}\\\dot\theta_{\deg}\\\dot\alpha_{\deg}\end{bmatrix},\qquad \mathbf{x}=\frac{\pi}{180}\mathbf{x}_{\deg}$$
+
+Let $u_{\deg}\equiv \ddot\theta_{\deg}$ denote acceleration in $\mathrm{deg/s^2}$, so that $u=(\pi/180)u_{\deg}$. Then
+
+$$\ddot\theta_{\mathrm{steps}}=\frac{N}{2\pi}u=\frac{N}{360}u_{\deg}$$
+
+Then
+
+$$\ddot\theta_{\mathrm{steps}}=-\mathbf{K}_{\mathrm{steps}}\mathbf{x}_{\deg}$$
+
+$$\mathbf{K}_{\mathrm{steps}}=\left(\frac{N}{360}\right)\mathbf{K}=4.444\,\mathbf{K}=\begin{bmatrix}-3.1424 & -520.76 & -6.0363 & -52.72\end{bmatrix}$$
+
+$$\ddot\theta_{\mathrm{steps}}=-(-3.1424\,\theta_{\deg}-520.76\,\alpha_{\deg}-6.0363\,\dot\theta_{\deg}-52.72\,\dot\alpha_{\deg})$$
+
+---
