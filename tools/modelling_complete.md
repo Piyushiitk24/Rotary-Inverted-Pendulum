@@ -1,523 +1,403 @@
-# Mathematical Modelling of the Rotary Inverted Pendulum (Furuta)
-*Derivation from First Principles (Lagrangian Mechanics) — **complete** nonlinear model (arm + pendulum), using your updated L-rod + sphere geometry.*
+# Mathematical modelling of a rotary inverted pendulum (Furuta)
+
+## 1. Definition
+
+Generalized coordinates:
+
+$\theta(t)$: arm yaw angle.
+
+$\alpha(t)$: pendulum angle, with $\alpha=0$ upright.
+
+Constants:
+
+$L_r$: arm length.
+
+$m_p$: swinging mass.
+
+$l_p$: distance from hinge to pendulum COM.
+
+$g$: gravity.
+
+$\tau$: actuation torque about $\theta$.
+
+Define
+
+$$K \equiv m_p L_r l_p,\qquad G \equiv m_p g l_p$$
+
+Let
+
+$\hat J_1$: yaw inertia about motor axis (arm-side).
+
+$\hat J_2$: pendulum hinge inertia.
+$$\hat J_0 \triangleq \hat J_1 + m_p L_r^2$$
+
+Rigid links; frictionless joints.
 
 ---
 
-## 0. What this document gives you (and what it assumes)
+## 2. Parameter evaluation
 
-This file derives the **full coupled equations of motion** for a Furuta (rotary inverted) pendulum:
+Given:
 
-- **Arm equation** (actuated): relates motor torque $\tau$ to $\ddot{\theta}$
-- **Pendulum equation** (unactuated): gives $\ddot{\alpha}$ and how it couples to $\theta$
+$$L_r=0.19\ \mathrm{m},\quad m_r=0.051\ \mathrm{kg}$$
+$$L_h=0.17\ \mathrm{m},\quad L_v=0.12\ \mathrm{m}$$
+$$m_{\mathrm{rod,total}}=10.3\ \mathrm{g}=0.0103\ \mathrm{kg}$$
+$$m_s=7.7\ \mathrm{g}=0.0077\ \mathrm{kg},\quad x_s=0.103\ \mathrm{m}$$
 
-We derive from first principles using **Lagrange's equations**. The final result is a pair of nonlinear ODEs in $\theta(t)$ and $\alpha(t)$, then we linearize about the upright equilibrium $\alpha\approx 0$.
+Linear density:
 
-### Explicit modelling assumptions
-1. The swinging part is a **rigid body** consisting of:
-   - a **vertical rod segment** of length $L_v=120$ mm
-   - plus a **sphere** mounted on the rod (does not increase length)
-2. The **170 mm horizontal rod segment** acts as the *hinge axle* running in 688RS bearings:
-   - it **does not swing** with $\alpha$ → excluded from pendulum swing inertia $\hat{J}_2$
-   - it **does yaw** with the arm about the motor axis → included in arm-side yaw inertia $\hat{J}_1$
-3. Angle convention:
-   - $\theta(t)$: arm yaw in the horizontal plane about the vertical $Z$-axis
-   - $\alpha(t)$: pendulum angle in a vertical plane with **$\alpha=0$ upright** (unstable)
-4. Sphere coverage: sphere covers **86–120 mm** of the vertical rod, so sphere COM is at:
-   $$x_s=\frac{86+120}{2}\text{ mm}=103\text{ mm}=0.103\,\text{m}$$
-5. Main derivation ignores friction; an optional friction term is shown later.
+$$\lambda = \frac{10.3\ \mathrm{g}}{290\ \mathrm{mm}}=0.03552\ \mathrm{g/mm}$$
 
----
+Mass split:
 
-## 1. System Definition & Coordinates
+$$m_h = 170\lambda = 6.04\ \mathrm{g}=0.006038\ \mathrm{kg}$$
+$$m_{\mathrm{rod}} = 120\lambda = 4.26\ \mathrm{g}=0.004262\ \mathrm{kg}$$
 
-### 1.1 Generalized coordinates
-1. **$\theta(t)$** — arm angle (yaw). $\theta=0$ along inertial $X$-axis.
-2. **$\alpha(t)$** — pendulum angle. $\alpha=0$ is upright (unstable).
+Swinging mass:
 
-### 1.2 Frames
-- **Inertial frame $\mathcal{F}_O$** fixed at motor shaft, axes $(X,Y,Z)$, $Z$ upward.
-- **Arm frame $\mathcal{F}_A$** rotates about $Z$ by angle $\theta$.
-- Pendulum swings in a vertical plane attached to the arm tip.
+$$m_p = m_{\mathrm{rod}}+m_s = 0.011962069\ \mathrm{kg}$$
 
----
+COM distance:
 
-## 2. Parameter Calculation (your specific hardware)
+$$x_{\mathrm{rod}}=\frac{L_v}{2}=0.06\ \mathrm{m}$$
+$$l_p = \frac{m_{\mathrm{rod}}x_{\mathrm{rod}}+m_s x_s}{m_p}$$
+$$l_p = \frac{(0.004262)(0.06) + (0.0077)(0.103)}{0.011962069}$$
+$$l_p = \frac{2.5572\times 10^{-4} + 7.931\times 10^{-4}}{0.011962069} = 0.087679158\ \mathrm{m}$$
 
-### 2.1 Given geometry and masses
-**Arm (rotary link):**
-- Arm length: $L_r = 0.19$ m
-- Arm mass: $m_r = 0.051$ kg
+Pendulum hinge inertia (rod about end + sphere point mass):
 
-**L-shaped rod (one rigid piece):**
-- Total mass: $10.3$ g
-- Total length: $170$ mm + $120$ mm = $290$ mm
+$$I_{\mathrm{rod,piv}} = \frac{1}{3}m_{\mathrm{rod}}L_v^2 = \frac{1}{3}(0.004262)(0.12^2)=2.045793103\times 10^{-5}$$
+$$I_{\mathrm{s,piv}} = m_s x_s^2 = (0.0077)(0.103^2)=8.16893\times 10^{-5}$$
+$$\hat J_2 = I_{\mathrm{rod,piv}}+I_{\mathrm{s,piv}} = 1.021472310\times 10^{-4}\ \mathrm{kg\,m^2}$$
 
-**Sphere:**
-- Mass: $m_s = 7.7$ g = $0.0077$ kg
-- Sphere COM distance along rod: $x_s=0.103$ m
+Gravity constant:
+
+$$G=m_p g l_p=(0.011962069)(9.81)(0.087679158)=1.028896479\times 10^{-2}\ \mathrm{N\,m}$$
+
+Coupling constant:
+
+$$K=m_p L_r l_p=(0.011962069)(0.19)(0.087679158)=1.992765862\times 10^{-4}\ \mathrm{kg\,m^2}$$
+
+Arm-side yaw inertia:
+
+$$\hat J_0=\hat J_1+m_pL_r^2$$
 
 ---
 
-### 2.2 Split the L-rod into horizontal and vertical segments (mass)
-Rod linear density:
-$$\lambda=\frac{10.3\,\text{g}}{290\,\text{mm}}=0.03552\,\text{g/mm}$$
+## 3. Kinematics
 
-**Horizontal segment (hinge axle):** $L_h=170$ mm
-$$m_h = L_h\lambda = 170\cdot 0.03552=6.04\,\text{g}=0.006038\,\text{kg}$$
+Let $\{\mathbf i,\mathbf j,\mathbf k\}$ be an inertial orthonormal basis. Define the planar arm basis
 
-**Vertical segment (swinging):** $L_v=120$ mm
-$$m_{rod} = L_v\lambda = 120\cdot 0.03552=4.26\,\text{g}=0.004262\,\text{kg}$$
+$$\mathbf e_r \equiv \cos\theta\,\mathbf i + \sin\theta\,\mathbf j,\qquad \mathbf e_t \equiv -\sin\theta\,\mathbf i + \cos\theta\,\mathbf j$$
 
----
+Arm hinge position:
 
-### 2.3 Swinging pendulum mass $m_p$
-Swinging assembly = vertical rod + sphere:
-$$m_p=m_{rod}+m_s=0.004262+0.0077=0.011962069\,\text{kg}$$
+$$\mathbf r_h = L_r\mathbf e_r$$
 
-**Result:**
-```
-m_p = 0.011962069 kg
-```
+Pendulum COM relative to hinge:
 
----
+$$\mathbf r_{p/h}=l_p\bigl(\sin\alpha\,\mathbf e_t + \cos\alpha\,\mathbf k\bigr)$$
 
-### 2.4 Pendulum COM distance $l_p$ from hinge pivot
-Distances measured from the hinge axis along the vertical rod:
+Pendulum COM position:
 
-- Rod COM: $x_{rod}=L_v/2=0.12/2=0.06$ m
-- Sphere COM: $x_s=0.103$ m
+$$\mathbf r_p = \mathbf r_h + \mathbf r_{p/h}$$
 
-Weighted average:
-$$l_p=\frac{m_{rod}x_{rod}+m_s x_s}{m_p}$$
+Components $\mathbf r_p = x\mathbf i+y\mathbf j+z\mathbf k$:
 
-Substitute:
-$$l_p=\frac{(0.004262)(0.06)+(0.0077)(0.103)}{0.011962069}$$
+$$x = L_r\cos\theta - l_p\sin\alpha\,\sin\theta$$
+$$y = L_r\sin\theta + l_p\sin\alpha\,\cos\theta$$
+$$z = l_p\cos\alpha$$
 
-Compute numerator:
-$$(0.004262)(0.06)=0.06\,m_{rod},\qquad (0.0077)(0.103)=7.931\times 10^{-4}$$
+Derivatives:
 
-**Result:**
-```
-l_p = 0.087679158 m ≈ 0.0877 m
-```
+$$\frac{d}{dt}(\cos\theta)=-\sin\theta\,\dot\theta,\quad \frac{d}{dt}(\sin\theta)=\cos\theta\,\dot\theta$$
+$$\frac{d}{dt}(\sin\alpha)=\cos\alpha\,\dot\alpha,\quad \frac{d}{dt}(\cos\alpha)=-\sin\alpha\,\dot\alpha$$
 
----
+### 3.1 Velocity components
 
-### 2.5 Pendulum inertia about the hinge axis $\hat{J}_2$
-This is the inertia that appears in the standard Furuta "compact" equations.
+For $x$:
 
-#### 2.5.1 Vertical rod inertia about one end (hinge)
-For a uniform rod of length $L_v$ rotating about one end:
-$$I_{rod,piv}=\frac{1}{3}m_{rod}L_v^2$$
+$$\dot x = \frac{d}{dt}(L_r\cos\theta) - l_p\frac{d}{dt}(\sin\alpha\,\sin\theta)$$
+$$\frac{d}{dt}(L_r\cos\theta)=-L_r\sin\theta\,\dot\theta$$
+$$\frac{d}{dt}(\sin\alpha\,\sin\theta)=(\cos\alpha\,\dot\alpha)\sin\theta + \sin\alpha(\cos\theta\,\dot\theta)$$
+$$\dot x = -L_r\sin\theta\,\dot\theta - l_p\cos\alpha\sin\theta\,\dot\alpha - l_p\sin\alpha\cos\theta\,\dot\theta$$
 
-Substitute:
-```
-I_rod,piv = (1/3)(0.004262)(0.12²) = 2.045793103e-05 kg·m²
-```
+For $y$:
 
-#### 2.5.2 Sphere inertia about hinge (point-mass approximation)
-Sphere modeled as a point mass at $x_s$:
-$$I_{s,piv}=m_s x_s^2=(0.0077)(0.103^2)$$
-```
-I_s,piv = 8.168930000e-05 kg·m²
-```
+$$\dot y = \frac{d}{dt}(L_r\sin\theta) + l_p\frac{d}{dt}(\sin\alpha\,\cos\theta)$$
+$$\frac{d}{dt}(L_r\sin\theta)=L_r\cos\theta\,\dot\theta$$
+$$\frac{d}{dt}(\sin\alpha\,\cos\theta)=(\cos\alpha\,\dot\alpha)\cos\theta + \sin\alpha(-\sin\theta\,\dot\theta)$$
+$$\dot y = L_r\cos\theta\,\dot\theta + l_p\cos\alpha\cos\theta\,\dot\alpha - l_p\sin\alpha\sin\theta\,\dot\theta$$
 
-#### 2.5.3 (Optional) Sphere's own inertia about its COM
-If you want a more faithful rigid-body sphere (radius $r=0.017$ m):
-$$I_{s,cm}=\frac{2}{5}m_s r^2=\frac{2}{5}(0.0077)(0.017^2)$$
-```
-I_s,cm = 8.901200000e-07 kg·m²
-```
-This is <1% of the pivot inertia and is usually negligible for control.
+For $z$:
 
-#### 2.5.4 Total pendulum hinge inertia
-Point-mass sphere:
-```
-Ĵ_2 = I_rod,piv + I_s,piv = 1.021472310e-04 kg·m²
-```
+$$\dot z = \frac{d}{dt}(l_p\cos\alpha)=-l_p\sin\alpha\,\dot\alpha$$
 
-With sphere self-inertia:
-```
-Ĵ_2 = I_rod,piv + I_s,piv + I_s,cm = 1.030373510e-04 kg·m²
-```
+### 3.2 Speed squared
 
----
+Compute $v^2=\dot x^2+\dot y^2+\dot z^2$.
 
-### 2.6 Arm-side yaw inertia (for the $\theta$ equation)
-The arm equation needs the yaw inertia about the motor axis. We define:
-$$\hat{J}_1 = J_{arm} + J_{axle} + J_{motor}$$
+Define
 
-where $J_{motor}$ is optional (stepper rotor + coupler etc). If unknown, set $J_{motor}=0$ and treat it as a tuning parameter later.
+$$A=L_r\sin\theta + l_p\sin\alpha\cos\theta,\quad B=l_p\cos\alpha\sin\theta$$
+$$C=L_r\cos\theta - l_p\sin\alpha\sin\theta,\quad D=l_p\cos\alpha\cos\theta$$
 
-#### 2.6.1 Arm inertia about motor axis
-Treat the arm as a slender rod of length $L_r$ about one end:
-$$J_{arm}=\frac{1}{3}m_r L_r^2 = \frac{1}{3}(0.051)(0.19^2)$$
-```
-J_arm = 6.137000000e-04 kg·m²
-```
+Then
 
-#### 2.6.2 Horizontal axle inertia about motor axis
-Because the axle rotates with the arm, it contributes yaw inertia. The exact value depends on its radial position.
+$$\dot x = -A\dot\theta - B\dot\alpha,\qquad \dot y = C\dot\theta + D\dot\alpha,\qquad \dot z = -l_p\sin\alpha\,\dot\alpha$$
 
-General formula for a uniform rod of mass $m_h$ spanning radii $r\in[r_a,r_b]$:
-$$J_{axle}=\int r^2\,dm=\int_{r_a}^{r_b} r^2\left(\frac{m_h}{L_h}\right)dr
-=\frac{m_h}{L_h}\cdot\frac{r_b^3-r_a^3}{3}$$
+Square:
 
-**Working assumption** (common if the bend is at the arm tip and axle extends inward):
-$$r_b=L_r=0.19,\qquad r_a=L_r-L_h=0.02$$
+$$\dot x^2 = A^2\dot\theta^2 + B^2\dot\alpha^2 + 2AB\dot\theta\dot\alpha$$
+$$\dot y^2 = C^2\dot\theta^2 + D^2\dot\alpha^2 + 2CD\dot\theta\dot\alpha$$
+$$\dot z^2 = l_p^2\sin^2\alpha\,\dot\alpha^2$$
 
-Then:
-```
-J_axle = 8.110954023e-05 kg·m²
-```
+Collect $\dot\theta^2$:
 
-So (with $J_{motor}=0$):
-```
-Ĵ_1 = J_arm + J_axle = 6.948095402e-04 kg·m²
-```
+$$A^2+C^2 = (L_r\sin\theta + l_p\sin\alpha\cos\theta)^2 + (L_r\cos\theta - l_p\sin\alpha\sin\theta)^2$$
+
+Expand:
+
+$$\begin{aligned}
+A^2 &= L_r^2\sin^2\theta + l_p^2\sin^2\alpha\cos^2\theta + 2L_r l_p\sin\alpha\sin\theta\cos\theta,\\
+C^2 &= L_r^2\cos^2\theta + l_p^2\sin^2\alpha\sin^2\theta - 2L_r l_p\sin\alpha\sin\theta\cos\theta.
+\end{aligned}$$
+
+Add:
+
+$$A^2+C^2 = L_r^2(\sin^2\theta+\cos^2\theta) + l_p^2\sin^2\alpha(\sin^2\theta+\cos^2\theta)=L_r^2+l_p^2\sin^2\alpha$$
+
+Collect $\dot\alpha^2$:
+
+$$B^2+D^2+ l_p^2\sin^2\alpha = l_p^2\cos^2\alpha(\sin^2\theta+\cos^2\theta)+l_p^2\sin^2\alpha=l_p^2$$
+
+Collect $\dot\theta\dot\alpha$:
+
+$$AB+CD = l_p\cos\alpha\Big[(L_r\sin\theta + l_p\sin\alpha\cos\theta)\sin\theta + (L_r\cos\theta - l_p\sin\alpha\sin\theta)\cos\theta\Big]$$
+
+Expand bracket:
+
+$$\begin{aligned}
+&(L_r\sin\theta + l_p\sin\alpha\cos\theta)\sin\theta + (L_r\cos\theta - l_p\sin\alpha\sin\theta)\cos\theta\\
+&=L_r(\sin^2\theta+\cos^2\theta)+l_p\sin\alpha(\cos\theta\sin\theta-\sin\theta\cos\theta)=L_r.
+\end{aligned}$$
+
+Thus
+
+$$AB+CD = L_r l_p\cos\alpha$$
+
+Therefore
+
+$$v^2=(L_r^2+l_p^2\sin^2\alpha)\dot\theta^2 + l_p^2\dot\alpha^2 + 2L_r l_p\cos\alpha\,\dot\theta\dot\alpha$$
 
 ---
 
-## 3. Kinematics (position & velocity) — detailed steps
+## 4. Energies
 
-### 3.1 Arm tip position
-The arm tip traces a circle in the $XY$-plane:
-$$\mathbf{r}_{tip}=
-\begin{bmatrix}
-L_r\cos\theta\\
-L_r\sin\theta\\
-0
-\end{bmatrix}$$
+Translational kinetic energy:
 
-### 3.2 Pendulum COM position
-The pendulum COM is at distance $l_p$ from the hinge. When upright ($\alpha=0$), the COM is at height $z=l_p$. When tilted, horizontal offset magnitude is $l_p\sin\alpha$.
+$$T_{\mathrm{trans}}=\frac{1}{2}m_p v^2$$
 
-A standard Furuta parametrization consistent with $\alpha=0$ upright is:
-$$\mathbf{r}_p=
-\begin{bmatrix}
-x\\y\\z
-\end{bmatrix}
-=
-\begin{bmatrix}
-L_r\cos\theta - l_p\sin\alpha\,\sin\theta\\
-L_r\sin\theta + l_p\sin\alpha\,\cos\theta\\
-l_p\cos\alpha
-\end{bmatrix}$$
+Rotational kinetic energy of the pendulum about its COM (perpendicular axis):
 
-### 3.3 Differentiate to obtain velocity components
-Start with:
-$$x = L_r\cos\theta - l_p\sin\alpha\sin\theta$$
+$$T_{\mathrm{rot}}=\frac{1}{2}J_p(\dot\alpha^2+\sin^2\alpha\,\dot\theta^2)$$
 
-Differentiate (chain + product rule):
-- $d(\cos\theta)/dt = -\sin\theta\,\dot\theta$
-- $d(\sin\alpha)/dt = \cos\alpha\,\dot\alpha$
-- $d(\sin\theta)/dt = \cos\theta\,\dot\theta$
+Parallel axis:
 
-So:
-$$\dot x = -L_r\sin\theta\,\dot\theta
-- l_p\left[(\cos\alpha\,\dot\alpha)\sin\theta + \sin\alpha(\cos\theta\,\dot\theta)\right]$$
+$$\hat J_2 = J_p + m_p l_p^2$$
 
-Rewriting:
-$$\dot x = -L_r\sin\theta\,\dot\theta
-- l_p\cos\alpha\sin\theta\,\dot\alpha
-- l_p\sin\alpha\cos\theta\,\dot\theta$$
+Arm yaw kinetic energy:
 
-Similarly:
-$$y = L_r\sin\theta + l_p\sin\alpha\cos\theta$$
+$$T_{\mathrm{arm}}=\frac{1}{2}\hat J_1\dot\theta^2$$
 
-Differentiate:
-- $d(\sin\theta)/dt = \cos\theta\,\dot\theta$
-- $d(\cos\theta)/dt = -\sin\theta\,\dot\theta$
+Total kinetic energy:
 
-So:
-$$\dot y = L_r\cos\theta\,\dot\theta
-+ l_p\left[(\cos\alpha\,\dot\alpha)\cos\theta + \sin\alpha(-\sin\theta\,\dot\theta)\right]$$
+$$T=T_{\mathrm{arm}}+T_{\mathrm{trans}}+T_{\mathrm{rot}}$$
 
-$$\dot y = L_r\cos\theta\,\dot\theta
-+ l_p\cos\alpha\cos\theta\,\dot\alpha
-- l_p\sin\alpha\sin\theta\,\dot\theta$$
+Collect terms.
 
-And:
-$$z=l_p\cos\alpha \quad\Rightarrow\quad \dot z = -l_p\sin\alpha\,\dot\alpha$$
+Coefficient of $\dot\theta^2$:
 
-### 3.4 Speed squared $v^2$
-Compute:
-$$v^2=\dot x^2+\dot y^2+\dot z^2$$
+$$\frac{1}{2}\Big[\hat J_1+m_pL_r^2+(m_pl_p^2+J_p)\sin^2\alpha\Big]\dot\theta^2
+=\frac{1}{2}(\hat J_0+\hat J_2\sin^2\alpha)\dot\theta^2$$
 
-If you expand $\dot x^2$ and $\dot y^2$ fully, then group terms by $\dot\theta^2$, $\dot\alpha^2$, and $\dot\theta\dot\alpha$, and use $\sin^2\theta+\cos^2\theta=1$, all mixed trig cross-terms cancel. The simplified result is:
+Coefficient of $\dot\alpha^2$:
 
-$$v^2=
-\left(L_r^2+l_p^2\sin^2\alpha\right)\dot\theta^2
-+ l_p^2\dot\alpha^2
-+2L_r l_p\cos\alpha\,\dot\theta\dot\alpha$$
+$$\frac{1}{2}(m_pl_p^2+J_p)\dot\alpha^2=\frac{1}{2}\hat J_2\dot\alpha^2$$
+
+Cross term:
+
+$$m_pL_r l_p\cos\alpha\,\dot\theta\dot\alpha = K\cos\alpha\,\dot\theta\dot\alpha$$
+
+Thus
+
+$$T=\frac{1}{2}(\hat J_0+\hat J_2\sin^2\alpha)\dot\theta^2 + \frac{1}{2}\hat J_2\dot\alpha^2 + K\cos\alpha\,\dot\theta\dot\alpha$$
+
+Potential energy:
+
+$$V=m_p g z = m_p g l_p\cos\alpha = G\cos\alpha$$
+
+Lagrangian:
+
+$$\mathcal L=T-V$$
 
 ---
 
-## 4. Energies and Lagrangian — detailed build-up
+## 5. Euler–Lagrange equations
 
-### 4.1 Kinetic energy
+$$\frac{d}{dt}\left(\frac{\partial\mathcal L}{\partial\dot q}\right)-\frac{\partial\mathcal L}{\partial q}=Q$$
 
-#### 4.1.1 Arm-side yaw KE
-$$T_{arm}=\frac{1}{2}\hat{J}_1\dot\theta^2$$
-
-#### 4.1.2 Pendulum translational KE
-$$T_{p,trans}=\frac{1}{2} m_p v^2$$
-
-Substitute $v^2$:
-$$T_{p,trans}=\frac{1}{2} m_p\left[
-(L_r^2+l_p^2\sin^2\alpha)\dot\theta^2
-+l_p^2\dot\alpha^2
-+2L_r l_p\cos\alpha\,\dot\theta\dot\alpha
-\right]$$
-
-#### 4.1.3 Pendulum rotational KE (why $\sin^2\alpha\dot\theta^2$ appears)
-The pendulum experiences:
-- swing angular speed $\dot\alpha$
-- plus a yaw-induced component perpendicular to the pendulum of magnitude $\dot\theta\sin\alpha$ when $\alpha\neq0$
-
-So:
-$$\omega_\perp^2=\dot\alpha^2+(\dot\theta\sin\alpha)^2$$
-
-If $J_p$ is pendulum inertia about its COM (perpendicular to swing plane):
-$$T_{p,rot}=\frac{1}{2} J_p(\dot\alpha^2+\dot\theta^2\sin^2\alpha)$$
-
-Now use the parallel-axis theorem:
-$$\hat{J}_2 = J_p + m_p l_p^2$$
-so we can write the pendulum total KE cleanly in terms of $\hat{J}_2$.
-
-#### 4.1.4 Collect terms into standard Furuta constants
-Define:
-$$\hat{J}_0=\hat{J}_1+m_pL_r^2,\qquad K=m_pL_r l_p$$
-
-After collecting coefficients of $\dot\theta^2$, $\dot\alpha^2$, and $\dot\theta\dot\alpha$, the **total kinetic energy** becomes:
-$$T=
-\frac{1}{2}(\hat{J}_0+\hat{J}_2\sin^2\alpha)\dot\theta^2
-+\frac{1}{2}\hat{J}_2\dot\alpha^2
-+K\cos\alpha\,\dot\theta\dot\alpha$$
-
-### 4.2 Potential energy
-Using $z=l_p\cos\alpha$:
-$$V=m_p g l_p\cos\alpha$$
-
-Define:
-$$G=m_p g l_p$$
-
-Then $V=G\cos\alpha$.
-
-### 4.3 Lagrangian
-$$\mathcal{L}=T-V
-=\frac{1}{2}(\hat{J}_0+\hat{J}_2\sin^2\alpha)\dot\theta^2
-+\frac{1}{2}\hat{J}_2\dot\alpha^2
-+K\cos\alpha\,\dot\theta\dot\alpha
--G\cos\alpha$$
-
----
-
-## 5. Euler–Lagrange Equations — full derivation for both DOF
-
-Euler–Lagrange:
-$$\frac{d}{dt}\left(\frac{\partial\mathcal{L}}{\partial\dot q}\right)
--\frac{\partial\mathcal{L}}{\partial q}
-=Q$$
-
-Generalized forces:
 $$Q_\theta=\tau,\qquad Q_\alpha=0$$
 
----
+### 5.1 Equation in $\theta$
 
-### 5.1 Arm (θ) equation
+$$\frac{\partial\mathcal L}{\partial\dot\theta}=(\hat J_0+\hat J_2\sin^2\alpha)\dot\theta + K\cos\alpha\,\dot\alpha$$
 
-#### Step 1: $\partial\mathcal{L}/\partial\dot\theta$
-$$\frac{\partial\mathcal{L}}{\partial\dot\theta}
-=(\hat{J}_0+\hat{J}_2\sin^2\alpha)\dot\theta + K\cos\alpha\,\dot\alpha$$
+Differentiate:
 
-#### Step 2: $d/dt$ of that
-First term:
-$$\frac{d}{dt}\left[(\hat{J}_0+\hat{J}_2\sin^2\alpha)\dot\theta\right]
-=(\hat{J}_0+\hat{J}_2\sin^2\alpha)\ddot\theta
-+\frac{d}{dt}(\hat{J}_2\sin^2\alpha)\dot\theta$$
+$$\frac{d}{dt}\left[(\hat J_0+\hat J_2\sin^2\alpha)\dot\theta\right]=(\hat J_0+\hat J_2\sin^2\alpha)\ddot\theta + \hat J_2\frac{d}{dt}(\sin^2\alpha)\dot\theta$$
 
 $$\frac{d}{dt}(\sin^2\alpha)=2\sin\alpha\cos\alpha\,\dot\alpha=\sin(2\alpha)\dot\alpha$$
 
-So:
-$$\frac{d}{dt}(\hat{J}_2\sin^2\alpha)\dot\theta
-=\hat{J}_2\sin(2\alpha)\dot\alpha\dot\theta$$
+$$\frac{d}{dt}(K\cos\alpha\,\dot\alpha)=K\left(-\sin\alpha\,\dot\alpha^2+\cos\alpha\,\ddot\alpha\right)$$
 
-Second term:
-$$\frac{d}{dt}\left[K\cos\alpha\,\dot\alpha\right]
-=K\left(\cos\alpha\,\ddot\alpha-\sin\alpha\,\dot\alpha^2\right)$$
+Also $\partial\mathcal L/\partial\theta=0$.
 
-Combine:
-$$\frac{d}{dt}\left(\frac{\partial\mathcal{L}}{\partial\dot\theta}\right)
-=(\hat{J}_0+\hat{J}_2\sin^2\alpha)\ddot\theta
-+\hat{J}_2\sin(2\alpha)\dot\theta\dot\alpha
-+K\cos\alpha\,\ddot\alpha
--K\sin\alpha\,\dot\alpha^2$$
+Thus
 
-#### Step 3: $\partial\mathcal{L}/\partial\theta$
-No explicit $\theta$ in $\mathcal{L}$, so:
-$$\frac{\partial\mathcal{L}}{\partial\theta}=0$$
+$$ (\hat J_0+\hat J_2\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + \hat J_2\sin(2\alpha)\dot\theta\dot\alpha - K\sin\alpha\,\dot\alpha^2 = \tau$$
 
-#### Step 4: Apply Euler–Lagrange with $Q_\theta=\tau$
-**Final arm equation:**
-$$(\hat{J}_0+\hat{J}_2\sin^2\alpha)\ddot\theta
-+K\cos\alpha\,\ddot\alpha
-+\hat{J}_2\sin(2\alpha)\dot\theta\dot\alpha
--K\sin\alpha\,\dot\alpha^2
-=\tau$$
+### 5.2 Equation in $\alpha$
 
----
+$$\frac{\partial\mathcal L}{\partial\dot\alpha}=\hat J_2\dot\alpha + K\cos\alpha\,\dot\theta$$
 
-### 5.2 Pendulum (α) equation
+Differentiate:
 
-#### Step 1: $\partial\mathcal{L}/\partial\dot\alpha$
-$$\frac{\partial\mathcal{L}}{\partial\dot\alpha}
-=\hat{J}_2\dot\alpha + K\cos\alpha\,\dot\theta$$
+$$\frac{d}{dt}\left(\hat J_2\dot\alpha\right)=\hat J_2\ddot\alpha$$
+$$\frac{d}{dt}(K\cos\alpha\,\dot\theta)=K\left(-\sin\alpha\,\dot\alpha\dot\theta+\cos\alpha\,\ddot\theta\right)$$
 
-#### Step 2: $d/dt$ of that
-$$\frac{d}{dt}\left(\hat{J}_2\dot\alpha\right)=\hat{J}_2\ddot\alpha$$
+Partial derivative:
 
-$$\frac{d}{dt}\left(K\cos\alpha\,\dot\theta\right)
-=K\left(\cos\alpha\,\ddot\theta-\sin\alpha\,\dot\alpha\dot\theta\right)$$
+$$\frac{\partial\mathcal L}{\partial\alpha}=\frac{1}{2}\hat J_2\frac{\partial}{\partial\alpha}(\sin^2\alpha)\dot\theta^2 - K\sin\alpha\,\dot\theta\dot\alpha + G\sin\alpha$$
+$$\frac{\partial}{\partial\alpha}(\sin^2\alpha)=\sin(2\alpha)$$
 
-So:
-$$\frac{d}{dt}\left(\frac{\partial\mathcal{L}}{\partial\dot\alpha}\right)
-=\hat{J}_2\ddot\alpha
-+K\cos\alpha\,\ddot\theta
--K\sin\alpha\,\dot\alpha\dot\theta$$
+Thus
 
-#### Step 3: $\partial\mathcal{L}/\partial\alpha$
-Compute term-by-term:
+$$\frac{\partial\mathcal L}{\partial\alpha}=\frac{1}{2}\hat J_2\sin(2\alpha)\dot\theta^2 - K\sin\alpha\,\dot\theta\dot\alpha + G\sin\alpha$$
 
-1) From $\frac{1}{2}(\hat{J}_0+\hat{J}_2\sin^2\alpha)\dot\theta^2$:
-$$\frac{\partial}{\partial\alpha}\left[\frac{1}{2}\hat{J}_2\sin^2\alpha\,\dot\theta^2\right]
-=\frac{1}{2}\hat{J}_2\sin(2\alpha)\dot\theta^2$$
+Euler–Lagrange ($Q_\alpha=0$):
 
-2) From $K\cos\alpha\,\dot\theta\dot\alpha$:
-$$\frac{\partial}{\partial\alpha}[K\cos\alpha\,\dot\theta\dot\alpha]
-=-K\sin\alpha\,\dot\theta\dot\alpha$$
+$$\hat J_2\ddot\alpha + K\cos\alpha\,\ddot\theta - K\sin\alpha\,\dot\alpha\dot\theta - \left(\frac{1}{2}\hat J_2\sin(2\alpha)\dot\theta^2 - K\sin\alpha\,\dot\theta\dot\alpha + G\sin\alpha\right)=0$$
 
-3) From $-G\cos\alpha$:
-$$\frac{\partial}{\partial\alpha}[-G\cos\alpha]=+G\sin\alpha$$
+Cancel the $\pm K\sin\alpha\,\dot\theta\dot\alpha$ terms:
 
-Combine:
-$$\frac{\partial\mathcal{L}}{\partial\alpha}
-=\frac{1}{2}\hat{J}_2\sin(2\alpha)\dot\theta^2
--K\sin\alpha\,\dot\theta\dot\alpha
-+G\sin\alpha$$
-
-#### Step 4: Apply Euler–Lagrange with $Q_\alpha=0$
-$$\hat{J}_2\ddot\alpha+K\cos\alpha\,\ddot\theta-K\sin\alpha\,\dot\alpha\dot\theta
--\left(\frac{1}{2}\hat{J}_2\sin(2\alpha)\dot\theta^2
--K\sin\alpha\,\dot\theta\dot\alpha+G\sin\alpha\right)=0$$
-
-The $\pm K\sin\alpha\,\dot\theta\dot\alpha$ terms cancel, leaving:
-
-**Final pendulum equation:**
-$$K\cos\alpha\,\ddot\theta
-+\hat{J}_2\ddot\alpha
--\frac{1}{2}\hat{J}_2\sin(2\alpha)\dot\theta^2
--G\sin\alpha
-=0$$
+$$K\cos\alpha\,\ddot\theta + \hat J_2\ddot\alpha - \frac{1}{2}\hat J_2\sin(2\alpha)\dot\theta^2 - G\sin\alpha = 0$$
 
 ---
 
-## 6. Final nonlinear Furuta model (complete)
+## 6. Nonlinear model
 
-**Arm equation:**
-$$(\hat{J}_0+\hat{J}_2\sin^2\alpha)\ddot\theta
-+K\cos\alpha\,\ddot\alpha
-+\hat{J}_2\sin(2\alpha)\dot\theta\dot\alpha
--K\sin\alpha\,\dot\alpha^2
-=\tau$$
+$$ (\hat J_0+\hat J_2\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + \hat J_2\sin(2\alpha)\dot\theta\dot\alpha - K\sin\alpha\,\dot\alpha^2 = \tau$$
 
-**Pendulum equation:**
-$$K\cos\alpha\,\ddot\theta
-+\hat{J}_2\ddot\alpha
--\frac{1}{2}\hat{J}_2\sin(2\alpha)\dot\theta^2
--G\sin\alpha
-=0$$
-
-### Optional viscous friction
-Add:
-- $+b_\theta\dot\theta$ to the left of the arm equation
-- $+b_\alpha\dot\alpha$ to the left of the pendulum equation
+$$K\cos\alpha\,\ddot\theta + \hat J_2\ddot\alpha - \frac{1}{2}\hat J_2\sin(2\alpha)\dot\theta^2 - G\sin\alpha = 0$$
 
 ---
 
 ## 7. Linearization about upright ($\alpha\approx 0$)
 
-Use:
-$$\sin\alpha\approx \alpha,\quad \cos\alpha\approx 1,\quad \sin(2\alpha)\approx 2\alpha$$
+$$\sin\alpha\approx \alpha,\qquad \cos\alpha\approx 1,\qquad \sin(2\alpha)\approx 2\alpha$$
 
-and drop products of small quantities $(\dot\theta\dot\alpha,\,\dot\alpha^2,\,\alpha\dot\theta^2)$.
+Neglect products of small quantities.
 
-### Linear model
-$$\hat{J}_0\ddot\theta+K\ddot\alpha=\tau$$
-$$K\ddot\theta+\hat{J}_2\ddot\alpha-G\alpha=0$$
+Linear model:
 
-Matrix form:
-$$\begin{bmatrix}
-\hat{J}_0 & K\\
-K & \hat{J}_2
-\end{bmatrix}
-\begin{bmatrix}
-\ddot\theta\\
-\ddot\alpha
-\end{bmatrix}
-+
-\begin{bmatrix}
-0&0\\
-0&-G
-\end{bmatrix}
-\begin{bmatrix}
-\theta\\
-\alpha
-\end{bmatrix}
-=
-\begin{bmatrix}
-\tau\\
-0
-\end{bmatrix}$$
+$$\hat J_0\ddot\theta + K\ddot\alpha = \tau$$
+$$K\ddot\theta + \hat J_2\ddot\alpha - G\alpha = 0$$
 
-### Reduced pendulum relation
-From $K\ddot\theta+\hat{J}_2\ddot\alpha-G\alpha=0$:
-$$\ddot\alpha=\frac{G}{\hat{J}_2}\alpha-\frac{K}{\hat{J}_2}\ddot\theta$$
+Solve for $\ddot\alpha$:
 
-Numerically (using point-mass sphere $\hat{J}_2=1.021472310e-04$):
-```
-ḍα = 100.727α - 1.951ḍθ
-```
-
-### Unstable “natural” rate near upright
-$$\omega=\sqrt{\frac{G}{\hat{J}_2}}=\sqrt{100.727}=10.036\ \text{rad/s}$$
-$$f=\frac{\omega}{2\pi}=1.597\ \text{Hz}$$
+$$\ddot\alpha = \frac{G}{\hat J_2}\alpha - \frac{K}{\hat J_2}\ddot\theta$$
 
 ---
 
-## 8. Numerical summary (all key constants)
+## 8. Numerical specialization
 
-Using your current geometry and the working axle placement assumption:
+Let $J_0\equiv \hat J_0$ and $J_1\equiv \hat J_2$. Numerical values:
 
-```
-m_p     = 0.011962069 kg
-l_p     = 0.087679158 m
-Ĵ_2     = 1.021472310e-04 kg·m²  (or 1.030373510e-04 with sphere self-inertia)
-K       = 1.992765862e-04 kg·m²
-G       = 1.028896479e-02 N·m
-J_arm   = 6.137000000e-04 kg·m²
-J_axle  = 8.110954023e-05 kg·m²  (depends on axle radial placement)
-Ĵ_1     = 6.948095402e-04 kg·m²  (assuming J_motor=0)
-Ĵ_0     = 1.126640230e-03 kg·m²
-```
+$$J_0=0.001104\ \mathrm{kg\,m^2},\quad J_1=1.021\times 10^{-4}\ \mathrm{kg\,m^2},\quad K=1.993\times 10^{-4}\ \mathrm{kg\,m^2},\quad G=0.01029\ \mathrm{N\,m}$$
+
+Linear equations:
+
+$$J_0\ddot\theta + K\ddot\alpha = \tau$$
+$$K\ddot\theta + J_1\ddot\alpha - G\alpha = 0$$
+
+Reduced relation:
+
+$$\ddot\alpha = \frac{G}{J_1}\alpha - \frac{K}{J_1}\ddot\theta$$
+
+Numerically:
+
+$$\ddot\alpha = 100.8\,\alpha - 1.952\,\ddot\theta$$
+
+Open-loop fall rate ($\tau=0$). From $\ddot\theta=-(K/J_0)\ddot\alpha$:
+
+$$\left(J_1-\frac{K^2}{J_0}\right)\ddot\alpha - G\alpha = 0$$
+
+$$J_{eq}=J_1-\frac{K^2}{J_0}=0.0001021-\frac{(0.0001993)^2}{0.001104}=6.612\times 10^{-5}$$
+
+$$\ddot\alpha = \frac{G}{J_{eq}}\alpha,\qquad \lambda=\pm\sqrt{\frac{G}{J_{eq}}}=\pm 12.47\ \mathrm{rad/s}$$
+
+Mass matrix inverse:
+
+$$M=\begin{bmatrix}J_0 & K\\K & J_1\end{bmatrix},\qquad M^{-1}=\frac{1}{J_0J_1-K^2}\begin{bmatrix}J_1 & -K\\-K & J_0\end{bmatrix}$$
+
+$$J_0J_1-K^2=7.2998\times 10^{-8}$$
+
+$$M^{-1}=\begin{bmatrix}1398.7 & -2730.2\\-2730.2 & 15123.7\end{bmatrix}$$
+
+Substituted form:
+
+$$0.001104\,\ddot\theta + 0.0001993\,\ddot\alpha = \tau$$
+$$0.0001993\,\ddot\theta + 0.0001021\,\ddot\alpha - 0.01029\,\alpha = 0$$
+
+Nonlinear model with numerical constants:
+
+$$ (J_0+J_1\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + J_1\sin(2\alpha)\dot\theta\dot\alpha - K\sin\alpha\,\dot\alpha^2 = \tau$$
+
+$$K\cos\alpha\,\ddot\theta + J_1\ddot\alpha - \frac{1}{2}J_1\sin(2\alpha)\dot\theta^2 - G\sin\alpha = 0$$
 
 ---
 
-## 9. Notes on correctness
-- The equation pair in §6 is the standard Furuta model structure (no friction), specialized to your $\alpha=0$ upright convention.
-- Differences between "published versions" usually come from:
-  - different angle conventions (upright vs downward reference)
-  - whether authors include rotor inertia and friction
-  - whether they use $\hat{J}_2$ (hinge inertia) vs $J_p$ (COM inertia) and how they convert between them
+## 9. PD design on commanded arm acceleration
 
-*End of file.*
+Plant:
+
+$$\ddot\alpha = A\alpha - B\ddot\theta,\qquad A\equiv \frac{G}{J_1},\quad B\equiv \frac{K}{J_1}$$
+
+Controller:
+
+$$\ddot\theta_{cmd}=-k_p\alpha-k_d\dot\alpha$$
+
+Closed-loop characteristic equation:
+
+$$\ddot\alpha - (Bk_d)\dot\alpha - (A+Bk_p)\alpha=0$$
+
+Match to
+
+$$\ddot\alpha + 2\zeta\omega_c\dot\alpha + \omega_c^2\alpha = 0$$
+
+Gains:
+
+$$k_d=-\frac{2\zeta\omega_c}{B},\qquad k_p=-\frac{A+\omega_c^2}{B}$$
+
+With $\omega_c=15$, $\zeta=0.8$, $A=100.8$, $B=1.952$:
+
+$$k_p=-166.9,\qquad k_d=-12.3$$
+
+Stepper conversion ($N=1600$ microsteps/rev):
+
+$$\mathrm{steps/rad}=\frac{N}{2\pi}=254.65,\qquad \mathrm{steps/deg}=\frac{N}{360}=4.444$$
+
+Degree variables ($\alpha_{\deg}=\alpha\,180/\pi$):
+
+$$\ddot\theta_{\mathrm{steps}}=-(742\,\alpha_{\deg}+54.6\,\dot\alpha_{\deg})$$
