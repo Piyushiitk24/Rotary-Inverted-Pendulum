@@ -1,5 +1,15 @@
-# Mathematical modelling of a rotary inverted pendulum (Furuta)
+---
+title: "Mathematical Modelling of a Rotary Inverted Pendulum (Furuta)"
+author: "Piyush"
+date: "January 21, 2026"
+geometry: margin=1in
+fontsize: 11pt
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+---
 
+ 
 ## 1. Definition
 
 Generalized coordinates:
