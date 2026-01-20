@@ -479,7 +479,21 @@ $$J=\int_0^\infty\left(\mathbf{x}^\mathsf{T}\mathbf{Q}\mathbf{x}+u^\mathsf{T}\ma
 
 ### 10.4 LQR gain
 
-Solving the continuous-time algebraic Riccati equation yields the state-feedback gain
+The gain is computed by solving the continuous-time algebraic Riccati equation (CARE)
+
+$$\mathbf{A}^\mathsf{T}\mathbf{P}+\mathbf{P}\mathbf{A}-\mathbf{P}\mathbf{B}\mathbf{R}^{-1}\mathbf{B}^\mathsf{T}\mathbf{P}+\mathbf{Q}=\mathbf{0}$$
+
+and then
+
+$$\mathbf{K}=\mathbf{R}^{-1}\mathbf{B}^\mathsf{T}\mathbf{P}.$$
+
+For the numerical gain below, the weights are
+
+$$\mathbf{Q}=\mathrm{diag}(0.5,\ 50.0,\ 0.05,\ 5.0),\qquad \mathbf{R}=\begin{bmatrix}1.0\end{bmatrix}.$$
+
+This choice prioritizes pendulum angle stabilization (large weight on $\alpha$) while penalizing control effort.
+
+Numerical values are obtained by solving the CARE (e.g., via SciPy `solve_continuous_are`) and evaluating $\mathbf{K}=\mathbf{R}^{-1}\mathbf{B}^\mathsf{T}\mathbf{P}$.
 
 $$\mathbf{K}=\begin{bmatrix}-0.70710678 & -117.18259227 & -1.3583044 & -11.86304115\end{bmatrix}$$
 
