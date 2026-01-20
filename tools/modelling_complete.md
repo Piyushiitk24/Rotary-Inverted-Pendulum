@@ -239,7 +239,6 @@ Potential energy:
 
 $$V=m_p g z = m_p g l_p\cos\alpha = G\cos\alpha$$
 
-The zero of potential energy is chosen at the pendulum hinge; any constant offset does not affect the equations of motion.
 
 Lagrangian:
 
