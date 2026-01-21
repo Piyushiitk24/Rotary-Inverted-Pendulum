@@ -709,11 +709,9 @@ void loop() {
       float accCmdPhysical = CTRL_SIGN * (ACC_KP * alphaCtrl + ACC_KD * alphaDotFilt + ACC_KI * alphaInt);
 
       if (outerLoopEnabled && fabs(alphaCtrl) < ALPHA_GATE_DEG) {
-        // Restoring force: oppose position and velocity
         float outer = -(KTHETA * thetaDeg + KTHETADOT * thetaDotFilt);
         outer = constrain(outer, -OUTER_MAX_ACC, OUTER_MAX_ACC);
-        // Apply CTRL_SIGN to outer loop as well
-        accCmdPhysical += CTRL_SIGN * outer;
+        accCmdPhysical += outer;
       }
 
       // ramp on engage
