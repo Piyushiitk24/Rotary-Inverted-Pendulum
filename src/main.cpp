@@ -20,24 +20,29 @@ const float ALPHADOT_CLAMP = 300.0f;   // deg/s
 const float THETADOT_CLAMP = 300.0f;   // deg/s safety clamp for base rate
 const float ALPHA_DEADBAND_DEG = 0.5f; // reduce sensor noise chasing
 
-// Gains
-float ACC_KP = 742.0f;
+// Full-state feedback gains (from Section 11.7 of modelling_complete.md)
+// Control law: ddot_theta = K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot
+float K_THETA     = -9.92f;    // steps/s² per deg (base position gain)
+float K_ALPHA     = -858.4f;   // steps/s² per deg (pendulum angle gain)
+float K_THETADOT  = -20.9f;    // steps/s² per deg/s (base velocity gain)
+float K_ALPHADOT  = -69.9f;    // steps/s² per deg/s (pendulum velocity gain)
+
+// Legacy gains (kept for backward compatibility with serial commands)
+float ACC_KP = 742.0f;   // Equivalent to inner loop if needed
 float ACC_KD = 54.6f;
 float ACC_KI = 0.0f;
+float KTHETA = 5.0f;     // Equivalent to outer loop if needed
+float KTHETADOT = 10.0f;
 float KV_THETA = 0.0f;
 
 float D_FILT_ALPHA = 0.35f;
+float D_FILT_THETA = 0.20f;
 bool  filterFirst  = true;
 bool  derivInit    = false;
 
-// Outer loop (base centering)
-float KTHETA      = 5.0f;
-float KTHETADOT   = 10.0f;
-float D_FILT_THETA = 0.20f;
-
 float ALPHA_GATE_DEG = 18.0f;
 const float OUTER_MAX_ACC = 1000.0f;
-bool outerLoopEnabled = true;
+bool outerLoopEnabled = true;  // Use full-state feedback when true
 
 // Optional: velocity leak (bias killer)
 float VEL_LEAK = 2.0f; // 1/s
@@ -479,13 +484,20 @@ void handleSerial() {
       return;
     }
 
+    // Full-state feedback gain tuning
+    if (c == '1') { float v = Serial.parseFloat(); K_THETA=v; Serial.print("K_THETA="); Serial.println(K_THETA,2); return; }
+    if (c == '2') { float v = Serial.parseFloat(); K_ALPHA=v; Serial.print("K_ALPHA="); Serial.println(K_ALPHA,2); return; }
+    if (c == '4') { float v = Serial.parseFloat(); K_THETADOT=v; Serial.print("K_THETADOT="); Serial.println(K_THETADOT,2); return; }
+    if (c == '5') { float v = Serial.parseFloat(); K_ALPHADOT=v; Serial.print("K_ALPHADOT="); Serial.println(K_ALPHADOT,2); return; }
+
+    // Legacy gain commands (for reference)
     if (c == 'P' || c == 'p') { float v = Serial.parseFloat(); if (v>0) ACC_KP=v; Serial.print("ACC_KP="); Serial.println(ACC_KP,1); return; }
     if (c == 'D' || c == 'd') { float v = Serial.parseFloat(); if (v>0) ACC_KD=v; Serial.print("ACC_KD="); Serial.println(ACC_KD,1); return; }
     if (c == 'I' || c == 'i') { float v = Serial.parseFloat(); if (v>=0) ACC_KI=v; Serial.print("ACC_KI="); Serial.println(ACC_KI,1); return; }
     if (c == 'V' || c == 'v') { float v = Serial.parseFloat(); if (v>=0) KV_THETA=v; Serial.print("KV_THETA="); Serial.println(KV_THETA,2); return; }
     if (c == 'F' || c == 'f') { float v = Serial.parseFloat(); if (v>=0.01f && v<=0.9f) D_FILT_ALPHA=v; Serial.print("D_FILT_ALPHA="); Serial.println(D_FILT_ALPHA,2); return; }
 
-    if (c == 'O' || c == 'o') { outerLoopEnabled = !outerLoopEnabled; Serial.print("outerLoop="); Serial.println(outerLoopEnabled ? "ON" : "OFF"); return; }
+    if (c == 'O' || c == 'o') { outerLoopEnabled = !outerLoopEnabled; Serial.print("stateFeedback="); Serial.println(outerLoopEnabled ? "ON" : "OFF"); return; }
     if (c == 'K' || c == 'k') { float v = Serial.parseFloat(); if (v>=0) KTHETA=v; Serial.print("KTHETA="); Serial.println(KTHETA,1); return; }
     if (c == 'L' || c == 'l') { float v = Serial.parseFloat(); if (v>=0) KTHETADOT=v; Serial.print("KTHETADOT="); Serial.println(KTHETADOT,1); return; }
 
@@ -514,7 +526,7 @@ void setup() {
   stepper->setAcceleration((uint32_t)MAX_ACC_STEPS);
   stepper->disableOutputs();
 
-  Serial.println("--- RIP ACCEL CONTROL (VELOCITY MODE) ---");
+  Serial.println("--- RIP FULL-STATE FEEDBACK (Section 11) ---");
   Serial.println("Commands:");
   Serial.println("  S       -> SIGN DIAGNOSTIC");
   Serial.println("  Z       -> Calibrate (hold pendulum UPRIGHT)");
@@ -525,9 +537,10 @@ void setup() {
   Serial.println("  B       -> Toggle CTRL_SIGN");
   Serial.println("  T       -> Toggle alpha debug prints");
   Serial.println("  J 10    -> Jog test (+10deg)");
-  Serial.println("  P#, D#, I#, F# -> inner loop gains/filter");
-  Serial.println("  O       -> Toggle outer loop");
-  Serial.println("  K#, L#  -> KTHETA, KTHETADOT");
+  Serial.println("  1#, 2#, 4#, 5# -> K_THETA, K_ALPHA, K_THETADOT, K_ALPHADOT");
+  Serial.println("  P#, D#, I#, F# -> Legacy gains (reference)");
+  Serial.println("  O       -> Toggle state feedback");
+  Serial.println("  K#, L#  -> Legacy outer loop gains");
   Serial.println("  X       -> Toggle derivative mode");
   Serial.println("Log: t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped");
 
@@ -535,9 +548,11 @@ void setup() {
   Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
   Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
   Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
-  Serial.print("OuterLoop="); Serial.print(outerLoopEnabled ? "ON" : "OFF");
-  Serial.print(" KTHETA="); Serial.print(KTHETA);
-  Serial.print(" KTHETADOT="); Serial.println(KTHETADOT);
+  Serial.print("StateFeedback="); Serial.print(outerLoopEnabled ? "ON" : "OFF");
+  Serial.print(" K_THETA="); Serial.print(K_THETA,2);
+  Serial.print(" K_ALPHA="); Serial.print(K_ALPHA,2);
+  Serial.print(" K_THETADOT="); Serial.print(K_THETADOT,2);
+  Serial.print(" K_ALPHADOT="); Serial.println(K_ALPHADOT,2);
 
   lastUs = micros();
 }
@@ -698,20 +713,38 @@ void loop() {
       lastThetaDeg = thetaDeg;
       thetaDotFilt = constrain(thetaDotFilt, -THETADOT_CLAMP, THETADOT_CLAMP);
 
-      // Deadband only for P/I
-      float alphaCtrl = alphaRawSigned;
-      if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
-
-      alphaInt += alphaCtrl * dt;
-      alphaInt = constrain(alphaInt, -ALPHA_INT_CLAMP, ALPHA_INT_CLAMP);
-
-      // Acc command (steps/s^2)
-      float accCmdPhysical = CTRL_SIGN * (ACC_KP * alphaCtrl + ACC_KD * alphaDotFilt + ACC_KI * alphaInt);
-
-      if (outerLoopEnabled && fabs(alphaCtrl) < ALPHA_GATE_DEG) {
-        float outer = -(KTHETA * thetaDeg + KTHETADOT * thetaDotFilt);
-        outer = constrain(outer, -OUTER_MAX_ACC, OUTER_MAX_ACC);
-        accCmdPhysical += outer;
+      // ============================================================
+      // FULL-STATE FEEDBACK CONTROLLER (Section 11.7 modelling_complete.md)
+      // Control law: accCmdPhysical = -(K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot)
+      // Gains are negative, so overall sign becomes restoring (toward upright + centered)
+      // ============================================================
+      
+      float accCmdPhysical = 0.0f;
+      
+      if (outerLoopEnabled) {
+        // Full-state feedback: single unified control law
+        accCmdPhysical = -(K_THETA * thetaDeg + K_ALPHA * alphaRawSigned + 
+                           K_THETADOT * thetaDotFilt + K_ALPHADOT * alphaDotFilt);
+        
+        // Apply control sign convention
+        accCmdPhysical *= CTRL_SIGN;
+      } else {
+        // Fallback: legacy two-loop controller for comparison
+        float alphaCtrl = alphaRawSigned;
+        if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
+        
+        alphaInt += alphaCtrl * dt;
+        alphaInt = constrain(alphaInt, -ALPHA_INT_CLAMP, ALPHA_INT_CLAMP);
+        
+        float inner = CTRL_SIGN * (ACC_KP * alphaCtrl + ACC_KD * alphaDotFilt + ACC_KI * alphaInt);
+        
+        if (fabs(alphaCtrl) < ALPHA_GATE_DEG) {
+          float outer = -(KTHETA * thetaDeg + KTHETADOT * thetaDotFilt);
+          outer = constrain(outer, -OUTER_MAX_ACC, OUTER_MAX_ACC);
+          inner += CTRL_SIGN * outer;
+        }
+        
+        accCmdPhysical = inner;
       }
 
       // ramp on engage
@@ -727,7 +760,10 @@ void loop() {
       if (accCmdPhysical >  MAX_ACC_STEPS) { accCmdPhysical =  MAX_ACC_STEPS; sat = 1; }
       if (accCmdPhysical < -MAX_ACC_STEPS) { accCmdPhysical = -MAX_ACC_STEPS; sat = 1; }
 
-      if (sat) {
+      // Anti-windup for legacy integral term (only used if outerLoopEnabled=false)
+      if (sat && !outerLoopEnabled) {
+        float alphaCtrl = alphaRawSigned;
+        if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
         alphaInt -= alphaCtrl * dt;
         alphaInt = constrain(alphaInt, -ALPHA_INT_CLAMP, ALPHA_INT_CLAMP);
       }

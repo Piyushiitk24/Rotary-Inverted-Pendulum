@@ -219,11 +219,11 @@ def simulate(kp, kd, ktheta, kthetadot, alpha0_deg=3.0, duration=5.0, outer_sign
                 # Inner loop (pendulum stabilization)
                 accCmdPhysical = CTRL_SIGN * (kp * alphaCtrl + kd * alphaDotFilt + ki * alphaInt)
                 
-                # Outer loop (base centering) - CRITICAL: must apply CTRL_SIGN
+                # Outer loop (base centering) - CURRENT MAIN.CPP (WITHOUT CTRL_SIGN FIX)
                 if abs(alphaCtrl) < ALPHA_GATE_DEG:
                     outer = -(ktheta * thetaDeg + kthetadot * thetaDotFilt)
                     outer = np.clip(outer, -OUTER_MAX_ACC, OUTER_MAX_ACC)
-                    accCmdPhysical += CTRL_SIGN * outer  # KEY FIX: apply CTRL_SIGN
+                    accCmdPhysical += outer  # BUG: missing CTRL_SIGN
                 
                 # Ramp on engage (firmware does this)
                 ramp = (t * 1000 - engage_time_ms) / 100.0  # 100ms ramp
