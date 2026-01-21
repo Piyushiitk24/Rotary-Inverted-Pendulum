@@ -526,3 +526,189 @@ $$\mathbf{K}_{\mathrm{steps}}=\left(\frac{N}{360}\right)\mathbf{K}=4.444\,\mathb
 $$\ddot\theta_{\mathrm{steps}}=-(-3.1424\,\theta_{\deg}-520.76\,\alpha_{\deg}-6.0363\,\dot\theta_{\deg}-52.72\,\dot\alpha_{\deg})$$
 
 ---
+
+## 11. Full-state feedback design by pole placement (coefficient matching)
+
+This section provides an explicit *hand-calculable* method to compute a single full-state feedback law
+
+$$u\equiv \ddot\theta = -\mathbf K \mathbf x,\qquad \mathbf x=\begin{bmatrix}\theta\\ \alpha\\ \dot\theta\\ \dot\alpha\end{bmatrix},\qquad \mathbf K=\begin{bmatrix}k_\theta & k_\alpha & k_{\dot\theta} & k_{\dot\alpha}\end{bmatrix}$$
+
+Unlike the two-loop implementation (inner on $\alpha,\dot\alpha$ + outer on $\theta,\dot\theta$), this uses **one equation** that simultaneously stabilizes the pendulum and recenters the base.
+
+### 11.1 Plant (linearized) used for state feedback
+
+From Sec. 10.2, the linearized model about upright is
+
+$$\dot x_1=x_3,\qquad \dot x_2=x_4,\qquad \dot x_3=u,\qquad \dot x_4=A\,x_2-B\,u$$
+
+where
+
+$$A\equiv \frac{G}{J_1},\qquad B\equiv \frac{K}{J_1}$$
+
+Numerically (Sec. 10.2),
+
+$$A=100.8,\qquad B=1.952$$
+
+### 11.2 Full-state feedback law
+
+Choose
+
+$$u = -(k_\theta x_1 + k_\alpha x_2 + k_{\dot\theta} x_3 + k_{\dot\alpha} x_4)$$
+
+Equivalently (using physical names),
+
+$$\ddot\theta = -(k_\theta\,\theta + k_\alpha\,\alpha + k_{\dot\theta}\,\dot\theta + k_{\dot\alpha}\,\dot\alpha)$$
+
+### 11.3 Closed-loop characteristic polynomial (derived explicitly)
+
+Substitute the feedback law into the state equations. The closed-loop matrix is
+
+$$\mathbf A_{cl}=\mathbf A-\mathbf B\mathbf K$$
+
+With
+
+$$\mathbf A=\begin{bmatrix} 0&0&1&0\\ 0&0&0&1\\ 0&0&0&0\\ 0&A&0&0 \end{bmatrix},\quad \mathbf B=\begin{bmatrix}0\\0\\1\\-B\end{bmatrix}$$
+
+we get
+
+$$\mathbf A_{cl}= \begin{bmatrix} 0 & 0 & 1 & 0\\ 0 & 0 & 0 & 1\\ -k_\theta & -k_\alpha & -k_{\dot\theta} & -k_{\dot\alpha}\\ Bk_\theta & A+Bk_\alpha & Bk_{\dot\theta} & Bk_{\dot\alpha} \end{bmatrix}$$
+
+To obtain the characteristic polynomial, write the dynamics in scalar form and eliminate $\theta$:
+
+$$\dot\theta=\dot x_1=x_3,\quad \ddot\theta=\dot x_3=u$$
+
+$$\dot\alpha=\dot x_2=x_4,\quad \ddot\alpha=\dot x_4=A\alpha-Bu$$
+
+Using the feedback law,
+
+$$u=-(k_\theta\theta+k_\alpha\alpha+k_{\dot\theta}\dot\theta+k_{\dot\alpha}\dot\alpha)$$
+
+Then
+
+$$\ddot\theta + k_{\dot\theta}\dot\theta + k_\theta\theta + k_{\dot\alpha}\dot\alpha + k_\alpha\alpha = 0$$
+
+and
+
+$$\ddot\alpha = A\alpha + B(k_\theta\theta+k_\alpha\alpha+k_{\dot\theta}\dot\theta+k_{\dot\alpha}\dot\alpha)$$
+
+Differentiate the $\ddot\alpha$ equation twice and substitute for $\theta,\dot\theta,\ddot\theta$ using the $\theta$-equation. The closed-loop characteristic polynomial becomes
+
+$$s^4 + a_3 s^3 + a_2 s^2 + a_1 s + a_0 = 0$$
+
+with coefficients expressed directly in terms of the feedback gains:
+
+$$\begin{aligned} a_3 &= k_{\dot\theta}-B\,k_{\dot\alpha}\\ a_2 &= k_\theta - A - B\,k_\alpha\\ a_1 &= -A\,k_{\dot\theta}\\ a_0 &= -A\,k_\theta \end{aligned}$$
+
+This allows **direct coefficient matching** to solve for $k_\theta, k_\alpha, k_{\dot\theta}, k_{\dot\alpha}$.
+
+### 11.4 Choosing desired poles using two second-order factors
+
+Choose a desired 4th-order polynomial as the product of two standard 2nd-order factors:
+
+$$(s^2+2\zeta_1\omega_1 s+\omega_1^2)\,(s^2+2\zeta_2\omega_2 s+\omega_2^2)$$
+
+Interpretation:
+
+- $(\omega_1,\zeta_1)$: **fast pendulum stabilization mode** (upright balance).
+- $(\omega_2,\zeta_2)$: **slower base centering mode** (drift rejection).
+
+Expand the product:
+
+$$s^4 + \tilde a_3 s^3 + \tilde a_2 s^2 + \tilde a_1 s + \tilde a_0$$
+
+where
+
+$$\begin{aligned} \tilde a_3 &= 2(\zeta_1\omega_1+\zeta_2\omega_2)\\ \tilde a_2 &= \omega_1^2+\omega_2^2+4\zeta_1\zeta_2\omega_1\omega_2\\ \tilde a_1 &= 2(\zeta_1\omega_1\omega_2^2+\zeta_2\omega_2\omega_1^2)\\ \tilde a_0 &= \omega_1^2\omega_2^2 \end{aligned}$$
+
+### 11.5 Pole-placement gains by coefficient matching (closed-form)
+
+Set $(a_0,a_1,a_2,a_3)=(\tilde a_0,\tilde a_1,\tilde a_2,\tilde a_3)$. Using the relations in Sec. 11.3, solve in this order:
+
+From $a_0=-A k_\theta$:
+
+$$k_\theta = -\frac{\tilde a_0}{A}$$
+
+From $a_1=-A k_{\dot\theta}$:
+
+$$k_{\dot\theta} = -\frac{\tilde a_1}{A}$$
+
+From $a_3=k_{\dot\theta}-B k_{\dot\alpha}$:
+
+$$k_{\dot\alpha} = \frac{k_{\dot\theta}-\tilde a_3}{B}$$
+
+From $a_2=k_\theta-A-Bk_\alpha$:
+
+$$k_\alpha = \frac{k_\theta-A-\tilde a_2}{B}$$
+
+These formulas provide a fully analytic state feedback design based on the chosen $(\omega_1,\zeta_1,\omega_2,\zeta_2)$.
+
+### 11.6 Numerical example (using the identified plant constants)
+
+Use the numerical plant values (Sec. 10.2):
+
+$$A=100.8,\qquad B=1.952$$
+
+Choose design parameters:
+
+- Fast mode: $\omega_1=15\ \mathrm{rad/s},\ \zeta_1=0.8$ (same as Sec. 9 PD choice).
+- Slow mode: $\omega_2=1.0\ \mathrm{rad/s},\ \zeta_2=1.0$ (gentle recentering).
+
+Compute the desired polynomial coefficients:
+
+$$\tilde a_3 = 2(\zeta_1\omega_1+\zeta_2\omega_2)=2(0.8\cdot 15 + 1.0\cdot 1)=2(12+1)=26$$
+
+$$\tilde a_2 = \omega_1^2+\omega_2^2+4\zeta_1\zeta_2\omega_1\omega_2 = 15^2+1^2+4(0.8)(1.0)(15)(1) =225+1+48=274$$
+
+$$\tilde a_1 = 2(\zeta_1\omega_1\omega_2^2+\zeta_2\omega_2\omega_1^2) =2(0.8\cdot 15\cdot 1^2 + 1.0\cdot 1\cdot 15^2) =2(12+225)=474$$
+
+$$\tilde a_0 = \omega_1^2\omega_2^2 = 15^2\cdot 1^2=225$$
+
+Now compute gains:
+
+$$k_\theta=-\frac{\tilde a_0}{A}=-\frac{225}{100.8}=-2.232$$
+
+$$k_{\dot\theta}=-\frac{\tilde a_1}{A}=-\frac{474}{100.8}=-4.702$$
+
+$$k_{\dot\alpha}=\frac{k_{\dot\theta}-\tilde a_3}{B} =\frac{-4.702-26}{1.952}=-15.729$$
+
+$$k_\alpha=\frac{k_\theta-A-\tilde a_2}{B} =\frac{-2.232-100.8-274}{1.952}=-193.15$$
+
+Thus, the pole-placement full-state gain is
+
+$$\mathbf K= \begin{bmatrix} -2.232 & -193.15 & -4.702 & -15.729 \end{bmatrix}$$
+
+giving the control law
+
+$$\ddot\theta = -\big(-2.232\,\theta -193.15\,\alpha -4.702\,\dot\theta -15.729\,\dot\alpha\big)$$
+
+(As with Sec. 9, the negative gains arise from the $\alpha=0$ upright sign convention.)
+
+### 11.7 Conversion to stepper units (degree variables)
+
+Let the controller be implemented in degree variables:
+
+$$\mathbf x_{\deg}=\begin{bmatrix}\theta_{\deg}\\\alpha_{\deg}\\\dot\theta_{\deg}\\\dot\alpha_{\deg}\end{bmatrix}$$
+
+Since each state in radians equals $(\pi/180)$ times the degree state, and the commanded acceleration in $\mathrm{steps/s^2}$ is
+
+$$\ddot\theta_{\mathrm{steps}}=\left(\frac{N}{360}\right)\ddot\theta_{\deg}=(\mathrm{steps/deg})\,\ddot\theta_{\deg}$$
+
+the gain vector in stepper units using degree states is
+
+$$\mathbf K_{\mathrm{steps}} = (\mathrm{steps/deg})\,\mathbf K = 4.444\,\mathbf K$$
+
+For the numerical example above:
+
+$$\mathbf K_{\mathrm{steps}} = 4.444 \begin{bmatrix} -2.232 & -193.15 & -4.702 & -15.729 \end{bmatrix} = \begin{bmatrix} -9.92 & -858.4 & -20.9 & -69.9 \end{bmatrix}$$
+
+So the implementable acceleration command is
+
+$$\ddot\theta_{\mathrm{steps}}= -\Big( -9.92\,\theta_{\deg} -858.4\,\alpha_{\deg} -20.9\,\dot\theta_{\deg} -69.9\,\dot\alpha_{\deg} \Big)$$
+
+### 11.8 Practical notes for implementation
+
+- The two-mode pole selection $(\omega_1,\zeta_1,\omega_2,\zeta_2)$ provides a tunable tradeoff: larger $\omega_1$ increases upright stiffness but increases required acceleration and sensitivity to noise; larger $\omega_2$ recenters faster but can inject base motion and couple back into $\alpha$.
+- If acceleration saturates frequently, reduce $\omega_1$ (or increase damping $\zeta_1$) and/or reduce $\omega_2$.
+- If slow drift persists despite adequate gains, augment with a small integral term on $\theta$ (bias rejection), implemented with anti-windup and small limits.
+
+---
