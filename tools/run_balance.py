@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Balance Session Logger for Rotary Inverted Pendulum
+Logs telemetry from full-state feedback controller to timestamped CSV files.
+"""
 import serial
 import time
 import csv
@@ -7,19 +11,22 @@ from datetime import datetime
 import threading
 
 # --- CONFIGURATION ---
-PORT = '/dev/cu.usbmodem212301'   # CHANGE IF NEEDED
+PORT = '/dev/cu.usbmodem212301'   # Change if needed
 BAUD = 500000
 BASE_LOG_DIR = 'logs/balance'
 
-# Expected numeric columns from firmware:
-# time_ms, alphaDeg_x100, alphaDotFilt_x100, accCmd_steps_s2, thetaDotCmd_steps_s, sat
+# Expected CSV format from firmware (main.cpp line ~796):
+# t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped
 HEADER = [
     "timestamp_ms",
-    "alphaDeg",
-    "alphaDotFilt",
-    "accCmd",
-    "thetaDotCmd",
-    "sat",
+    "alpha_deg",           # Pendulum angle from upright (deg)
+    "alpha_dot_deg_s",     # Pendulum angular velocity (deg/s)
+    "theta_deg",           # Base position (deg)
+    "theta_dot_deg_s",     # Base velocity (deg/s)
+    "acc_cmd_steps_s2",    # Commanded acceleration (steps/s²)
+    "vel_cmd_steps_s",     # Commanded velocity (steps/s)
+    "pos_meas_steps",      # Measured position (steps)
+    "position_clamped",    # 1 if near limits, 0 otherwise
 ]
 
 # --- SETUP SESSION ---
@@ -27,14 +34,21 @@ session_name = datetime.now().strftime("session_%Y%m%d_%H%M%S")
 session_dir = os.path.join(BASE_LOG_DIR, session_name)
 os.makedirs(session_dir, exist_ok=True)
 
-csv_path = os.path.join(session_dir, 'telemetry.csv')
+csv_path = os.path.join(session_dir, 'balance_log.csv')
 events_path = os.path.join(session_dir, 'events.txt')
 
-print(f"--- BALANCING SESSION STARTED ---")
-print(f"Logging to: {session_dir}/")
-print("Firmware numeric format:")
-print("  t_ms, alphaDeg_x100, alphaDotFilt_x100, accCmd, thetaDotCmd, sat")
-print("Python will convert *_x100 back to real deg and deg/s when saving.\n")
+print("=" * 60)
+print("   ROTARY INVERTED PENDULUM - BALANCE SESSION LOGGER")
+print("=" * 60)
+print(f"Session: {session_name}")
+print(f"Logs:    {session_dir}/")
+print(f"CSV:     balance_log.csv (50 Hz telemetry)")
+print(f"Events:  events.txt (commands, state changes)")
+print("\nFirmware telemetry format:")
+print("  t_ms, alpha×100, alphaDot×100, theta×100, thetaDot×100,")
+print("  accCmd, velCmd, posSteps, clamped")
+print("=" * 60)
+print()
 
 stop_event = threading.Event()
 
@@ -43,6 +57,7 @@ def write_event(msg: str):
         ef.write(f"{datetime.now()}: {msg}\n")
 
 def read_serial(ser, writer):
+    """Read serial data from Arduino, parse CSV telemetry, log events."""
     while not stop_event.is_set():
         try:
             if ser.in_waiting:
@@ -50,82 +65,130 @@ def read_serial(ser, writer):
                 if not line:
                     continue
 
-                # If it looks like a numeric CSV line, parse it
-                if "," in line and not line.startswith("[") and not "FORMAT" in line:
+                # Parse CSV telemetry line (9 comma-separated values)
+                if "," in line and not any(x in line for x in ["[", "FORMAT", "RIP", "---"]):
                     parts = line.split(",")
-                    if len(parts) == 6:
+                    if len(parts) == 9:
                         try:
+                            # Parse raw values from firmware
                             t_ms = int(parts[0])
+                            alpha_raw100 = int(parts[1])
+                            alpha_dot_raw100 = int(parts[2])
+                            theta_raw100 = int(parts[3])
+                            theta_dot_raw100 = int(parts[4])
+                            acc_cmd = int(parts[5])
+                            vel_cmd = int(parts[6])
+                            pos_steps = int(parts[7])
+                            clamped = int(parts[8])
 
-                            alphaDeg = int(parts[1]) / 100.0
-                            alphaDotFilt = int(parts[2]) / 100.0
+                            # Convert ×100 scaled values back to real units
+                            alpha = alpha_raw100 / 100.0
+                            alpha_dot = alpha_dot_raw100 / 100.0
+                            theta = theta_raw100 / 100.0
+                            theta_dot = theta_dot_raw100 / 100.0
 
-                            accCmd = int(parts[3])
-                            thetaDotCmd = int(parts[4])
-
-                            sat = int(parts[5])
-
-                            writer.writerow([t_ms, alphaDeg, alphaDotFilt, accCmd, thetaDotCmd, sat])
+                            # Write to CSV
+                            writer.writerow([
+                                t_ms, alpha, alpha_dot, theta, theta_dot,
+                                acc_cmd, vel_cmd, pos_steps, clamped
+                            ])
                         except ValueError:
-                            # Not purely numeric, treat as device text
-                            print(f"[RIP]: {line}")
+                            # Not valid numeric data, print as device message
+                            print(f"[DEVICE]: {line}")
                     else:
-                        # non-matching CSV, treat as device text
-                        print(f"[RIP]: {line}")
+                        # Wrong number of columns, treat as device message
+                        print(f"[DEVICE]: {line}")
                 else:
-                    # Device/status lines
-                    print(f"[RIP]: {line}")
+                    # Status/command lines from firmware
+                    print(f"[DEVICE]: {line}")
 
-                    # Record gain changes if seen
-                    if line.startswith("ACC_KP=") or line.startswith("ACC_KD=") or line.startswith("D_FILT_ALPHA="):
+                    # Log important events
+                    if any(key in line for key in [
+                        "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
+                        "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
+                        "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
+                        "stateFeedback=", "GLITCH", "SENSOR"
+                    ]):
                         write_event(f"Device: {line}")
 
         except Exception as e:
-            print(f"Serial Error: {e}")
+            print(f"[ERROR] Serial: {e}")
             break
 
 def main():
+    """Main entry point: connect to Arduino, start logging, handle user commands."""
     try:
+        print("Connecting to Arduino...")
         ser = serial.Serial(PORT, BAUD, timeout=0.1)
-        time.sleep(2)  # Wait for Arduino reset
+        time.sleep(2)  # Wait for Arduino reset/initialization
+        print("✓ Connected\n")
     except Exception as e:
-        print(f"Could not open port {PORT}: {e}")
+        print(f"✗ Could not open port {PORT}: {e}")
+        print("  Check: PORT variable, USB cable, device permissions")
         return
 
+    # Open CSV file for writing
     f = open(csv_path, 'w', newline='')
     writer = csv.writer(f)
     writer.writerow(HEADER)
 
+    # Start background thread to read serial data
     t = threading.Thread(target=read_serial, args=(ser, writer), daemon=True)
     t.start()
 
-    print("\nCOMMANDS:")
-    print("  Z       = Calibrate Zero (Hold Pendulum Down)")
-    print("  P 742   = Set ACC_KP (steps/s^2 per deg)")
-    print("  D 55    = Set ACC_KD (steps/s^2 per deg/s)")
-    print("  F 0.2   = Set derivative LPF alpha")
-    print("  Q       = Quit")
-    print("-" * 40)
+    print("AVAILABLE COMMANDS (send via serial):")
+    print("─" * 60)
+    print("  Setup:")
+    print("    Z             Calibrate (hold pendulum UPRIGHT)")
+    print("    E             Toggle engage/disarm")
+    print("    S             Run sign diagnostic wizard")
+    print()
+    print("  Full-State Feedback Gains:")
+    print("    1 <val>       K_THETA (base position)")
+    print("    2 <val>       K_ALPHA (pendulum angle)")
+    print("    4 <val>       K_THETADOT (base velocity damping)")
+    print("    5 <val>       K_ALPHADOT (pendulum velocity damping)")
+    print()
+    print("  Mode:")
+    print("    O             Toggle state feedback ON/OFF")
+    print()
+    print("  Testing:")
+    print("    J <deg>       Jog arm by <deg> degrees")
+    print("    T             Toggle alpha debug output")
+    print()
+    print("  Control:")
+    print("    Q             Quit logger (press Ctrl+C or type Q)")
+    print("─" * 60)
+    print()
 
     try:
         while True:
             cmd = input().strip()
             if cmd.lower() == 'q':
+                print("\nShutting down...")
                 break
             if cmd:
                 ser.write((cmd + '\n').encode())
-                print(f"Sent: {cmd}")
-                write_event(f"Sent: {cmd}")
+                print(f"→ Sent: {cmd}")
+                write_event(f"User command: {cmd}")
 
     except KeyboardInterrupt:
-        print("\nStopping...")
+        print("\n\nInterrupted by user (Ctrl+C)")
 
+    # Cleanup
     stop_event.set()
     t.join(timeout=1)
     ser.close()
     f.close()
-    print(f"Session saved to: {csv_path}")
-    print(f"Events saved to:   {events_path}")
+    
+    print()
+    print("=" * 60)
+    print("SESSION COMPLETE")
+    print("=" * 60)
+    print(f"CSV log:   {csv_path}")
+    print(f"Events:    {events_path}")
+    print(f"Directory: {session_dir}")
+    print("=" * 60)
 
 if __name__ == '__main__':
     main()

@@ -22,10 +22,12 @@ const float ALPHA_DEADBAND_DEG = 0.5f; // reduce sensor noise chasing
 
 // Full-state feedback gains (from Section 11.7 of modelling_complete.md)
 // Control law: ddot_theta = K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot
-float K_THETA     = -9.92f;    // steps/s² per deg (base position gain)
-float K_ALPHA     = -858.4f;   // steps/s² per deg (pendulum angle gain)
-float K_THETADOT  = -20.9f;    // steps/s² per deg/s (base velocity gain)
-float K_ALPHADOT  = -69.9f;    // steps/s² per deg/s (pendulum velocity gain)
+// NOTE: Signs flipped POSITIVE to compensate for ALPHA_SIGN=-1 preprocessing in hardware
+// NOTE: K_THETA increased from 9.92 to 30 for stronger base centering (drift prevention)
+float K_THETA     = 30.0f;     // steps/s² per deg (base position gain)
+float K_ALPHA     = 858.4f;    // steps/s² per deg (pendulum angle gain)
+float K_THETADOT  = 50.0f;     // steps/s² per deg/s (base velocity gain)
+float K_ALPHADOT  = 69.9f;     // steps/s² per deg/s (pendulum velocity gain)
 
 // Legacy gains (kept for backward compatibility with serial commands)
 float ACC_KP = 742.0f;   // Equivalent to inner loop if needed
@@ -109,7 +111,7 @@ void selectMux(uint8_t ch) {
   Wire.beginTransmission(MUX_ADDR);
   Wire.write(1 << ch);
   Wire.endTransmission();
-  delayMicroseconds(100);
+  delayMicroseconds(200);
 }
 
 float readAS5600Deg() {
@@ -184,7 +186,7 @@ void resetController() {
   runDir               = 0;
 }
 
-void enterIdle() {
+void enterIdle(bool keepArmed = false) {
   if (stepper) {
     stepper->stopMove();
     stepper->disableOutputs();
@@ -192,7 +194,9 @@ void enterIdle() {
   runDir = 0;
 
   currentState = STATE_IDLE;
-  armEnabled = false;
+  if (!keepArmed) {
+    armEnabled = false;
+  }
   firstIdle = true;
 }
 
@@ -678,8 +682,8 @@ void loop() {
 
     case STATE_ACTIVE: {
       if (fabs(baseDeg) > LIM_MOTOR_DEG || fabs(alphaDegRaw) > LIM_PEND_DEG) {
-        enterIdle();
-        Serial.println("FALLEN (reset + outputs off)");
+        enterIdle(true);  // Keep armEnabled=true for auto-rearm when pendulum returns to window
+        Serial.println("FALLEN (will auto-rearm when upright)");
         break;
       }
 
@@ -715,16 +719,16 @@ void loop() {
 
       // ============================================================
       // FULL-STATE FEEDBACK CONTROLLER (Section 11.7 modelling_complete.md)
-      // Control law: accCmdPhysical = -(K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot)
-      // Gains are negative, so overall sign becomes restoring (toward upright + centered)
+      // Control law: accCmdPhysical = K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot
+      // Gains are negative (from pole placement), providing restoring force
       // ============================================================
       
       float accCmdPhysical = 0.0f;
       
       if (outerLoopEnabled) {
-        // Full-state feedback: single unified control law
-        accCmdPhysical = -(K_THETA * thetaDeg + K_ALPHA * alphaRawSigned + 
-                           K_THETADOT * thetaDotFilt + K_ALPHADOT * alphaDotFilt);
+        // Full-state feedback: direct application of state feedback law
+        accCmdPhysical = K_THETA * thetaDeg + K_ALPHA * alphaRawSigned + 
+                         K_THETADOT * thetaDotFilt + K_ALPHADOT * alphaDotFilt;
         
         // Apply control sign convention
         accCmdPhysical *= CTRL_SIGN;
@@ -775,8 +779,8 @@ void loop() {
       thetaDotCmdMotor += accCmdMotor * dt;
       thetaDotCmdMotor = constrain(thetaDotCmdMotor, -MAX_SPEED_HZ, MAX_SPEED_HZ);
 
-      // leak
-      if (VEL_LEAK > 0.0f) {
+      // leak (adaptive: disabled when far from center to allow sustained centering)
+      if (VEL_LEAK > 0.0f && fabs(thetaDeg) < 20.0f) {
         thetaDotCmdMotor *= (1.0f - VEL_LEAK * dt);
       }
 
