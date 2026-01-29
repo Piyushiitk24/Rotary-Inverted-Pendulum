@@ -37,9 +37,26 @@ float KTHETA = 5.0f;     // Equivalent to outer loop if needed
 float KTHETADOT = 10.0f;
 float KV_THETA = 0.0f;
 
-float D_FILT_ALPHA = 0.35f;
-float D_FILT_THETA = 0.20f;
-bool  filterFirst  = true;
+// --- PROFESSOR'S DERIVATIVE FILTER METHOD ---
+// Uses bilinear transform: H(s) = s/(1 + s/wc)
+// Tuning: omega_c is cutoff frequency in rad/s (20 Hz ≈ 125 rad/s)
+float omega_c = 180.0f;     // Cutoff frequency (rad/s)
+float dt_fixed = 0.005f;    // Loop time for coefficient calculation
+
+// Discrete filter coefficients (calculated in setup)
+float b0 = 0.0f;  // Numerator coefficient
+float a1 = 0.0f;  // Denominator coefficient (feedback)
+
+// History variables for derivative filter
+float last_alpha_raw = 0.0f;
+float last_alpha_dot = 0.0f;
+float last_theta_raw = 0.0f;
+float last_theta_dot = 0.0f;
+
+// Legacy variables (kept for serial command compatibility)
+float D_FILT_ALPHA = 0.35f;  // Not used with professor's method
+float D_FILT_THETA = 0.20f;  // Not used with professor's method
+bool  filterFirst  = true;   // Not used with professor's method
 bool  derivInit    = false;
 
 float ALPHA_GATE_DEG = 18.0f;
@@ -86,16 +103,9 @@ float thetaDotCmdMotor   = 0.0f;   // steps/s (MOTOR coordinates)
 // (kept for compatibility/logging but NOT used to command motor anymore)
 float thetaCmdStepsMotor = 0.0f;
 
-// Filters
+// Derivative filter outputs
 float alphaDotFilt = 0.0f;
-float lastAlphaRawSigned = 0.0f;
-float alphaFilt = 0.0f;
-float lastAlphaFilt = 0.0f;
-
 float thetaDotFilt = 0.0f;
-float lastThetaDeg = 0.0f;
-float thetaFilt = 0.0f;
-float lastThetaFilt = 0.0f;
 
 // Timing
 uint32_t lastUs = 0;
@@ -169,20 +179,17 @@ void resetController() {
   thetaDotCmdMotor     = 0.0f;
 
   alphaDotFilt         = 0.0f;
-  lastAlphaRawSigned   = 0.0f;
   alphaInt             = 0.0f;
-
   thetaDotFilt         = 0.0f;
-  lastThetaDeg         = 0.0f;
 
-  alphaFilt            = 0.0f;
-  lastAlphaFilt        = 0.0f;
-  thetaFilt            = 0.0f;
-  lastThetaFilt        = 0.0f;
+  // Reset history for professor's derivative filter
+  last_alpha_raw       = 0.0f;
+  last_alpha_dot       = 0.0f;
+  last_theta_raw       = 0.0f;
+  last_theta_dot       = 0.0f;
 
   derivInit            = false;
   logDecim             = 0;
-
   runDir               = 0;
 }
 
@@ -558,6 +565,19 @@ void setup() {
   Serial.print(" K_THETADOT="); Serial.print(K_THETADOT,2);
   Serial.print(" K_ALPHADOT="); Serial.println(K_ALPHADOT,2);
 
+  // Calculate Professor's Derivative Filter Coefficients
+  // Transfer function: H(s) = s / (1 + s/wc)
+  // Bilinear transform: s = (2/T)*(z-1)/(z+1)
+  // Result: y[n] = b0*(x[n] - x[n-1]) - a1*y[n-1]
+  float denom = 2.0f + omega_c * dt_fixed;
+  b0 = (2.0f * omega_c) / denom;
+  a1 = (omega_c * dt_fixed - 2.0f) / denom;
+  
+  Serial.print("Derivative Filter: omega_c="); Serial.print(omega_c,1);
+  Serial.print(" rad/s (f="); Serial.print(omega_c/(2.0f*PI),1);
+  Serial.print(" Hz), b0="); Serial.print(b0,4);
+  Serial.print(", a1="); Serial.println(a1,4);
+
   lastUs = micros();
 }
 
@@ -597,48 +617,42 @@ void loop() {
         stepper->disableOutputs();
       }
 
-      // One-shot derivative init
+      // One-shot derivative init (initialize history)
       if (!derivInit) {
-        alphaFilt = alphaRawSigned;
-        lastAlphaFilt = alphaRawSigned;
-        thetaFilt = thetaDeg;
-        lastThetaFilt = thetaDeg;
-        lastAlphaRawSigned = alphaRawSigned;
-        lastThetaDeg = thetaDeg;
+        last_alpha_raw = alphaRawSigned;
+        last_alpha_dot = 0.0f;
+        last_theta_raw = thetaDeg;
+        last_theta_dot = 0.0f;
         alphaDotFilt = 0.0f;
         thetaDotFilt = 0.0f;
         derivInit = true;
       }
 
-      // alpha derivative
-      if (filterFirst) {
-        alphaFilt += D_FILT_ALPHA * (alphaRawSigned - alphaFilt);
-        float dAlphaFilt = alphaFilt - lastAlphaFilt;
-        while (dAlphaFilt > 180.0f) dAlphaFilt -= 360.0f;
-        while (dAlphaFilt < -180.0f) dAlphaFilt += 360.0f;
-        alphaDotFilt = dAlphaFilt / dt;
-        lastAlphaFilt = alphaFilt;
-      } else {
-        float dAlpha = alphaRawSigned - lastAlphaRawSigned;
-        while (dAlpha > 180.0f) dAlpha -= 360.0f;
-        while (dAlpha < -180.0f) dAlpha += 360.0f;
-        float alphaDot = dAlpha / dt;
-        alphaDotFilt += D_FILT_ALPHA * (alphaDot - alphaDotFilt);
-      }
-      lastAlphaRawSigned = alphaRawSigned;
-      alphaDotFilt = constrain(alphaDotFilt, -ALPHADOT_CLAMP, ALPHADOT_CLAMP);
+      // ============================================================
+      // PROFESSOR'S DERIVATIVE FILTER METHOD
+      // Formula: y[n] = b0*(x[n] - x[n-1]) - a1*y[n-1]
+      // ============================================================
 
-      // theta derivative
-      if (filterFirst) {
-        thetaFilt += D_FILT_THETA * (thetaDeg - thetaFilt);
-        thetaDotFilt = (thetaFilt - lastThetaFilt) / dt;
-        lastThetaFilt = thetaFilt;
-      } else {
-        float thetaDot = (thetaDeg - lastThetaDeg) / dt;
-        thetaDotFilt += D_FILT_THETA * (thetaDot - thetaDotFilt);
-      }
-      lastThetaDeg = thetaDeg;
+      // Alpha derivative (with angle wrap-around handling)
+      float dAlpha = alphaRawSigned - last_alpha_raw;
+      // Handle ±180° discontinuities
+      while (dAlpha > 180.0f) dAlpha -= 360.0f;
+      while (dAlpha < -180.0f) dAlpha += 360.0f;
+      
+      alphaDotFilt = b0 * dAlpha - a1 * last_alpha_dot;
+      alphaDotFilt = constrain(alphaDotFilt, -ALPHADOT_CLAMP, ALPHADOT_CLAMP);
+      
+      last_alpha_raw = alphaRawSigned;
+      last_alpha_dot = alphaDotFilt;
+
+      // Theta derivative (continuous, no wrap-around needed)
+      float dTheta = thetaDeg - last_theta_raw;
+      
+      thetaDotFilt = b0 * dTheta - a1 * last_theta_dot;
       thetaDotFilt = constrain(thetaDotFilt, -THETADOT_CLAMP, THETADOT_CLAMP);
+      
+      last_theta_raw = thetaDeg;
+      last_theta_dot = thetaDotFilt;
 
       if (debugAlpha) {
         static uint32_t dec = 0;
@@ -654,9 +668,11 @@ void loop() {
       static uint32_t dec2 = 0;
       if (++dec2 >= 20) {
         dec2 = 0;
-        Serial.print("raw="); Serial.print(alphaDegRaw,2);
-        Serial.print(" dot="); Serial.print(alphaDotFilt,1);
-        Serial.print(" enable="); Serial.println(ok ? 1 : 0);
+        Serial.print("alpha="); Serial.print(alphaDegRaw,2);
+        Serial.print(" alphaDot="); Serial.print(alphaDotFilt,1);
+        Serial.print(" | theta="); Serial.print(thetaDeg,2);
+        Serial.print(" thetaDot="); Serial.print(thetaDotFilt,1);
+        Serial.print(" | enable="); Serial.println(ok ? 1 : 0);
       }
 
       if (ok) engageCount++;
@@ -687,35 +703,31 @@ void loop() {
         break;
       }
 
-      // alpha derivative
-      if (filterFirst) {
-        alphaFilt += D_FILT_ALPHA * (alphaRawSigned - alphaFilt);
-        float dAlphaFilt = alphaFilt - lastAlphaFilt;
-        while (dAlphaFilt > 180.0f) dAlphaFilt -= 360.0f;
-        while (dAlphaFilt < -180.0f) dAlphaFilt += 360.0f;
-        alphaDotFilt = dAlphaFilt / dt;
-        lastAlphaFilt = alphaFilt;
-      } else {
-        float dAlpha = alphaRawSigned - lastAlphaRawSigned;
-        while (dAlpha > 180.0f) dAlpha -= 360.0f;
-        while (dAlpha < -180.0f) dAlpha += 360.0f;
-        float alphaDot = dAlpha / dt;
-        alphaDotFilt += D_FILT_ALPHA * (alphaDot - alphaDotFilt);
-      }
-      lastAlphaRawSigned = alphaRawSigned;
-      alphaDotFilt = constrain(alphaDotFilt, -ALPHADOT_CLAMP, ALPHADOT_CLAMP);
+      // ============================================================
+      // PROFESSOR'S DERIVATIVE FILTER METHOD
+      // Formula: y[n] = b0*(x[n] - x[n-1]) - a1*y[n-1]
+      // ============================================================
 
-      // theta derivative
-      if (filterFirst) {
-        thetaFilt += D_FILT_THETA * (thetaDeg - thetaFilt);
-        thetaDotFilt = (thetaFilt - lastThetaFilt) / dt;
-        lastThetaFilt = thetaFilt;
-      } else {
-        float thetaDot = (thetaDeg - lastThetaDeg) / dt;
-        thetaDotFilt += D_FILT_THETA * (thetaDot - thetaDotFilt);
-      }
-      lastThetaDeg = thetaDeg;
+      // Alpha derivative (with angle wrap-around handling)
+      float dAlpha = alphaRawSigned - last_alpha_raw;
+      // Handle ±180° discontinuities
+      while (dAlpha > 180.0f) dAlpha -= 360.0f;
+      while (dAlpha < -180.0f) dAlpha += 360.0f;
+      
+      alphaDotFilt = b0 * dAlpha - a1 * last_alpha_dot;
+      alphaDotFilt = constrain(alphaDotFilt, -ALPHADOT_CLAMP, ALPHADOT_CLAMP);
+      
+      last_alpha_raw = alphaRawSigned;
+      last_alpha_dot = alphaDotFilt;
+
+      // Theta derivative (continuous, no wrap-around needed)
+      float dTheta = thetaDeg - last_theta_raw;
+      
+      thetaDotFilt = b0 * dTheta - a1 * last_theta_dot;
       thetaDotFilt = constrain(thetaDotFilt, -THETADOT_CLAMP, THETADOT_CLAMP);
+      
+      last_theta_raw = thetaDeg;
+      last_theta_dot = thetaDotFilt;
 
       // ============================================================
       // FULL-STATE FEEDBACK CONTROLLER (Section 11.7 modelling_complete.md)
@@ -794,6 +806,18 @@ void loop() {
 
       // Command continuous velocity
       commandMotorSpeed(thetaDotCmdMotor);
+
+      // Human-readable status (1 Hz for monitoring)
+      static uint32_t statusDecim = 0;
+      if (++statusDecim >= 200) {  // Every 200 loops = 1 Hz at 200 Hz
+        statusDecim = 0;
+        Serial.print("[STATUS] alpha="); Serial.print(alphaRawSigned,2);
+        Serial.print(" alphaDot="); Serial.print(alphaDotFilt,1);
+        Serial.print(" | theta="); Serial.print(thetaDeg,2);
+        Serial.print(" thetaDot="); Serial.print(thetaDotFilt,1);
+        Serial.print(" | acc="); Serial.print((int)accCmdPhysical);
+        Serial.print(" vel="); Serial.println((int)thetaDotCmdMotor);
+      }
 
       // Logging
       if (++logDecim >= 4) {  // 50 Hz
