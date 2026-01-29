@@ -780,9 +780,10 @@ void loop() {
       thetaDotCmdMotor = constrain(thetaDotCmdMotor, -MAX_SPEED_HZ, MAX_SPEED_HZ);
 
       // leak (adaptive: disabled when far from center to allow sustained centering)
-      if (VEL_LEAK > 0.0f && fabs(thetaDeg) < 20.0f) {
-        thetaDotCmdMotor *= (1.0f - VEL_LEAK * dt);
-      }
+      // DISABLED FOR ROBUSTNESS TESTING - prevents artificial drift correction
+      // if (VEL_LEAK > 0.0f && fabs(thetaDeg) < 20.0f) {
+      //   thetaDotCmdMotor *= (1.0f - VEL_LEAK * dt);
+      // }
 
       // soft limit using MEASURED theta
       const float LIM_MARGIN_DEG = 2.0f;
