@@ -95,9 +95,35 @@ def read_serial(ser, writer):
                         except ValueError:
                             # Not valid numeric data, print as device message
                             print(f"[DEVICE]: {line}")
+                            # Log important events even if the line contains commas
+                            if any(key in line for key in [
+                                "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
+                                "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
+                                "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
+                                "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
+                                "stateFeedback=", "Derivative Filter", "omega_c=",
+                                "speedStopHz=",
+                                "VEL_LEAK=", "leakAlphaWinDeg=",
+                                "Saved settings to EEPROM", "Cleared EEPROM settings",
+                                "GLITCH", "SENSOR"
+                            ]):
+                                write_event(f"Device: {line}")
                     else:
                         # Wrong number of columns, treat as device message
                         print(f"[DEVICE]: {line}")
+                        # Log important events even if the line contains commas
+                        if any(key in line for key in [
+                            "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
+                            "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
+                            "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
+                            "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
+                            "stateFeedback=", "Derivative Filter", "omega_c=",
+                            "speedStopHz=",
+                            "VEL_LEAK=", "leakAlphaWinDeg=", "leakThetaWinDeg=",
+                            "Saved settings to EEPROM", "Cleared EEPROM settings",
+                            "GLITCH", "SENSOR"
+                        ]):
+                            write_event(f"Device: {line}")
                 else:
                     # Status/command lines from firmware
                     print(f"[DEVICE]: {line}")
@@ -105,9 +131,14 @@ def read_serial(ser, writer):
                     # Log important events
                     if any(key in line for key in [
                         "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
+                        "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
                         "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
                         "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
-                        "stateFeedback=", "GLITCH", "SENSOR"
+                        "stateFeedback=", "Derivative Filter", "omega_c=",
+                        "speedStopHz=",
+                        "VEL_LEAK=", "leakAlphaWinDeg=", "leakThetaWinDeg=",
+                        "Saved settings to EEPROM", "Cleared EEPROM settings",
+                        "GLITCH", "SENSOR"
                     ]):
                         write_event(f"Device: {line}")
 
@@ -142,12 +173,27 @@ def main():
     print("    Z             Calibrate (hold pendulum UPRIGHT)")
     print("    E             Toggle engage/disarm")
     print("    S             Run sign diagnostic wizard")
+    print("    A 1/-1        Set ALPHA_SIGN")
+    print("    H             Toggle THETA_SIGN")
+    print("    B             Toggle CTRL_SIGN")
+    print("    M 1/-1        Set motorSign")
+    print("    Y             Save signs/tuning to EEPROM")
+    print("    R             Clear EEPROM (defaults on reset)")
+    print("    G             Print current config (signs + tuning)")
     print()
     print("  Full-State Feedback Gains:")
     print("    1 <val>       K_THETA (base position)")
     print("    2 <val>       K_ALPHA (pendulum angle)")
     print("    4 <val>       K_THETADOT (base velocity damping)")
     print("    5 <val>       K_ALPHADOT (pendulum velocity damping)")
+    print("    W <val>       omega_c derivative cutoff (rad/s)")
+    print("    N <val>       motor dead-zone start threshold (steps/s)")
+    print("    U <val>       VEL_LEAK (1/s)")
+    print()
+    print("  Quick tuning sweeps (example):")
+    print("    N50, W180  (stable baseline in many sessions)")
+    print("    N25, W180  (more responsive, may get twitchy)")
+    print("    N50, W150  (smoother derivative, less noise)")
     print()
     print("  Mode:")
     print("    O             Toggle state feedback ON/OFF")

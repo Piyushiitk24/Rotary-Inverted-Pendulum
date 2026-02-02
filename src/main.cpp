@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <FastAccelStepper.h>
 #include <AS5600.h>
+#include <EEPROM.h>
 
 #define STEP_PIN 11
 #define DIR_PIN  6
@@ -13,21 +14,27 @@ const float LIM_MOTOR_DEG = 80.0f;
 const float LIM_PEND_DEG  = 30.0f;
 
 const float MAX_ACC_STEPS = 20000.0f;  // safe accel (steps/s^2)
-const float MAX_SPEED_HZ  = 25000.0f;  // speed limit (steps/s)
+const float MAX_SPEED_HZ  = 15000.0f;  // Changed from 25 to 15000 speed limit (steps/s)
 
 const uint32_t LOOP_US = 5000;         // 200 Hz
 const float ALPHADOT_CLAMP = 300.0f;   // deg/s
 const float THETADOT_CLAMP = 300.0f;   // deg/s safety clamp for base rate
 const float ALPHA_DEADBAND_DEG = 0.5f; // reduce sensor noise chasing
 
+// Reject impossible one-sample jumps (usually I2C/mux glitches).
+// NOTE: this is per control tick (~5 ms), not per log sample (~20 ms).
+const float ALPHA_JUMP_REJECT_DEG = 30.0f;
+const float THETA_JUMP_REJECT_DEG = 30.0f;
+
 // Full-state feedback gains (from Section 11.7 of modelling_complete.md)
 // Control law: ddot_theta = K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot
-// NOTE: Signs flipped POSITIVE to compensate for ALPHA_SIGN=-1 preprocessing in hardware
+// NOTE: Gains are expressed as positive magnitudes; use ALPHA_SIGN / THETA_SIGN / CTRL_SIGN
+// to match the firmware state definitions to your physical directions.
 // NOTE: K_THETA increased from 9.92 to 30 for stronger base centering (drift prevention)
-float K_THETA     = 30.0f;     // steps/s² per deg (base position gain)
-float K_ALPHA     = 858.4f;    // steps/s² per deg (pendulum angle gain)
-float K_THETADOT  = 50.0f;     // steps/s² per deg/s (base velocity gain)
-float K_ALPHADOT  = 69.9f;     // steps/s² per deg/s (pendulum velocity gain)
+float K_THETA     = 31.5f;     // 30.0f steps/s² per deg (base position gain)
+float K_ALPHA     = 725.6f;    // 858.6f steps/s² per deg (pendulum angle gain)
+float K_THETADOT  = 28.3f;     // 50.0f steps/s² per deg/s (base velocity gain)
+float K_ALPHADOT  = 73.5f;     // 69.9f steps/s² per deg/s (pendulum velocity gain)
 
 // Legacy gains (kept for backward compatibility with serial commands)
 float ACC_KP = 742.0f;   // Equivalent to inner loop if needed
@@ -41,11 +48,10 @@ float KV_THETA = 0.0f;
 // Uses bilinear transform: H(s) = s/(1 + s/wc)
 // Tuning: omega_c is cutoff frequency in rad/s (20 Hz ≈ 125 rad/s)
 float omega_c = 180.0f;     // Cutoff frequency (rad/s)
-float dt_fixed = 0.005f;    // Loop time for coefficient calculation
 
-// Discrete filter coefficients (calculated in setup)
-float b0 = 0.0f;  // Numerator coefficient
-float a1 = 0.0f;  // Denominator coefficient (feedback)
+// Discrete filter coefficients for professor's derivative filter (computed from omega_c and nominal dt).
+float d_b0 = 0.0f;  // Numerator coefficient
+float d_a1 = 0.0f;  // Denominator coefficient (feedback)
 
 // History variables for derivative filter
 float last_alpha_raw = 0.0f;
@@ -65,13 +71,15 @@ bool outerLoopEnabled = true;  // Use full-state feedback when true
 
 // Optional: velocity leak (bias killer)
 float VEL_LEAK = 2.0f; // 1/s
+const float VEL_LEAK_ALPHA_WINDOW_DEG = 5.0f; // only leak when |alpha| is small (near upright)
+const float VEL_LEAK_THETA_WINDOW_DEG = 20.0f; // only leak when |theta| is small (near center)
 
 float alphaInt = 0.0f;
 const float ALPHA_INT_CLAMP = 3.0f;
 
 // Signs
 int motorSign  = +1;   // +steps = CW from above
-int ALPHA_SIGN = -1;   // inverted for upright (as per your setup)
+int ALPHA_SIGN = -1;   // default (matches historical working builds); verify with 'S' and save with 'Y'
 int THETA_SIGN = +1;
 int CTRL_SIGN  = +1;
 
@@ -113,9 +121,108 @@ uint32_t logDecim = 0;
 
 // ---------------- VELOCITY MODE STATE ----------------
 int runDir = 0;                 // -1 backward, +1 forward, 0 stopped
-const float SPEED_STOP_HZ = 50; // below this we stopMove() to avoid dithering
+// Motor velocity dead-zone with hysteresis:
+// - When STOPPED: start only if |vel_cmd| >= speedStopHz
+// - When RUNNING: stop only if |vel_cmd| < (speedStopHz * SPEED_STOP_HYST_RATIO)
+// This keeps the "noise gate" behavior of a higher threshold while reducing stop/start twitch.
+// Tune with 'N' and save with 'Y'.
+float speedStopHz = 50.0f;
+const float SPEED_STOP_HYST_RATIO = 0.50f;
 
 // -----------------------------------------------------
+
+// ---------------- PERSISTED SETTINGS (EEPROM) ----------------
+constexpr uint32_t EEPROM_MAGIC = 0x52495031UL;  // "RIP1"
+constexpr int EEPROM_ADDR = 0;
+
+struct PersistedConfig {
+  uint32_t magic;
+  int8_t motorSign;
+  int8_t alphaSign;
+  int8_t thetaSign;
+  int8_t ctrlSign;
+  float omega_c;
+  float speedStopHz;
+};
+
+static void updateDerivativeCoeffs();
+
+static bool loadPersistedConfig() {
+  PersistedConfig cfg{};
+  EEPROM.get(EEPROM_ADDR, cfg);
+
+  if (cfg.magic != EEPROM_MAGIC) return false;
+  if (cfg.motorSign != 1 && cfg.motorSign != -1) return false;
+  if (cfg.alphaSign != 1 && cfg.alphaSign != -1) return false;
+  if (cfg.thetaSign != 1 && cfg.thetaSign != -1) return false;
+  if (cfg.ctrlSign != 1 && cfg.ctrlSign != -1) return false;
+  if (!(cfg.omega_c >= 1.0f && cfg.omega_c <= 2000.0f)) return false;
+  if (!(cfg.speedStopHz >= 0.0f && cfg.speedStopHz <= 500.0f)) return false;
+
+  motorSign = cfg.motorSign;
+  ALPHA_SIGN = cfg.alphaSign;
+  THETA_SIGN = cfg.thetaSign;
+  CTRL_SIGN = cfg.ctrlSign;
+  omega_c = cfg.omega_c;
+  speedStopHz = cfg.speedStopHz;
+
+  return true;
+}
+
+static void savePersistedConfig() {
+  PersistedConfig cfg{};
+  cfg.magic = EEPROM_MAGIC;
+  cfg.motorSign = (int8_t)motorSign;
+  cfg.alphaSign = (int8_t)ALPHA_SIGN;
+  cfg.thetaSign = (int8_t)THETA_SIGN;
+  cfg.ctrlSign = (int8_t)CTRL_SIGN;
+  cfg.omega_c = omega_c;
+  cfg.speedStopHz = speedStopHz;
+
+  EEPROM.put(EEPROM_ADDR, cfg);
+  Serial.println("Saved settings to EEPROM.");
+  Serial.print("motorSign="); Serial.print(motorSign);
+  Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
+  Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
+  Serial.print(" CTRL_SIGN="); Serial.print(CTRL_SIGN);
+  Serial.print(" omega_c="); Serial.print(omega_c, 1);
+  Serial.print(" speedStopHz="); Serial.print(speedStopHz, 2);
+  Serial.print(" speedStopHzStop="); Serial.println(speedStopHz * SPEED_STOP_HYST_RATIO, 2);
+}
+
+static void clearPersistedConfig() {
+  PersistedConfig cfg{};
+  cfg.magic = 0;
+  EEPROM.put(EEPROM_ADDR, cfg);
+
+  // Apply defaults immediately in RAM so the next 'Y' doesn't accidentally re-save old values.
+  motorSign = +1;
+  ALPHA_SIGN = -1;
+  THETA_SIGN = +1;
+  CTRL_SIGN = +1;
+  omega_c = 180.0f;
+  speedStopHz = 50.0f;
+  updateDerivativeCoeffs();
+  derivInit = false;
+
+  Serial.println("Cleared EEPROM settings and applied defaults in RAM.");
+  Serial.print("motorSign="); Serial.print(motorSign);
+  Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
+  Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
+  Serial.print(" CTRL_SIGN="); Serial.print(CTRL_SIGN);
+  Serial.print(" omega_c="); Serial.print(omega_c, 1);
+  Serial.print(" speedStopHz="); Serial.print(speedStopHz, 2);
+  Serial.print(" speedStopHzStop="); Serial.println(speedStopHz * SPEED_STOP_HYST_RATIO, 2);
+}
+
+static void updateDerivativeCoeffs() {
+  const float dt_nom = LOOP_US * 1e-6f;
+  const float denom = 2.0f + omega_c * dt_nom;
+  d_b0 = (2.0f * omega_c) / denom;
+  d_a1 = (omega_c * dt_nom - 2.0f) / denom;
+}
+
+// -------------------------------------------------------------
 
 void selectMux(uint8_t ch) {
   Wire.beginTransmission(MUX_ADDR);
@@ -146,7 +253,8 @@ void commandMotorSpeed(float v_steps_per_s) {
   float vabs = fabs(v_steps_per_s);
 
   // Stop: DO NOT call setSpeedInHz(0). Use stopMove() for decel stop.
-  if (vabs < SPEED_STOP_HZ) {
+  // Always stop for truly tiny commands (avoids unintended creep if speedStopHz is set to 0).
+  if (vabs < 0.5f) {
     if (runDir != 0) {
       stepper->stopMove();
       runDir = 0;
@@ -154,10 +262,33 @@ void commandMotorSpeed(float v_steps_per_s) {
     return;
   }
 
+  const float stopHz = speedStopHz * SPEED_STOP_HYST_RATIO;
+  const int desiredDir = (v_steps_per_s > 0.0f) ? +1 : -1;
+
+  // Dead-zone hysteresis:
+  // - From STOPPED: require >= speedStopHz to start
+  // - While RUNNING in same direction: allow down to stopHz
+  // - If command asks to REVERSE: require >= speedStopHz, otherwise stop first
+  if (runDir == 0) {
+    if (vabs < speedStopHz) return;
+  } else if (desiredDir != runDir) {
+    if (vabs < speedStopHz) {
+      stepper->stopMove();
+      runDir = 0;
+      return;
+    }
+  } else {
+    if (vabs < stopHz) {
+      stepper->stopMove();
+      runDir = 0;
+      return;
+    }
+  }
+
   uint32_t spd = (uint32_t)constrain(vabs, 1.0f, MAX_SPEED_HZ);
   stepper->setSpeedInHz(spd);
 
-  if (v_steps_per_s > 0) {
+  if (desiredDir > 0) {
     if (runDir != +1) {
       stepper->runForward();
       runDir = +1;
@@ -259,32 +390,45 @@ void handleSerial() {
       stepper->setSpeedInHz((uint32_t)MAX_SPEED_HZ);
       Serial.println();
 
-      Serial.println("--- TEST 2: PENDULUM SENSOR ---");
-      Serial.println("Let pendulum hang DOWN. Press any key...");
+      Serial.println("--- TEST 2: PENDULUM SENSOR (UPRIGHT) ---");
+      Serial.println("Hold pendulum UPRIGHT (as if balancing). Press any key...");
       while (!Serial.available()) { delay(10); }
       while (Serial.available()) Serial.read();
 
       selectMux(0);
-      float pendDown = readAS5600Deg();
-      Serial.print("  Pendulum DOWN reading: "); Serial.println(pendDown, 2);
+      float pendUp = readAS5600Deg();
+      Serial.print("  Pendulum UPRIGHT reading: "); Serial.println(pendUp, 2);
 
-      Serial.println("\n  Now tilt pendulum in the SAME rotational direction");
-      Serial.print("  as the arm just moved (");
+      Serial.println("\n  Now tilt pendulum in the SAME direction the arm just moved (");
+      Serial.print("  ");
       Serial.print(posStepsCW ? "CLOCKWISE" : "COUNTER-CLOCKWISE");
       Serial.println(" when viewed from above).");
-      Serial.println("  Hold it tilted ~30-45 degrees. Press any key...");
-      while (!Serial.available()) { delay(10); }
-      while (Serial.available()) Serial.read();
+      Serial.println("  Hold it tilted ~15-30 degrees. Press any key...");
 
-      selectMux(0);
-      float pendTilted = readAS5600Deg();
-      float pendDiff = getAngleDiffDeg(pendTilted, pendDown);
-      Serial.print("  Pendulum TILTED reading: "); Serial.println(pendTilted, 2);
-      Serial.print("  Difference: "); Serial.print(pendDiff, 2); Serial.println(" deg");
+      float pendTilted = pendUp;
+      float pendDiff = 0.0f;
+      while (true) {
+        while (!Serial.available()) { delay(10); }
+        while (Serial.available()) Serial.read();
 
-      int suggestedAlphaSign = (pendDiff > 0) ? +1 : -1;
-      int suggestedThetaSign = (baseDiffPos > 0) ? +1 : -1;
-      int suggestedMotorSign = +1;
+        selectMux(0);
+        pendTilted = readAS5600Deg();
+        pendDiff = getAngleDiffDeg(pendTilted, pendUp);
+
+        Serial.print("  Pendulum TILTED reading: "); Serial.println(pendTilted, 2);
+        Serial.print("  Difference (tilt-from-upright): "); Serial.print(pendDiff, 2); Serial.println(" deg");
+
+        if (fabs(pendDiff) >= 10.0f) break;
+        Serial.println("  Too small (|diff| < 10 deg). Tilt more and try again...");
+      }
+
+      // We want the firmware conventions to mean:
+      //  - motorSign  = +1 => +steps = CLOCKWISE (viewed from above)
+      //  - THETA_SIGN = +1 => theta increases when arm moves CLOCKWISE
+      //  - ALPHA_SIGN = +1 => alpha increases when pendulum tilts CLOCKWISE (about upright)
+      int suggestedMotorSign = posStepsCW ? +1 : -1;
+      int suggestedThetaSign = ((baseDiffPos >= 0.0f) ? +1 : -1) * suggestedMotorSign;
+      int suggestedAlphaSign = ((pendDiff >= 0.0f) ? +1 : -1) * suggestedMotorSign;
 
       Serial.println();
       Serial.println("========================================");
@@ -293,8 +437,19 @@ void handleSerial() {
       Serial.print("  motorSign  = "); Serial.println(suggestedMotorSign);
       Serial.print("  ALPHA_SIGN = "); Serial.println(suggestedAlphaSign);
       Serial.print("  THETA_SIGN = "); Serial.println(suggestedThetaSign);
-      Serial.println("  CTRL_SIGN  = +1 (start here)");
+      Serial.print("  CTRL_SIGN  = "); Serial.print(CTRL_SIGN);
+      Serial.println(" (controller sign, toggle with B if needed)");
       Serial.println("========================================\n");
+
+      // Apply recommended signs immediately for the live test (can be saved with 'Y').
+      motorSign = suggestedMotorSign;
+      ALPHA_SIGN = suggestedAlphaSign;
+      THETA_SIGN = suggestedThetaSign;
+      Serial.print("Applied signs (not saved): motorSign="); Serial.print(motorSign);
+      Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
+      Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
+      Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
+      Serial.println("Send 'Y' anytime to save these to EEPROM.\n");
 
       Serial.println("--- TEST 3: LIVE UPRIGHT VERIFICATION ---");
       Serial.println("Hold pendulum UPRIGHT. Tilt it slightly and watch arm.");
@@ -332,7 +487,8 @@ void handleSerial() {
 
         stepper->moveTo((int32_t)pos);
 
-        Serial.print("  alpha="); Serial.print(alpha, 1);
+        Serial.print("  alphaRaw="); Serial.print(alphaRaw, 1);
+        Serial.print(" deg  alpha="); Serial.print(alpha, 1);
         Serial.print(" deg  accCmd="); Serial.print((int)acc);
         Serial.print("  armPos="); Serial.print((int)pos);
         Serial.println(" steps");
@@ -347,7 +503,9 @@ void handleSerial() {
       stepper->setAcceleration((uint32_t)MAX_ACC_STEPS);
       stepper->setSpeedInHz((uint32_t)MAX_SPEED_HZ);
 
-      Serial.println("\n  Arm followed tilt? YES=signs ok, NO=flip CTRL_SIGN (press B)");
+      Serial.println("\n  Arm followed tilt?");
+      Serial.println("  If NO: flip ALPHA_SIGN (A 1 or A -1) and rerun S.");
+      Serial.println("  If YES: send Y to save, then Z (calibrate), then E (engage).");
       Serial.println("========================================\n");
       return;
     }
@@ -396,7 +554,8 @@ void handleSerial() {
 
         stepper->moveTo((int32_t)pos);
 
-        Serial.print("  alpha="); Serial.print(alpha, 1);
+        Serial.print("  alphaRaw="); Serial.print(alphaRaw, 1);
+        Serial.print(" deg  alpha="); Serial.print(alpha, 1);
         Serial.print(" deg  accCmd="); Serial.print((int)acc);
         Serial.print("  armPos="); Serial.print((int)pos);
         Serial.println(" steps");
@@ -411,7 +570,9 @@ void handleSerial() {
       stepper->setAcceleration((uint32_t)MAX_ACC_STEPS);
       stepper->setSpeedInHz((uint32_t)MAX_SPEED_HZ);
 
-      Serial.println("\n  Arm followed tilt? YES=signs correct, NO=press B to flip CTRL_SIGN");
+      Serial.println("\n  Arm followed tilt?");
+      Serial.println("  If NO: flip ALPHA_SIGN (A 1 or A -1) and try again.");
+      Serial.println("  If YES: send Y to save, then Z (calibrate), then E (engage).");
       return;
     }
 
@@ -433,6 +594,16 @@ void handleSerial() {
 
       Serial.print("motorSign fixed = ");
       Serial.println(motorSign);
+
+      Serial.print("motorSign="); Serial.print(motorSign);
+      Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
+      Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
+      Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
+      Serial.print("omega_c="); Serial.print(omega_c, 1);
+      Serial.print(" (b0="); Serial.print(d_b0, 4);
+      Serial.print(", a1="); Serial.print(d_a1, 4);
+      Serial.print(") speedStopHz="); Serial.print(speedStopHz, 2);
+      Serial.print(" speedStopHzStop="); Serial.println(speedStopHz * SPEED_STOP_HYST_RATIO, 2);
 
       currentState = STATE_IDLE;
       firstIdle = true;
@@ -512,6 +683,62 @@ void handleSerial() {
     if (c == 'K' || c == 'k') { float v = Serial.parseFloat(); if (v>=0) KTHETA=v; Serial.print("KTHETA="); Serial.println(KTHETA,1); return; }
     if (c == 'L' || c == 'l') { float v = Serial.parseFloat(); if (v>=0) KTHETADOT=v; Serial.print("KTHETADOT="); Serial.println(KTHETADOT,1); return; }
 
+    if (c == 'Y' || c == 'y') { savePersistedConfig(); return; }
+    if (c == 'R' || c == 'r') { clearPersistedConfig(); return; }
+
+    if (c == 'G' || c == 'g') {
+      Serial.print("motorSign="); Serial.print(motorSign);
+      Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
+      Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
+      Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
+      Serial.print("omega_c="); Serial.print(omega_c, 1);
+      Serial.print(" (b0="); Serial.print(d_b0, 4);
+      Serial.print(", a1="); Serial.print(d_a1, 4);
+      Serial.print(") speedStopHz="); Serial.print(speedStopHz, 2);
+      Serial.print(" speedStopHzStop="); Serial.println(speedStopHz * SPEED_STOP_HYST_RATIO, 2);
+      Serial.print("VEL_LEAK="); Serial.print(VEL_LEAK, 3);
+      Serial.print(" leakAlphaWinDeg="); Serial.print(VEL_LEAK_ALPHA_WINDOW_DEG, 2);
+      Serial.print(" leakThetaWinDeg="); Serial.println(VEL_LEAK_THETA_WINDOW_DEG, 2);
+      Serial.print("StateFeedback="); Serial.print(outerLoopEnabled ? "ON" : "OFF");
+      Serial.print(" K_THETA="); Serial.print(K_THETA, 2);
+      Serial.print(" K_ALPHA="); Serial.print(K_ALPHA, 2);
+      Serial.print(" K_THETADOT="); Serial.print(K_THETADOT, 2);
+      Serial.print(" K_ALPHADOT="); Serial.println(K_ALPHADOT, 2);
+      return;
+    }
+
+    if (c == 'U' || c == 'u') {
+      float v = Serial.parseFloat();
+      if (v >= 0.0f && v <= 20.0f) VEL_LEAK = v;
+      Serial.print("VEL_LEAK="); Serial.println(VEL_LEAK, 3);
+      return;
+    }
+
+    // Motor command dead-zone tuning (in steps/s).
+    if (c == 'N' || c == 'n') {
+      float v = Serial.parseFloat();
+      if (v >= 0.0f && v <= 500.0f) speedStopHz = v;
+      Serial.print("speedStopHz="); Serial.print(speedStopHz, 2);
+      Serial.print(" speedStopHzStop="); Serial.println(speedStopHz * SPEED_STOP_HYST_RATIO, 2);
+      return;
+    }
+
+    // Derivative filter cutoff tuning (professor's method)
+    if (c == 'W' || c == 'w') {
+      float v = Serial.parseFloat();
+      if (v >= 1.0f && v <= 2000.0f) omega_c = v;
+
+      updateDerivativeCoeffs();
+      Serial.print("Derivative Filter: omega_c="); Serial.print(omega_c, 1);
+      Serial.print(" rad/s (f="); Serial.print(omega_c / (2.0f * PI), 1);
+      Serial.print(" Hz), b0="); Serial.print(d_b0, 4);
+      Serial.print(", a1="); Serial.println(d_a1, 4);
+
+      // Re-init derivative history on next tick for a clean transition.
+      derivInit = false;
+      return;
+    }
+
     if (c == 'X' || c == 'x') {
       filterFirst = !filterFirst;
       derivInit = false;
@@ -553,30 +780,36 @@ void setup() {
   Serial.println("  O       -> Toggle state feedback");
   Serial.println("  K#, L#  -> Legacy outer loop gains");
   Serial.println("  X       -> Toggle derivative mode");
+  Serial.println("  W #     -> Set derivative cutoff omega_c (rad/s)");
+  Serial.println("  N #     -> Set motor dead-zone start threshold (steps/s)");
+  Serial.println("  U #     -> Set VEL_LEAK (1/s)");
+  Serial.println("  Y       -> Save signs/tuning to EEPROM");
+  Serial.println("  R       -> Clear EEPROM (defaults on reset)");
+  Serial.println("  G       -> Print current config");
   Serial.println("Log: t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped");
+
+  bool loaded = loadPersistedConfig();
+  Serial.print("[EEPROM] ");
+  Serial.println(loaded ? "Loaded saved settings" : "No saved settings; using defaults");
+
+  updateDerivativeCoeffs();
 
   Serial.print("motorSign="); Serial.print(motorSign);
   Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
   Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
   Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
+  Serial.print("speedStopHz="); Serial.print(speedStopHz, 2);
+  Serial.print(" speedStopHzStop="); Serial.println(speedStopHz * SPEED_STOP_HYST_RATIO, 2);
   Serial.print("StateFeedback="); Serial.print(outerLoopEnabled ? "ON" : "OFF");
   Serial.print(" K_THETA="); Serial.print(K_THETA,2);
   Serial.print(" K_ALPHA="); Serial.print(K_ALPHA,2);
   Serial.print(" K_THETADOT="); Serial.print(K_THETADOT,2);
   Serial.print(" K_ALPHADOT="); Serial.println(K_ALPHADOT,2);
 
-  // Calculate Professor's Derivative Filter Coefficients
-  // Transfer function: H(s) = s / (1 + s/wc)
-  // Bilinear transform: s = (2/T)*(z-1)/(z+1)
-  // Result: y[n] = b0*(x[n] - x[n-1]) - a1*y[n-1]
-  float denom = 2.0f + omega_c * dt_fixed;
-  b0 = (2.0f * omega_c) / denom;
-  a1 = (omega_c * dt_fixed - 2.0f) / denom;
-  
   Serial.print("Derivative Filter: omega_c="); Serial.print(omega_c,1);
   Serial.print(" rad/s (f="); Serial.print(omega_c/(2.0f*PI),1);
-  Serial.print(" Hz), b0="); Serial.print(b0,4);
-  Serial.print(", a1="); Serial.println(a1,4);
+  Serial.print(" Hz), b0="); Serial.print(d_b0,4);
+  Serial.print(", a1="); Serial.println(d_a1,4);
 
   lastUs = micros();
 }
@@ -602,6 +835,24 @@ void loop() {
   float baseDegRaw = getAngleDiffDeg(readAS5600Deg(), motorZeroDeg);
   float baseDeg = baseDegRaw; // for safety check
   float thetaDeg = THETA_SIGN * baseDegRaw;
+
+  // Glitch rejection on raw angles (prevents random I2C/mux jumps from nuking control).
+  if (derivInit) {
+    float dAlphaPre = alphaRawSigned - last_alpha_raw;
+    while (dAlphaPre > 180.0f) dAlphaPre -= 360.0f;
+    while (dAlphaPre < -180.0f) dAlphaPre += 360.0f;
+    if (fabs(dAlphaPre) > ALPHA_JUMP_REJECT_DEG) {
+      alphaRawSigned = last_alpha_raw;
+      alphaDegRaw = alphaRawSigned * (float)ALPHA_SIGN;
+    }
+
+    float dThetaPre = thetaDeg - last_theta_raw;
+    if (fabs(dThetaPre) > THETA_JUMP_REJECT_DEG) {
+      thetaDeg = last_theta_raw;
+      baseDegRaw = thetaDeg * (float)THETA_SIGN;
+      baseDeg = baseDegRaw;
+    }
+  }
 
   switch (currentState) {
 
@@ -639,7 +890,9 @@ void loop() {
       while (dAlpha > 180.0f) dAlpha -= 360.0f;
       while (dAlpha < -180.0f) dAlpha += 360.0f;
       
-      alphaDotFilt = b0 * dAlpha - a1 * last_alpha_dot;
+      if (fabs(dAlpha) > ALPHA_JUMP_REJECT_DEG) dAlpha = 0.0f;
+
+      alphaDotFilt = d_b0 * dAlpha - d_a1 * last_alpha_dot;
       alphaDotFilt = constrain(alphaDotFilt, -ALPHADOT_CLAMP, ALPHADOT_CLAMP);
       
       last_alpha_raw = alphaRawSigned;
@@ -648,7 +901,9 @@ void loop() {
       // Theta derivative (continuous, no wrap-around needed)
       float dTheta = thetaDeg - last_theta_raw;
       
-      thetaDotFilt = b0 * dTheta - a1 * last_theta_dot;
+      if (fabs(dTheta) > THETA_JUMP_REJECT_DEG) dTheta = 0.0f;
+
+      thetaDotFilt = d_b0 * dTheta - d_a1 * last_theta_dot;
       thetaDotFilt = constrain(thetaDotFilt, -THETADOT_CLAMP, THETADOT_CLAMP);
       
       last_theta_raw = thetaDeg;
@@ -697,6 +952,17 @@ void loop() {
     } break;
 
     case STATE_ACTIVE: {
+      // Allow runtime derivative tuning without requiring an idle transition.
+      if (!derivInit) {
+        last_alpha_raw = alphaRawSigned;
+        last_alpha_dot = 0.0f;
+        last_theta_raw = thetaDeg;
+        last_theta_dot = 0.0f;
+        alphaDotFilt = 0.0f;
+        thetaDotFilt = 0.0f;
+        derivInit = true;
+      }
+
       if (fabs(baseDeg) > LIM_MOTOR_DEG || fabs(alphaDegRaw) > LIM_PEND_DEG) {
         enterIdle(true);  // Keep armEnabled=true for auto-rearm when pendulum returns to window
         Serial.println("FALLEN (will auto-rearm when upright)");
@@ -714,7 +980,9 @@ void loop() {
       while (dAlpha > 180.0f) dAlpha -= 360.0f;
       while (dAlpha < -180.0f) dAlpha += 360.0f;
       
-      alphaDotFilt = b0 * dAlpha - a1 * last_alpha_dot;
+      if (fabs(dAlpha) > ALPHA_JUMP_REJECT_DEG) dAlpha = 0.0f;
+
+      alphaDotFilt = d_b0 * dAlpha - d_a1 * last_alpha_dot;
       alphaDotFilt = constrain(alphaDotFilt, -ALPHADOT_CLAMP, ALPHADOT_CLAMP);
       
       last_alpha_raw = alphaRawSigned;
@@ -723,7 +991,9 @@ void loop() {
       // Theta derivative (continuous, no wrap-around needed)
       float dTheta = thetaDeg - last_theta_raw;
       
-      thetaDotFilt = b0 * dTheta - a1 * last_theta_dot;
+      if (fabs(dTheta) > THETA_JUMP_REJECT_DEG) dTheta = 0.0f;
+
+      thetaDotFilt = d_b0 * dTheta - d_a1 * last_theta_dot;
       thetaDotFilt = constrain(thetaDotFilt, -THETADOT_CLAMP, THETADOT_CLAMP);
       
       last_theta_raw = thetaDeg;
@@ -787,15 +1057,15 @@ void loop() {
       // Apply motor sign
       float accCmdMotor = motorSign * accCmdPhysical;
 
-      // Integrate accel -> desired speed (DO EVEN IF SATURATED, since acc already clamped)
-      thetaDotCmdMotor += accCmdMotor * dt;
+      // Integrate accel -> desired speed (leaky integrator near upright to prevent slow drift).
+      float leak = 0.0f;
+      if (VEL_LEAK > 0.0f &&
+          fabs(alphaRawSigned) < VEL_LEAK_ALPHA_WINDOW_DEG &&
+          fabs(thetaDeg) < VEL_LEAK_THETA_WINDOW_DEG) {
+        leak = VEL_LEAK;
+      }
+      thetaDotCmdMotor += (accCmdMotor - leak * thetaDotCmdMotor) * dt;
       thetaDotCmdMotor = constrain(thetaDotCmdMotor, -MAX_SPEED_HZ, MAX_SPEED_HZ);
-
-      // leak (adaptive: disabled when far from center to allow sustained centering)
-      // DISABLED FOR ROBUSTNESS TESTING - prevents artificial drift correction
-      // if (VEL_LEAK > 0.0f && fabs(thetaDeg) < 20.0f) {
-      //   thetaDotCmdMotor *= (1.0f - VEL_LEAK * dt);
-      // }
 
       // soft limit using MEASURED theta
       const float LIM_MARGIN_DEG = 2.0f;
