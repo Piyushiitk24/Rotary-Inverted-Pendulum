@@ -37,6 +37,7 @@ const int CAL_SAMPLE_DELAY_US = 2000;
 const float ALPHA_TRIM_MAX_DEG = 1.5f;          // clamp reference drift from calibration
 const float ALPHA_TRIM_RATE = 0.20f;            // 1/s (time constant ~5s)
 const float ALPHA_TRIM_ALPHA_WINDOW_DEG = 3.0f; // only trim when near upright
+const float ALPHA_TRIM_THETA_WINDOW_DEG = 20.0f; // only trim when base is near center
 
 // Full-state feedback gains (from Section 11.7 of modelling_complete.md)
 // Control law: ddot_theta = K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot
@@ -145,6 +146,49 @@ const float SPEED_STOP_HYST_RATIO = 0.50f;
 // -----------------------------------------------------
 uint8_t fallCount = 0;
 int32_t lastAccCmdDiag = 0;
+
+// ---------------- DIAGNOSTIC COUNTERS (ACTIVE ONLY) ----------------
+uint32_t dbgTicksActive = 0;
+uint32_t dbgDtUsMin = 0xFFFFFFFFUL;
+uint32_t dbgDtUsMax = 0;
+uint32_t dbgDtOverrun = 0;
+
+uint32_t dbgAccSat = 0;
+uint32_t dbgAlphaGlitchReject = 0;
+uint32_t dbgThetaGlitchReject = 0;
+uint32_t dbgAlphaDerivReject = 0;
+uint32_t dbgThetaDerivReject = 0;
+
+uint32_t dbgMotorStart = 0;
+uint32_t dbgMotorStop = 0;
+uint32_t dbgMotorReverse = 0;
+uint32_t dbgMotorRunningTicks = 0;
+
+uint32_t dbgLeakActiveTicks = 0;
+uint32_t dbgTrimActiveTicks = 0;
+uint32_t dbgTrimClampedTicks = 0;
+
+static void resetDebugCounters() {
+  dbgTicksActive = 0;
+  dbgDtUsMin = 0xFFFFFFFFUL;
+  dbgDtUsMax = 0;
+  dbgDtOverrun = 0;
+
+  dbgAccSat = 0;
+  dbgAlphaGlitchReject = 0;
+  dbgThetaGlitchReject = 0;
+  dbgAlphaDerivReject = 0;
+  dbgThetaDerivReject = 0;
+
+  dbgMotorStart = 0;
+  dbgMotorStop = 0;
+  dbgMotorReverse = 0;
+  dbgMotorRunningTicks = 0;
+
+  dbgLeakActiveTicks = 0;
+  dbgTrimActiveTicks = 0;
+  dbgTrimClampedTicks = 0;
+}
 
 // ---------------- PERSISTED SETTINGS (EEPROM) ----------------
 constexpr uint32_t EEPROM_MAGIC = 0x52495031UL;  // "RIP1"
@@ -283,6 +327,7 @@ float averageMuxAngleDeg(uint8_t ch, int samples, int delayUs) {
 
 // Command motor in continuous velocity mode
 void commandMotorSpeed(float v_steps_per_s) {
+  const int prevRunDir = runDir;
   float vabs = fabs(v_steps_per_s);
 
   // Stop: DO NOT call setSpeedInHz(0). Use stopMove() for decel stop.
@@ -291,6 +336,7 @@ void commandMotorSpeed(float v_steps_per_s) {
     if (runDir != 0) {
       stepper->stopMove();
       runDir = 0;
+      dbgMotorStop++;
     }
     return;
   }
@@ -308,12 +354,14 @@ void commandMotorSpeed(float v_steps_per_s) {
     if (vabs < speedStopHz) {
       stepper->stopMove();
       runDir = 0;
+      dbgMotorStop++;
       return;
     }
   } else {
     if (vabs < stopHz) {
       stepper->stopMove();
       runDir = 0;
+      dbgMotorStop++;
       return;
     }
   }
@@ -325,6 +373,8 @@ void commandMotorSpeed(float v_steps_per_s) {
     if (runDir != +1) {
       stepper->runForward();
       runDir = +1;
+      if (prevRunDir == 0) dbgMotorStart++;
+      else if (prevRunDir != runDir) dbgMotorReverse++;
     } else {
       stepper->applySpeedAcceleration();
     }
@@ -332,6 +382,8 @@ void commandMotorSpeed(float v_steps_per_s) {
     if (runDir != -1) {
       stepper->runBackward();
       runDir = -1;
+      if (prevRunDir == 0) dbgMotorStart++;
+      else if (prevRunDir != runDir) dbgMotorReverse++;
     } else {
       stepper->applySpeedAcceleration();
     }
@@ -358,6 +410,7 @@ void resetController() {
   engageCount          = 0;
   fallCount            = 0;
   lastAccCmdDiag       = 0;
+  resetDebugCounters();
 }
 
 void enterIdle(bool keepArmed = false) {
@@ -882,12 +935,14 @@ void loop() {
     while (dAlphaPre > 180.0f) dAlphaPre -= 360.0f;
     while (dAlphaPre < -180.0f) dAlphaPre += 360.0f;
     if (fabs(dAlphaPre) > ALPHA_JUMP_REJECT_DEG) {
+      if (currentState == STATE_ACTIVE) dbgAlphaGlitchReject++;
       alphaRawSigned = last_alpha_raw;
       alphaDegRaw = alphaRawSigned * (float)ALPHA_SIGN;
     }
 
     float dThetaPre = thetaDeg - last_theta_raw;
     if (fabs(dThetaPre) > THETA_JUMP_REJECT_DEG) {
+      if (currentState == STATE_ACTIVE) dbgThetaGlitchReject++;
       thetaDeg = last_theta_raw;
       baseDegRaw = thetaDeg * (float)THETA_SIGN;
       baseDeg = baseDegRaw;
@@ -997,6 +1052,12 @@ void loop() {
     } break;
 
     case STATE_ACTIVE: {
+      // Track timing jitter inside ACTIVE (helps decide whether filter coeffs need per-tick recompute).
+      dbgTicksActive++;
+      if (dtUs < dbgDtUsMin) dbgDtUsMin = dtUs;
+      if (dtUs > dbgDtUsMax) dbgDtUsMax = dtUs;
+      if (dtUs > (LOOP_US + 1000)) dbgDtOverrun++;
+
       // Allow runtime derivative tuning without requiring an idle transition.
       if (!derivInit) {
         last_alpha_raw = alphaRawSigned;
@@ -1048,6 +1109,7 @@ void loop() {
       while (dAlpha < -180.0f) dAlpha += 360.0f;
       
       if (fabs(dAlpha) > ALPHA_JUMP_REJECT_DEG) dAlpha = 0.0f;
+      if (dAlpha == 0.0f && fabs(alphaRawSigned - last_alpha_raw) > ALPHA_JUMP_REJECT_DEG) dbgAlphaDerivReject++;
 
       alphaDotFilt = d_b0 * dAlpha - d_a1 * last_alpha_dot;
       alphaDotFilt = constrain(alphaDotFilt, -ALPHADOT_CLAMP, ALPHADOT_CLAMP);
@@ -1059,6 +1121,7 @@ void loop() {
       float dTheta = thetaDeg - last_theta_raw;
       
       if (fabs(dTheta) > THETA_JUMP_REJECT_DEG) dTheta = 0.0f;
+      if (dTheta == 0.0f && fabs(thetaDeg - last_theta_raw) > THETA_JUMP_REJECT_DEG) dbgThetaDerivReject++;
 
       thetaDotFilt = d_b0 * dTheta - d_a1 * last_theta_dot;
       thetaDotFilt = constrain(thetaDotFilt, -THETADOT_CLAMP, THETADOT_CLAMP);
@@ -1076,7 +1139,10 @@ void loop() {
       
       if (outerLoopEnabled) {
         // Full-state feedback: direct application of state feedback law
-        accCmdPhysical = K_THETA * thetaDeg + K_ALPHA * alphaRawSigned + 
+        float alphaCtrl = alphaRawSigned;
+        if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
+
+        accCmdPhysical = K_THETA * thetaDeg + K_ALPHA * alphaCtrl + 
                          K_THETADOT * thetaDotFilt + K_ALPHADOT * alphaDotFilt;
         
         // Apply control sign convention
@@ -1113,14 +1179,17 @@ void loop() {
       if (accCmdPhysical >  MAX_ACC_STEPS) { accCmdPhysical =  MAX_ACC_STEPS; sat = 1; }
       if (accCmdPhysical < -MAX_ACC_STEPS) { accCmdPhysical = -MAX_ACC_STEPS; sat = 1; }
       lastAccCmdDiag = (int32_t)accCmdPhysical;
+      if (sat) dbgAccSat++;
 
       // Auto-trim pendulum reference when stable (kills small alpha bias that otherwise creates large theta offset).
       if (!sat &&
-          fabs(alphaRawSigned) < ALPHA_TRIM_ALPHA_WINDOW_DEG) {
+          fabs(alphaRawSigned) < ALPHA_TRIM_ALPHA_WINDOW_DEG &&
+          fabs(thetaDeg) < ALPHA_TRIM_THETA_WINDOW_DEG) {
+        dbgTrimActiveTicks++;
         targetRawDeg = wrap360(targetRawDeg + (ALPHA_TRIM_RATE * alphaDegRaw * dt));
         float trDiff = getAngleDiffDeg(targetRawDeg, targetRawDegCal);
-        if (trDiff > ALPHA_TRIM_MAX_DEG) targetRawDeg = wrap360(targetRawDegCal + ALPHA_TRIM_MAX_DEG);
-        if (trDiff < -ALPHA_TRIM_MAX_DEG) targetRawDeg = wrap360(targetRawDegCal - ALPHA_TRIM_MAX_DEG);
+        if (trDiff > ALPHA_TRIM_MAX_DEG) { targetRawDeg = wrap360(targetRawDegCal + ALPHA_TRIM_MAX_DEG); dbgTrimClampedTicks++; }
+        if (trDiff < -ALPHA_TRIM_MAX_DEG) { targetRawDeg = wrap360(targetRawDegCal - ALPHA_TRIM_MAX_DEG); dbgTrimClampedTicks++; }
       }
 
       // Anti-windup for legacy integral term (only used if outerLoopEnabled=false)
@@ -1140,6 +1209,7 @@ void loop() {
           fabs(alphaRawSigned) < VEL_LEAK_ALPHA_WINDOW_DEG &&
           fabs(thetaDeg) < VEL_LEAK_THETA_WINDOW_DEG) {
         leak = VEL_LEAK;
+        dbgLeakActiveTicks++;
       }
       thetaDotCmdMotor += (accCmdMotor - leak * thetaDotCmdMotor) * dt;
       thetaDotCmdMotor = constrain(thetaDotCmdMotor, -MAX_SPEED_HZ, MAX_SPEED_HZ);
@@ -1153,6 +1223,7 @@ void loop() {
 
       // Command continuous velocity
       commandMotorSpeed(thetaDotCmdMotor);
+      if (runDir != 0) dbgMotorRunningTicks++;
 
       // Human-readable status (1 Hz for monitoring)
       static uint32_t statusDecim = 0;
@@ -1164,6 +1235,30 @@ void loop() {
         Serial.print(" thetaDot="); Serial.print(thetaDotFilt,1);
         Serial.print(" | acc="); Serial.print((int)accCmdPhysical);
         Serial.print(" vel="); Serial.println((int)thetaDotCmdMotor);
+
+        // Low-rate diagnostics so we can tell what protections/nonlinearities are active.
+        uint32_t ticks = (dbgTicksActive > 0) ? dbgTicksActive : 1;
+        uint32_t runPct = (100UL * dbgMotorRunningTicks) / ticks;
+        uint32_t leakPct = (100UL * dbgLeakActiveTicks) / ticks;
+        uint32_t trimPct = (100UL * dbgTrimActiveTicks) / ticks;
+        float trimDiff = getAngleDiffDeg(targetRawDeg, targetRawDegCal);
+
+        Serial.print("[DBG] dtUsMin="); Serial.print(dbgDtUsMin);
+        Serial.print(" dtUsMax="); Serial.print(dbgDtUsMax);
+        Serial.print(" over="); Serial.print(dbgDtOverrun);
+        Serial.print(" sat="); Serial.print(dbgAccSat);
+        Serial.print(" | run%="); Serial.print(runPct);
+        Serial.print(" start="); Serial.print(dbgMotorStart);
+        Serial.print(" stop="); Serial.print(dbgMotorStop);
+        Serial.print(" rev="); Serial.print(dbgMotorReverse);
+        Serial.print(" | leak%="); Serial.print(leakPct);
+        Serial.print(" trim%="); Serial.print(trimPct);
+        Serial.print(" trimDiff="); Serial.print(trimDiff, 2);
+        Serial.print(" trimClamp="); Serial.print(dbgTrimClampedTicks);
+        Serial.print(" | glitchA/T="); Serial.print(dbgAlphaGlitchReject);
+        Serial.print("/"); Serial.print(dbgThetaGlitchReject);
+        Serial.print(" derivA/T="); Serial.print(dbgAlphaDerivReject);
+        Serial.print("/"); Serial.println(dbgThetaDerivReject);
       }
 
       // Logging

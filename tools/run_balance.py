@@ -107,7 +107,7 @@ def read_serial(ser, writer):
                                 "speedStopHz=",
                                 "VEL_LEAK=", "leakAlphaWinDeg=",
                                 "Saved settings to EEPROM", "Cleared EEPROM settings",
-                                "GLITCH", "SENSOR"
+                                "GLITCH", "SENSOR", "[DBG]"
                             ]):
                                 write_event(f"Device: {line}")
                     else:
@@ -125,7 +125,7 @@ def read_serial(ser, writer):
                             "speedStopHz=",
                             "VEL_LEAK=", "leakAlphaWinDeg=", "leakThetaWinDeg=",
                             "Saved settings to EEPROM", "Cleared EEPROM settings",
-                            "GLITCH", "SENSOR"
+                            "GLITCH", "SENSOR", "[DBG]"
                         ]):
                             write_event(f"Device: {line}")
                 else:
@@ -144,7 +144,7 @@ def read_serial(ser, writer):
                         "speedStopHz=",
                         "VEL_LEAK=", "leakAlphaWinDeg=", "leakThetaWinDeg=",
                         "Saved settings to EEPROM", "Cleared EEPROM settings",
-                        "GLITCH", "SENSOR"
+                        "GLITCH", "SENSOR", "[DBG]"
                     ]):
                         write_event(f"Device: {line}")
 
