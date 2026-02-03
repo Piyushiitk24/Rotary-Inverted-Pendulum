@@ -11,7 +11,7 @@ from datetime import datetime
 import threading
 
 # --- CONFIGURATION ---
-PORT = '/dev/cu.usbmodem212301'   # Change if needed
+PORT = '/dev/cu.usbmodem12301'   # Change if needed
 BAUD = 500000
 BASE_LOG_DIR = 'logs/balance'
 
@@ -99,6 +99,8 @@ def read_serial(ser, writer):
                             if any(key in line for key in [
                                 "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
                                 "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
+                                "pendRawDeg=", "baseRawDeg=", "targetRawDeg=", "targetRawDegCal=", "motorZeroDeg=",
+                                "Alpha trim",
                                 "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
                                 "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
                                 "stateFeedback=", "Derivative Filter", "omega_c=",
@@ -115,6 +117,8 @@ def read_serial(ser, writer):
                         if any(key in line for key in [
                             "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
                             "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
+                            "pendRawDeg=", "baseRawDeg=", "targetRawDeg=", "targetRawDegCal=", "motorZeroDeg=",
+                            "Alpha trim",
                             "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
                             "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
                             "stateFeedback=", "Derivative Filter", "omega_c=",
@@ -132,6 +136,8 @@ def read_serial(ser, writer):
                     if any(key in line for key in [
                         "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
                         "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
+                        "pendRawDeg=", "baseRawDeg=", "targetRawDeg=", "targetRawDegCal=", "motorZeroDeg=",
+                        "Alpha trim",
                         "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
                         "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
                         "stateFeedback=", "Derivative Filter", "omega_c=",
@@ -167,12 +173,15 @@ def main():
     t = threading.Thread(target=read_serial, args=(ser, writer), daemon=True)
     t.start()
 
-    print("AVAILABLE COMMANDS (send via serial):")
+    print("QUICK RUN (recommended):")
+    print("  1) Z            Calibrate (arm centered; pendulum UPRIGHT)")
+    print("  2) E            Arm/disarm (auto-engages when upright & still)")
+    print("  3) Q            Quit logger")
+    print()
+    print("OTHER COMMANDS (advanced):")
     print("─" * 60)
-    print("  Setup:")
-    print("    Z             Calibrate (hold pendulum UPRIGHT)")
-    print("    E             Toggle engage/disarm")
-    print("    S             Run sign diagnostic wizard")
+    print("  Setup/Signs:")
+    print("    S             Run sign diagnostic wizard (rare)")
     print("    A 1/-1        Set ALPHA_SIGN")
     print("    H             Toggle THETA_SIGN")
     print("    B             Toggle CTRL_SIGN")
@@ -181,29 +190,16 @@ def main():
     print("    R             Clear EEPROM (defaults on reset)")
     print("    G             Print current config (signs + tuning)")
     print()
-    print("  Full-State Feedback Gains:")
-    print("    1 <val>       K_THETA (base position)")
-    print("    2 <val>       K_ALPHA (pendulum angle)")
-    print("    4 <val>       K_THETADOT (base velocity damping)")
-    print("    5 <val>       K_ALPHADOT (pendulum velocity damping)")
+    print("  Tuning:")
     print("    W <val>       omega_c derivative cutoff (rad/s)")
     print("    N <val>       motor dead-zone start threshold (steps/s)")
     print("    U <val>       VEL_LEAK (1/s)")
+    print("    1/2/4/5 <val>  K_THETA, K_ALPHA, K_THETADOT, K_ALPHADOT")
     print()
-    print("  Quick tuning sweeps (example):")
-    print("    N50, W180  (stable baseline in many sessions)")
-    print("    N25, W180  (more responsive, may get twitchy)")
-    print("    N50, W150  (smoother derivative, less noise)")
-    print()
-    print("  Mode:")
+    print("  Mode/Testing:")
     print("    O             Toggle state feedback ON/OFF")
-    print()
-    print("  Testing:")
     print("    J <deg>       Jog arm by <deg> degrees")
     print("    T             Toggle alpha debug output")
-    print()
-    print("  Control:")
-    print("    Q             Quit logger (press Ctrl+C or type Q)")
     print("─" * 60)
     print()
 

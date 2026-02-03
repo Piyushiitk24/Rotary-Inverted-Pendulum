@@ -26,6 +26,18 @@ const float ALPHA_DEADBAND_DEG = 0.5f; // reduce sensor noise chasing
 const float ALPHA_JUMP_REJECT_DEG = 30.0f;
 const float THETA_JUMP_REJECT_DEG = 30.0f;
 
+// Require multiple consecutive out-of-range ticks before declaring FALLEN.
+const uint8_t FALL_COUNT_REQ = 3;
+
+// Calibration sampling (averaging reduces ~0.5deg single-sample noise that can create large theta offsets).
+const int CAL_SAMPLES = 25;
+const int CAL_SAMPLE_DELAY_US = 2000;
+
+// Auto-trim the pendulum reference very slowly to kill persistent alpha bias (prevents big theta offsets).
+const float ALPHA_TRIM_MAX_DEG = 1.5f;          // clamp reference drift from calibration
+const float ALPHA_TRIM_RATE = 0.20f;            // 1/s (time constant ~5s)
+const float ALPHA_TRIM_ALPHA_WINDOW_DEG = 3.0f; // only trim when near upright
+
 // Full-state feedback gains (from Section 11.7 of modelling_complete.md)
 // Control law: ddot_theta = K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot
 // NOTE: Gains are expressed as positive magnitudes; use ALPHA_SIGN / THETA_SIGN / CTRL_SIGN
@@ -103,6 +115,7 @@ enum State { STATE_CALIBRATE, STATE_IDLE, STATE_ACTIVE };
 State currentState = STATE_CALIBRATE;
 
 float targetRawDeg = 0.0f;
+float targetRawDegCal = 0.0f;  // calibration reference (for auto-trim clamp)
 float motorZeroDeg = 0.0f;
 
 // Controller command state (now ONLY speed is used for actuation)
@@ -130,6 +143,8 @@ float speedStopHz = 50.0f;
 const float SPEED_STOP_HYST_RATIO = 0.50f;
 
 // -----------------------------------------------------
+uint8_t fallCount = 0;
+int32_t lastAccCmdDiag = 0;
 
 // ---------------- PERSISTED SETTINGS (EEPROM) ----------------
 constexpr uint32_t EEPROM_MAGIC = 0x52495031UL;  // "RIP1"
@@ -248,6 +263,24 @@ float getAngleDiffDeg(float currentDeg, float targetDeg) {
   return diff;
 }
 
+float averageMuxAngleDeg(uint8_t ch, int samples, int delayUs) {
+  float s = 0.0f, c = 0.0f;
+  const float k = PI / 180.0f;
+
+  for (int i = 0; i < samples; i++) {
+    selectMux(ch);
+    float deg = wrap360(readAS5600Deg());
+    float rad = deg * k;
+    s += sin(rad);
+    c += cos(rad);
+    if (delayUs > 0) delayMicroseconds((uint32_t)delayUs);
+  }
+
+  float avgRad = atan2(s, c);
+  float avgDeg = avgRad * (180.0f / PI);
+  return wrap360(avgDeg);
+}
+
 // Command motor in continuous velocity mode
 void commandMotorSpeed(float v_steps_per_s) {
   float vabs = fabs(v_steps_per_s);
@@ -322,6 +355,9 @@ void resetController() {
   derivInit            = false;
   logDecim             = 0;
   runDir               = 0;
+  engageCount          = 0;
+  fallCount            = 0;
+  lastAccCmdDiag       = 0;
 }
 
 void enterIdle(bool keepArmed = false) {
@@ -577,23 +613,31 @@ void handleSerial() {
     }
 
     if (c == 'Z' || c == 'z') {
-      selectMux(0);
-      float pendUp = wrap360(readAS5600Deg());
-      targetRawDeg = pendUp;
+      // Flush any trailing characters (e.g. old scripts sending "ZU") so they don't get
+      // interpreted as a different command after calibration.
+      while (Serial.available()) Serial.read();
 
-      Serial.print("pendUp="); Serial.print(pendUp,2);
-      Serial.print(" targetRawDeg="); Serial.println(targetRawDeg,2);
+      Serial.println("\n--- CALIBRATION (Z) ---");
+      Serial.println("Put ARM at CENTER and hold pendulum UPRIGHT.");
+      Serial.println("Sampling sensors...");
 
-      selectMux(1);
-      motorZeroDeg = readAS5600Deg();
+      float oldTarget = targetRawDeg;
+      targetRawDeg = averageMuxAngleDeg(0, CAL_SAMPLES, CAL_SAMPLE_DELAY_US);
+      targetRawDegCal = targetRawDeg;
+      motorZeroDeg = averageMuxAngleDeg(1, CAL_SAMPLES, CAL_SAMPLE_DELAY_US);
+
+      Serial.print("pendUp="); Serial.print(targetRawDeg, 2);
+      Serial.print(" targetRawDeg="); Serial.print(targetRawDeg, 2);
+      Serial.print(" (old="); Serial.print(oldTarget, 2); Serial.println(")");
+      Serial.print("motorZeroDeg="); Serial.println(motorZeroDeg, 2);
 
       stepper->setCurrentPosition(0);
       resetController();
 
       isCalibrated = true;
-
-      Serial.print("motorSign fixed = ");
-      Serial.println(motorSign);
+      currentState = STATE_IDLE;
+      firstIdle = true;
+      stepper->disableOutputs();
 
       Serial.print("motorSign="); Serial.print(motorSign);
       Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
@@ -605,10 +649,7 @@ void handleSerial() {
       Serial.print(") speedStopHz="); Serial.print(speedStopHz, 2);
       Serial.print(" speedStopHzStop="); Serial.println(speedStopHz * SPEED_STOP_HYST_RATIO, 2);
 
-      currentState = STATE_IDLE;
-      firstIdle = true;
-      stepper->disableOutputs();
-      Serial.println("CALIBRATED at upright! Press E to arm, then release.");
+      Serial.println("CALIBRATED. Hold pendulum UPRIGHT, then press E to arm.");
       return;
     }
 
@@ -691,6 +732,20 @@ void handleSerial() {
       Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
       Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
       Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
+
+      // Raw sensors + stored zeros (helps debug off-center settling / calibration bias).
+      selectMux(0);
+      float pendRawNow = wrap360(readAS5600Deg());
+      selectMux(1);
+      float baseRawNow = wrap360(readAS5600Deg());
+      Serial.print("pendRawDeg="); Serial.print(pendRawNow, 2);
+      Serial.print(" targetRawDeg="); Serial.println(targetRawDeg, 2);
+      Serial.print("targetRawDegCal="); Serial.print(targetRawDegCal, 2);
+      Serial.print(" (diff="); Serial.print(getAngleDiffDeg(targetRawDeg, targetRawDegCal), 2);
+      Serial.println(")");
+      Serial.print("baseRawDeg="); Serial.print(baseRawNow, 2);
+      Serial.print(" motorZeroDeg="); Serial.println(motorZeroDeg, 2);
+
       Serial.print("omega_c="); Serial.print(omega_c, 1);
       Serial.print(" (b0="); Serial.print(d_b0, 4);
       Serial.print(", a1="); Serial.print(d_a1, 4);
@@ -765,27 +820,11 @@ void setup() {
   stepper->disableOutputs();
 
   Serial.println("--- RIP FULL-STATE FEEDBACK (Section 11) ---");
-  Serial.println("Commands:");
-  Serial.println("  S       -> SIGN DIAGNOSTIC");
-  Serial.println("  Z       -> Calibrate (hold pendulum UPRIGHT)");
-  Serial.println("  E       -> Toggle engage");
-  Serial.println("  M 1/-1  -> Set motorSign");
-  Serial.println("  A 1/-1  -> Set ALPHA_SIGN");
-  Serial.println("  H       -> Toggle THETA_SIGN");
-  Serial.println("  B       -> Toggle CTRL_SIGN");
-  Serial.println("  T       -> Toggle alpha debug prints");
-  Serial.println("  J 10    -> Jog test (+10deg)");
-  Serial.println("  1#, 2#, 4#, 5# -> K_THETA, K_ALPHA, K_THETADOT, K_ALPHADOT");
-  Serial.println("  P#, D#, I#, F# -> Legacy gains (reference)");
-  Serial.println("  O       -> Toggle state feedback");
-  Serial.println("  K#, L#  -> Legacy outer loop gains");
-  Serial.println("  X       -> Toggle derivative mode");
-  Serial.println("  W #     -> Set derivative cutoff omega_c (rad/s)");
-  Serial.println("  N #     -> Set motor dead-zone start threshold (steps/s)");
-  Serial.println("  U #     -> Set VEL_LEAK (1/s)");
-  Serial.println("  Y       -> Save signs/tuning to EEPROM");
-  Serial.println("  R       -> Clear EEPROM (defaults on reset)");
-  Serial.println("  G       -> Print current config");
+  Serial.println("Quick run:");
+  Serial.println("  Z  -> Calibrate (arm centered; pendulum UPRIGHT)");
+  Serial.println("  E  -> Arm/disarm (auto-engages when upright & still)");
+  Serial.println("Useful:");
+  Serial.println("  S (sign wizard), G (print config), R (clear EEPROM), Y (save), W/N/U (tuning)");
   Serial.println("Log: t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped");
 
   bool loaded = loadPersistedConfig();
@@ -832,7 +871,8 @@ void loop() {
 
   // Base
   selectMux(1);
-  float baseDegRaw = getAngleDiffDeg(readAS5600Deg(), motorZeroDeg);
+  float baseAbsDeg = readAS5600Deg();
+  float baseDegRaw = getAngleDiffDeg(baseAbsDeg, motorZeroDeg);
   float baseDeg = baseDegRaw; // for safety check
   float thetaDeg = THETA_SIGN * baseDegRaw;
 
@@ -921,13 +961,16 @@ void loop() {
       bool ok = (fabs(alphaDegRaw) < ENGAGE_PEND_DEG) && (fabs(alphaDotFilt) < ENGAGE_DOT_DEG);
 
       static uint32_t dec2 = 0;
-      if (++dec2 >= 20) {
+      if (!armEnabled) {
         dec2 = 0;
-        Serial.print("alpha="); Serial.print(alphaDegRaw,2);
-        Serial.print(" alphaDot="); Serial.print(alphaDotFilt,1);
-        Serial.print(" | theta="); Serial.print(thetaDeg,2);
-        Serial.print(" thetaDot="); Serial.print(thetaDotFilt,1);
-        Serial.print(" | enable="); Serial.println(ok ? 1 : 0);
+      } else if (++dec2 >= 200) {  // 1 Hz at 200 Hz loop
+        dec2 = 0;
+        Serial.print("[IDLE] alpha="); Serial.print(alphaDegRaw, 2);
+        Serial.print(" alphaDot="); Serial.print(alphaDotFilt, 1);
+        Serial.print(" | theta="); Serial.print(thetaDeg, 2);
+        Serial.print(" thetaDot="); Serial.print(thetaDotFilt, 1);
+        Serial.print(" | enable="); Serial.print(ok ? 1 : 0);
+        Serial.print(" cnt="); Serial.println(engageCount);
       }
 
       if (ok) engageCount++;
@@ -939,6 +982,8 @@ void loop() {
         thetaDotCmdMotor = 0.0f;
         thetaCmdStepsMotor = 0.0f;
         runDir = 0;
+        fallCount = 0;
+        lastAccCmdDiag = 0;
 
         logDecim = 0;
         engageStartMs = millis();
@@ -963,10 +1008,32 @@ void loop() {
         derivInit = true;
       }
 
-      if (fabs(baseDeg) > LIM_MOTOR_DEG || fabs(alphaDegRaw) > LIM_PEND_DEG) {
-        enterIdle(true);  // Keep armEnabled=true for auto-rearm when pendulum returns to window
-        Serial.println("FALLEN (will auto-rearm when upright)");
-        break;
+      const bool outOfRange = (fabs(baseDeg) > LIM_MOTOR_DEG) || (fabs(alphaDegRaw) > LIM_PEND_DEG);
+      if (outOfRange) {
+        if (++fallCount >= FALL_COUNT_REQ) {
+          Serial.print("FALLEN limit=");
+          if (fabs(alphaDegRaw) > LIM_PEND_DEG) Serial.print("alpha ");
+          if (fabs(baseDeg) > LIM_MOTOR_DEG) Serial.print("base ");
+          Serial.print("| alpha="); Serial.print(alphaRawSigned, 2);
+          Serial.print(" (pendRaw="); Serial.print(pendDeg, 2);
+          Serial.print(" targetRaw="); Serial.print(targetRawDeg, 2);
+          Serial.print(" cal="); Serial.print(targetRawDegCal, 2);
+          Serial.print(") | theta="); Serial.print(thetaDeg, 2);
+          Serial.print(" (baseRaw="); Serial.print(baseAbsDeg, 2);
+          Serial.print(" zero="); Serial.print(motorZeroDeg, 2);
+          Serial.print(") | alphaDot="); Serial.print(alphaDotFilt, 1);
+          Serial.print(" thetaDot="); Serial.print(thetaDotFilt, 1);
+          Serial.print(" | accPrev="); Serial.print(lastAccCmdDiag);
+          Serial.print(" velCmd="); Serial.print((int)thetaDotCmdMotor);
+          Serial.print(" runDir="); Serial.println(runDir);
+
+          enterIdle(true);  // Keep armEnabled=true for auto-rearm when pendulum returns to window
+          Serial.println("FALLEN (will auto-rearm when upright)");
+          fallCount = 0;
+          break;
+        }
+      } else {
+        fallCount = 0;
       }
 
       // ============================================================
@@ -1045,6 +1112,16 @@ void loop() {
       int sat = 0;
       if (accCmdPhysical >  MAX_ACC_STEPS) { accCmdPhysical =  MAX_ACC_STEPS; sat = 1; }
       if (accCmdPhysical < -MAX_ACC_STEPS) { accCmdPhysical = -MAX_ACC_STEPS; sat = 1; }
+      lastAccCmdDiag = (int32_t)accCmdPhysical;
+
+      // Auto-trim pendulum reference when stable (kills small alpha bias that otherwise creates large theta offset).
+      if (!sat &&
+          fabs(alphaRawSigned) < ALPHA_TRIM_ALPHA_WINDOW_DEG) {
+        targetRawDeg = wrap360(targetRawDeg + (ALPHA_TRIM_RATE * alphaDegRaw * dt));
+        float trDiff = getAngleDiffDeg(targetRawDeg, targetRawDegCal);
+        if (trDiff > ALPHA_TRIM_MAX_DEG) targetRawDeg = wrap360(targetRawDegCal + ALPHA_TRIM_MAX_DEG);
+        if (trDiff < -ALPHA_TRIM_MAX_DEG) targetRawDeg = wrap360(targetRawDegCal - ALPHA_TRIM_MAX_DEG);
+      }
 
       // Anti-windup for legacy integral term (only used if outerLoopEnabled=false)
       if (sat && !outerLoopEnabled) {
