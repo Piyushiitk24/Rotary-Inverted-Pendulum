@@ -107,7 +107,7 @@ def read_serial(ser, writer):
                                 "speedStopHz=",
                                 "VEL_LEAK=", "leakAlphaWinDeg=",
                                 "Saved settings to EEPROM", "Cleared EEPROM settings",
-                                "GLITCH", "SENSOR", "[DBG]"
+                                "GLITCH", "SENSOR", "[DBG]", "[WARN]"
                             ]):
                                 write_event(f"Device: {line}")
                     else:
@@ -125,7 +125,7 @@ def read_serial(ser, writer):
                             "speedStopHz=",
                             "VEL_LEAK=", "leakAlphaWinDeg=", "leakThetaWinDeg=",
                             "Saved settings to EEPROM", "Cleared EEPROM settings",
-                            "GLITCH", "SENSOR", "[DBG]"
+                            "GLITCH", "SENSOR", "[DBG]", "[WARN]"
                         ]):
                             write_event(f"Device: {line}")
                 else:
@@ -144,7 +144,7 @@ def read_serial(ser, writer):
                         "speedStopHz=",
                         "VEL_LEAK=", "leakAlphaWinDeg=", "leakThetaWinDeg=",
                         "Saved settings to EEPROM", "Cleared EEPROM settings",
-                        "GLITCH", "SENSOR", "[DBG]"
+                        "GLITCH", "SENSOR", "[DBG]", "[WARN]"
                     ]):
                         write_event(f"Device: {line}")
 
@@ -173,10 +173,15 @@ def main():
     t = threading.Thread(target=read_serial, args=(ser, writer), daemon=True)
     t.start()
 
-    print("QUICK RUN (recommended):")
-    print("  1) Z            Calibrate (arm centered; pendulum UPRIGHT)")
-    print("  2) E            Arm/disarm (auto-engages when upright & still)")
-    print("  3) Q            Quit logger")
+    print("WORKFLOW (recommended):")
+    print("  After uploading firmware (once):")
+    print("    R             Clear EEPROM + apply defaults")
+    print("    G             Print current config (verify signs + tuning)")
+    print()
+    print("  Every balance attempt:")
+    print("    Z             Calibrate (arm centered; pendulum UPRIGHT)")
+    print("    E             Arm/disarm (auto-engages when upright & still)")
+    print("    Q             Quit logger")
     print()
     print("OTHER COMMANDS (advanced):")
     print("─" * 60)
@@ -192,7 +197,7 @@ def main():
     print()
     print("  Tuning:")
     print("    W <val>       omega_c derivative cutoff (rad/s)")
-    print("    N <val>       motor dead-zone start threshold (steps/s)")
+    print("    N <val>       motor velocity deadband (steps/s); N0 disables")
     print("    U <val>       VEL_LEAK (1/s)")
     print("    1/2/4/5 <val>  K_THETA, K_ALPHA, K_THETADOT, K_ALPHADOT")
     print()
