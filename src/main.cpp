@@ -35,6 +35,11 @@ const float BASE_STALL_CMD_HZ = 500.0f;            // steps/s
 const float BASE_STALL_MIN_DTHETA_DEG = 0.10f;     // deg per control tick
 const uint16_t BASE_STALL_WARN_TICKS = 30;         // 150 ms at 200 Hz
 
+// AS5600 status bits (not exposed as public constants in the library header).
+constexpr uint8_t AS5600_STATUS_MAGNET_HIGH = 0x08;
+constexpr uint8_t AS5600_STATUS_MAGNET_LOW = 0x10;
+constexpr uint8_t AS5600_STATUS_MAGNET_DETECT = 0x20;
+
 // Calibration sampling (averaging reduces ~0.5deg single-sample noise that can create large theta offsets).
 const int CAL_SAMPLES = 25;
 const int CAL_SAMPLE_DELAY_US = 2000;
@@ -55,14 +60,6 @@ float K_ALPHA     = 725.6f;    // 858.6f steps/s² per deg (pendulum angle gain)
 float K_THETADOT  = 28.3f;     // 50.0f steps/s² per deg/s (base velocity gain)
 float K_ALPHADOT  = 73.5f;     // 69.9f steps/s² per deg/s (pendulum velocity gain)
 
-// Legacy gains (kept for backward compatibility with serial commands)
-float ACC_KP = 742.0f;   // Equivalent to inner loop if needed
-float ACC_KD = 54.6f;
-float ACC_KI = 0.0f;
-float KTHETA = 5.0f;     // Equivalent to outer loop if needed
-float KTHETADOT = 10.0f;
-float KV_THETA = 0.0f;
-
 // --- PROFESSOR'S DERIVATIVE FILTER METHOD ---
 // Uses bilinear transform: H(s) = s/(1 + s/wc)
 // Tuning: omega_c is cutoff frequency in rad/s (20 Hz ≈ 125 rad/s)
@@ -77,24 +74,12 @@ float last_alpha_raw = 0.0f;
 float last_alpha_dot = 0.0f;
 float last_theta_raw = 0.0f;
 float last_theta_dot = 0.0f;
-
-// Legacy variables (kept for serial command compatibility)
-float D_FILT_ALPHA = 0.35f;  // Not used with professor's method
-float D_FILT_THETA = 0.20f;  // Not used with professor's method
-bool  filterFirst  = true;   // Not used with professor's method
 bool  derivInit    = false;
-
-float ALPHA_GATE_DEG = 18.0f;
-const float OUTER_MAX_ACC = 1000.0f;
-bool outerLoopEnabled = true;  // Use full-state feedback when true
 
 // Optional: velocity leak (bias killer)
 float VEL_LEAK = 2.0f; // 1/s
 const float VEL_LEAK_ALPHA_WINDOW_DEG = 5.0f; // only leak when |alpha| is small (near upright)
 const float VEL_LEAK_THETA_WINDOW_DEG = 20.0f; // only leak when |theta| is small (near center)
-
-float alphaInt = 0.0f;
-const float ALPHA_INT_CLAMP = 3.0f;
 
 // Signs
 int motorSign  = +1;   // +steps = CW from above
@@ -102,7 +87,6 @@ int ALPHA_SIGN = -1;   // default (matches historical working builds); verify wi
 int THETA_SIGN = +1;
 int CTRL_SIGN  = +1;
 
-bool debugAlpha   = false;
 bool armEnabled   = false;
 bool firstIdle    = true;
 bool isCalibrated = false;
@@ -127,9 +111,6 @@ float motorZeroDeg = 0.0f;
 
 // Controller command state (now ONLY speed is used for actuation)
 float thetaDotCmdMotor   = 0.0f;   // steps/s (MOTOR coordinates)
-
-// (kept for compatibility/logging but NOT used to command motor anymore)
-float thetaCmdStepsMotor = 0.0f;
 
 // Derivative filter outputs
 float alphaDotFilt = 0.0f;
@@ -388,11 +369,9 @@ void commandMotorSpeed(float v_steps_per_s) {
 }
 
 void resetController() {
-  thetaCmdStepsMotor   = 0.0f;
   thetaDotCmdMotor     = 0.0f;
 
   alphaDotFilt         = 0.0f;
-  alphaInt             = 0.0f;
   thetaDotFilt         = 0.0f;
 
   // Reset history for professor's derivative filter
@@ -430,6 +409,15 @@ void enterIdle(bool keepArmed = false) {
 void handleSerial() {
   while (Serial.available()) {
     char c = Serial.read();
+
+    // Emergency disarm (used by tools/run_balance.py on exit).
+    // Stops motion, disables motor outputs, and returns to IDLE.
+    if (c == '!') {
+      while (Serial.available()) Serial.read();
+      enterIdle(false);
+      Serial.println("DISARMED");
+      return;
+    }
 
     // SIGN DIAGNOSTIC MODE (kept using moveTo for discrete moves)
     if (c == 'S' || c == 's') {
@@ -606,65 +594,6 @@ void handleSerial() {
       return;
     }
 
-    if (c == '3') {
-      Serial.println("\n--- TEST 3: LIVE UPRIGHT VERIFICATION ---");
-      Serial.println("Hold pendulum UPRIGHT. Tilt it and watch if arm follows.");
-      Serial.println("Press any key to start (press again to stop)...");
-      while (!Serial.available()) { delay(10); }
-      while (Serial.available()) Serial.read();
-
-      selectMux(0);
-      float upRef = readAS5600Deg();
-
-      stepper->enableOutputs();
-      stepper->setCurrentPosition(0);
-      stepper->setAcceleration(10000);
-      stepper->setSpeedInHz(10000);
-
-      Serial.println("\n  Tilt pendulum -> arm should follow SAME direction!");
-      Serial.println("  Press any key to stop...\n");
-
-      float vel = 0, pos = 0;
-      while (!Serial.available()) {
-        selectMux(0);
-        float pNow = readAS5600Deg();
-        float alphaRaw = getAngleDiffDeg(pNow, upRef);
-        float alpha = ALPHA_SIGN * alphaRaw;
-
-        float acc = 500.0f * alpha;
-        if (acc > 5000) acc = 5000;
-        if (acc < -5000) acc = -5000;
-
-        vel += acc * 0.02f;
-        vel *= 0.95f;
-        pos += vel * 0.02f;
-        if (pos > 200) pos = 200;
-        if (pos < -200) pos = -200;
-
-        stepper->moveTo((int32_t)pos);
-
-        Serial.print("  alphaRaw="); Serial.print(alphaRaw, 1);
-        Serial.print(" deg  alpha="); Serial.print(alpha, 1);
-        Serial.print(" deg  accCmd="); Serial.print((int)acc);
-        Serial.print("  armPos="); Serial.print((int)pos);
-        Serial.println(" steps");
-
-        delay(100);
-      }
-      while (Serial.available()) Serial.read();
-
-      stepper->moveTo(0);
-      delay(300);
-      stepper->disableOutputs();
-      stepper->setAcceleration((uint32_t)MAX_ACC_STEPS);
-      stepper->setSpeedInHz((uint32_t)MAX_SPEED_HZ);
-
-      Serial.println("\n  Arm followed tilt?");
-      Serial.println("  If NO: flip ALPHA_SIGN (A 1 or A -1) and try again.");
-      Serial.println("  If YES: send Y to save, then Z (calibrate), then E (engage).");
-      return;
-    }
-
     if (c == 'Z' || c == 'z') {
       // Flush any trailing characters (e.g. old scripts sending "ZU") so they don't get
       // interpreted as a different command after calibration.
@@ -735,78 +664,66 @@ void handleSerial() {
       return;
     }
 
-    if (c == 'T' || c == 't') {
-      debugAlpha = !debugAlpha;
-      Serial.print("debugAlpha="); Serial.println(debugAlpha ? "ON" : "OFF");
-      return;
-    }
-
-    if (c == 'J' || c == 'j') {
-      float deg = Serial.parseFloat();
-      deg = constrain(deg, -20.0f, 20.0f);
-
-      int32_t steps = (int32_t)(deg * STEPS_PER_DEG);
-      stepper->enableOutputs();
-      stepper->moveTo(steps);
-      delay(300);
-      stepper->moveTo(0);
-      delay(300);
-      stepper->disableOutputs();
-
-      selectMux(1);
-      float baseDeg = getAngleDiffDeg(readAS5600Deg(), motorZeroDeg);
-      Serial.print("JOG done. baseDeg="); Serial.println(baseDeg, 2);
-      return;
-    }
-
     // Full-state feedback gain tuning
     if (c == '1') { float v = Serial.parseFloat(); K_THETA=v; Serial.print("K_THETA="); Serial.println(K_THETA,2); return; }
     if (c == '2') { float v = Serial.parseFloat(); K_ALPHA=v; Serial.print("K_ALPHA="); Serial.println(K_ALPHA,2); return; }
     if (c == '4') { float v = Serial.parseFloat(); K_THETADOT=v; Serial.print("K_THETADOT="); Serial.println(K_THETADOT,2); return; }
     if (c == '5') { float v = Serial.parseFloat(); K_ALPHADOT=v; Serial.print("K_ALPHADOT="); Serial.println(K_ALPHADOT,2); return; }
 
-    // Legacy gain commands (for reference)
-    if (c == 'P' || c == 'p') { float v = Serial.parseFloat(); if (v>0) ACC_KP=v; Serial.print("ACC_KP="); Serial.println(ACC_KP,1); return; }
-    if (c == 'D' || c == 'd') { float v = Serial.parseFloat(); if (v>0) ACC_KD=v; Serial.print("ACC_KD="); Serial.println(ACC_KD,1); return; }
-    if (c == 'I' || c == 'i') { float v = Serial.parseFloat(); if (v>=0) ACC_KI=v; Serial.print("ACC_KI="); Serial.println(ACC_KI,1); return; }
-    if (c == 'V' || c == 'v') { float v = Serial.parseFloat(); if (v>=0) KV_THETA=v; Serial.print("KV_THETA="); Serial.println(KV_THETA,2); return; }
-    if (c == 'F' || c == 'f') { float v = Serial.parseFloat(); if (v>=0.01f && v<=0.9f) D_FILT_ALPHA=v; Serial.print("D_FILT_ALPHA="); Serial.println(D_FILT_ALPHA,2); return; }
-
-    if (c == 'O' || c == 'o') { outerLoopEnabled = !outerLoopEnabled; Serial.print("stateFeedback="); Serial.println(outerLoopEnabled ? "ON" : "OFF"); return; }
-    if (c == 'K' || c == 'k') { float v = Serial.parseFloat(); if (v>=0) KTHETA=v; Serial.print("KTHETA="); Serial.println(KTHETA,1); return; }
-    if (c == 'L' || c == 'l') { float v = Serial.parseFloat(); if (v>=0) KTHETADOT=v; Serial.print("KTHETADOT="); Serial.println(KTHETADOT,1); return; }
-
     if (c == 'Y' || c == 'y') { savePersistedConfig(); return; }
     if (c == 'R' || c == 'r') { clearPersistedConfig(); return; }
 
-    if (c == 'G' || c == 'g') {
-      Serial.print("motorSign="); Serial.print(motorSign);
-      Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
-      Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
-      Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
+	    if (c == 'G' || c == 'g') {
+	      Serial.print("motorSign="); Serial.print(motorSign);
+	      Serial.print(" ALPHA_SIGN="); Serial.print(ALPHA_SIGN);
+	      Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
+	      Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
 
-      // Raw sensors + stored zeros (helps debug off-center settling / calibration bias).
-      selectMux(0);
-      float pendRawNow = wrap360(readAS5600Deg());
-      selectMux(1);
-      float baseRawNow = wrap360(readAS5600Deg());
-      Serial.print("pendRawDeg="); Serial.print(pendRawNow, 2);
-      Serial.print(" targetRawDeg="); Serial.println(targetRawDeg, 2);
-      Serial.print("targetRawDegCal="); Serial.print(targetRawDegCal, 2);
-      Serial.print(" (diff="); Serial.print(getAngleDiffDeg(targetRawDeg, targetRawDegCal), 2);
-      Serial.println(")");
-      Serial.print("baseRawDeg="); Serial.print(baseRawNow, 2);
-      Serial.print(" motorZeroDeg="); Serial.println(motorZeroDeg, 2);
+	      // Raw sensors + stored zeros (helps debug off-center settling / calibration bias).
+	      selectMux(0);
+	      float pendRawNow = wrap360(readAS5600Deg());
+	      uint8_t pendSt = sensor.readStatus();
+	      uint8_t pendAgc = sensor.readAGC();
+	      uint16_t pendMag = sensor.readMagnitude();
+	      selectMux(1);
+	      float baseRawNow = wrap360(readAS5600Deg());
+	      uint8_t baseSt = sensor.readStatus();
+	      uint8_t baseAgc = sensor.readAGC();
+	      uint16_t baseMag = sensor.readMagnitude();
+	      Serial.print("pendRawDeg="); Serial.print(pendRawNow, 2);
+	      Serial.print(" targetRawDeg="); Serial.println(targetRawDeg, 2);
+	      Serial.print("pendMag="); Serial.print(pendMag);
+	      Serial.print(" agc="); Serial.print(pendAgc);
+	      Serial.print(" st=0x"); Serial.print(pendSt, HEX);
+	      Serial.print(" md/hi/lo=");
+	      Serial.print((pendSt & AS5600_STATUS_MAGNET_DETECT) ? 1 : 0);
+	      Serial.print("/");
+	      Serial.print((pendSt & AS5600_STATUS_MAGNET_HIGH) ? 1 : 0);
+	      Serial.print("/");
+	      Serial.println((pendSt & AS5600_STATUS_MAGNET_LOW) ? 1 : 0);
+	      Serial.print("targetRawDegCal="); Serial.print(targetRawDegCal, 2);
+	      Serial.print(" (diff="); Serial.print(getAngleDiffDeg(targetRawDeg, targetRawDegCal), 2);
+	      Serial.println(")");
+	      Serial.print("baseRawDeg="); Serial.print(baseRawNow, 2);
+	      Serial.print(" motorZeroDeg="); Serial.println(motorZeroDeg, 2);
+	      Serial.print("baseMag="); Serial.print(baseMag);
+	      Serial.print(" agc="); Serial.print(baseAgc);
+	      Serial.print(" st=0x"); Serial.print(baseSt, HEX);
+	      Serial.print(" md/hi/lo=");
+	      Serial.print((baseSt & AS5600_STATUS_MAGNET_DETECT) ? 1 : 0);
+	      Serial.print("/");
+	      Serial.print((baseSt & AS5600_STATUS_MAGNET_HIGH) ? 1 : 0);
+	      Serial.print("/");
+	      Serial.println((baseSt & AS5600_STATUS_MAGNET_LOW) ? 1 : 0);
 
-      Serial.print("omega_c="); Serial.print(omega_c, 1);
-      Serial.print(" (b0="); Serial.print(d_b0, 4);
-      Serial.print(", a1="); Serial.print(d_a1, 4);
+	      Serial.print("omega_c="); Serial.print(omega_c, 1);
+	      Serial.print(" (b0="); Serial.print(d_b0, 4);
+	      Serial.print(", a1="); Serial.print(d_a1, 4);
       Serial.print(") speedStopHz="); Serial.println(speedStopHz, 2);
       Serial.print("VEL_LEAK="); Serial.print(VEL_LEAK, 3);
       Serial.print(" leakAlphaWinDeg="); Serial.print(VEL_LEAK_ALPHA_WINDOW_DEG, 2);
       Serial.print(" leakThetaWinDeg="); Serial.println(VEL_LEAK_THETA_WINDOW_DEG, 2);
-      Serial.print("StateFeedback="); Serial.print(outerLoopEnabled ? "ON" : "OFF");
-      Serial.print(" K_THETA="); Serial.print(K_THETA, 2);
+      Serial.print("K_THETA="); Serial.print(K_THETA, 2);
       Serial.print(" K_ALPHA="); Serial.print(K_ALPHA, 2);
       Serial.print(" K_THETADOT="); Serial.print(K_THETADOT, 2);
       Serial.print(" K_ALPHADOT="); Serial.println(K_ALPHADOT, 2);
@@ -844,13 +761,6 @@ void handleSerial() {
       return;
     }
 
-    if (c == 'X' || c == 'x') {
-      filterFirst = !filterFirst;
-      derivInit = false;
-      Serial.print("Derivative mode: ");
-      Serial.println(filterFirst ? "FILTER-FIRST (smoother)" : "DIFF-FIRST (faster)");
-      return;
-    }
   }
 }
 
@@ -888,8 +798,7 @@ void setup() {
   Serial.print(" THETA_SIGN="); Serial.print(THETA_SIGN);
   Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
   Serial.print("speedStopHz="); Serial.println(speedStopHz, 2);
-  Serial.print("StateFeedback="); Serial.print(outerLoopEnabled ? "ON" : "OFF");
-  Serial.print(" K_THETA="); Serial.print(K_THETA,2);
+  Serial.print("K_THETA="); Serial.print(K_THETA,2);
   Serial.print(" K_ALPHA="); Serial.print(K_ALPHA,2);
   Serial.print(" K_THETADOT="); Serial.print(K_THETADOT,2);
   Serial.print(" K_ALPHADOT="); Serial.println(K_ALPHADOT,2);
@@ -1007,15 +916,6 @@ void loop() {
       last_theta_raw = thetaDeg;
       last_theta_dot = thetaDotFilt;
 
-      if (debugAlpha) {
-        static uint32_t dec = 0;
-        if (++dec >= 10) {
-          dec = 0;
-          int32_t a100raw = (int32_t)(alphaDegRaw * 100.0f);
-          Serial.print("ALPHA_RAW_x100="); Serial.println(a100raw);
-        }
-      }
-
       bool ok = (fabs(alphaDegRaw) < ENGAGE_PEND_DEG) && (fabs(alphaDotFilt) < ENGAGE_DOT_DEG);
 
       static uint32_t dec2 = 0;
@@ -1036,9 +936,7 @@ void loop() {
 
       if (isCalibrated && armEnabled && engageCount >= ENGAGE_COUNT_REQ) {
         // Keep warm derivatives; reset only controller integrators/commands
-        alphaInt = 0.0f;
         thetaDotCmdMotor = 0.0f;
-        thetaCmdStepsMotor = 0.0f;
         runDir = 0;
         fallCount = 0;
         lastAccCmdDiag = 0;
@@ -1149,6 +1047,15 @@ void loop() {
           stallWarned = true;
           dbgBaseStallEvents++;
 
+          // Read magnet diagnostics for the BASE sensor (mux=1) while we're here.
+          // (No I2C error will be raised if the magnet is misaligned; the STATUS bits and MAGNITUDE help diagnose that.)
+          uint8_t st = sensor.readStatus();
+          uint8_t agc = sensor.readAGC();
+          uint16_t mag = sensor.readMagnitude();
+          const int md = (st & AS5600_STATUS_MAGNET_DETECT) ? 1 : 0;
+          const int hi = (st & AS5600_STATUS_MAGNET_HIGH) ? 1 : 0;
+          const int lo = (st & AS5600_STATUS_MAGNET_LOW) ? 1 : 0;
+
           Serial.print("[WARN] BASE_STALL? dTheta="); Serial.print(dThetaMon, 3);
           Serial.print(" deg | velCmd="); Serial.print((int)thetaDotCmdMotor);
           Serial.print(" runDir="); Serial.print(runDir);
@@ -1156,6 +1063,12 @@ void loop() {
           Serial.print(" thetaDot="); Serial.print(thetaDotFilt, 1);
           Serial.print(" | baseRaw="); Serial.print(baseAbsDeg, 2);
           Serial.print(" zero="); Serial.print(motorZeroDeg, 2);
+          Serial.print(" | mag="); Serial.print(mag);
+          Serial.print(" agc="); Serial.print(agc);
+          Serial.print(" st=0x"); Serial.print(st, HEX);
+          Serial.print(" md/hi/lo="); Serial.print(md);
+          Serial.print("/"); Serial.print(hi);
+          Serial.print("/"); Serial.print(lo);
           Serial.print(" | alpha="); Serial.print(alphaRawSigned, 2);
           Serial.print(" alphaDot="); Serial.print(alphaDotFilt, 1);
           Serial.print(" | accPrev="); Serial.println(lastAccCmdDiag);
@@ -1172,45 +1085,20 @@ void loop() {
       // Gains are negative (from pole placement), providing restoring force
       // ============================================================
       
-      float accCmdPhysical = 0.0f;
-      
-      if (outerLoopEnabled) {
-        // Full-state feedback: direct application of state feedback law
-        float alphaCtrl = alphaRawSigned;
-        if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
+      float alphaCtrl = alphaRawSigned;
+      if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
 
-        accCmdPhysical = K_THETA * thetaDeg + K_ALPHA * alphaCtrl + 
-                         K_THETADOT * thetaDotFilt + K_ALPHADOT * alphaDotFilt;
-        
-        // Apply control sign convention
-        accCmdPhysical *= CTRL_SIGN;
-      } else {
-        // Fallback: legacy two-loop controller for comparison
-        float alphaCtrl = alphaRawSigned;
-        if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
-        
-        alphaInt += alphaCtrl * dt;
-        alphaInt = constrain(alphaInt, -ALPHA_INT_CLAMP, ALPHA_INT_CLAMP);
-        
-        float inner = CTRL_SIGN * (ACC_KP * alphaCtrl + ACC_KD * alphaDotFilt + ACC_KI * alphaInt);
-        
-        if (fabs(alphaCtrl) < ALPHA_GATE_DEG) {
-          float outer = -(KTHETA * thetaDeg + KTHETADOT * thetaDotFilt);
-          outer = constrain(outer, -OUTER_MAX_ACC, OUTER_MAX_ACC);
-          inner += CTRL_SIGN * outer;
-        }
-        
-        accCmdPhysical = inner;
-      }
+      float accCmdPhysical =
+          K_THETA * thetaDeg + K_ALPHA * alphaCtrl +
+          K_THETADOT * thetaDotFilt + K_ALPHADOT * alphaDotFilt;
+
+      // Apply control sign convention
+      accCmdPhysical *= CTRL_SIGN;
 
       // ramp on engage
       float ramp = (millis() - engageStartMs) * (1.0f / 100.0f);
       if (ramp > 1.0f) ramp = 1.0f;
       accCmdPhysical *= ramp;
-
-      if (KV_THETA > 0.0f) {
-        accCmdPhysical += -(KV_THETA * thetaDotFilt);
-      }
 
       int sat = 0;
       if (accCmdPhysical >  MAX_ACC_STEPS) { accCmdPhysical =  MAX_ACC_STEPS; sat = 1; }
@@ -1227,14 +1115,6 @@ void loop() {
         float trDiff = getAngleDiffDeg(targetRawDeg, targetRawDegCal);
         if (trDiff > ALPHA_TRIM_MAX_DEG) { targetRawDeg = wrap360(targetRawDegCal + ALPHA_TRIM_MAX_DEG); dbgTrimClampedTicks++; }
         if (trDiff < -ALPHA_TRIM_MAX_DEG) { targetRawDeg = wrap360(targetRawDegCal - ALPHA_TRIM_MAX_DEG); dbgTrimClampedTicks++; }
-      }
-
-      // Anti-windup for legacy integral term (only used if outerLoopEnabled=false)
-      if (sat && !outerLoopEnabled) {
-        float alphaCtrl = alphaRawSigned;
-        if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
-        alphaInt -= alphaCtrl * dt;
-        alphaInt = constrain(alphaInt, -ALPHA_INT_CLAMP, ALPHA_INT_CLAMP);
       }
 
       // Apply motor sign

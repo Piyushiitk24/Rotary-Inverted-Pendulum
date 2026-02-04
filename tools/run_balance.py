@@ -29,6 +29,41 @@ HEADER = [
     "position_clamped",    # 1 if near limits, 0 otherwise
 ]
 
+IMPORTANT_EVENT_KEYS = [
+    "CALIBRATED",
+    "ENGAGED",
+    "FALLEN",
+    "DISARMED",
+    "armEnabled",
+    "motorSign=",
+    "ALPHA_SIGN=",
+    "THETA_SIGN=",
+    "CTRL_SIGN=",
+    "pendRawDeg=",
+    "baseRawDeg=",
+    "targetRawDeg=",
+    "targetRawDegCal=",
+    "motorZeroDeg=",
+    "K_THETA=",
+    "K_ALPHA=",
+    "K_THETADOT=",
+    "K_ALPHADOT=",
+    "Derivative Filter",
+    "omega_c=",
+    "speedStopHz=",
+    "VEL_LEAK=",
+    "leakAlphaWinDeg=",
+    "leakThetaWinDeg=",
+    "Saved settings to EEPROM",
+    "Cleared EEPROM settings",
+    "[DBG]",
+    "[WARN]",
+]
+
+
+def is_important_event_line(line: str) -> bool:
+    return any(key in line for key in IMPORTANT_EVENT_KEYS)
+
 # --- SETUP SESSION ---
 session_name = datetime.now().strftime("session_%Y%m%d_%H%M%S")
 session_dir = os.path.join(BASE_LOG_DIR, session_name)
@@ -96,56 +131,20 @@ def read_serial(ser, writer):
                             # Not valid numeric data, print as device message
                             print(f"[DEVICE]: {line}")
                             # Log important events even if the line contains commas
-                            if any(key in line for key in [
-                                "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
-                                "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
-                                "pendRawDeg=", "baseRawDeg=", "targetRawDeg=", "targetRawDegCal=", "motorZeroDeg=",
-                                "Alpha trim",
-                                "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
-                                "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
-                                "stateFeedback=", "Derivative Filter", "omega_c=",
-                                "speedStopHz=",
-                                "VEL_LEAK=", "leakAlphaWinDeg=",
-                                "Saved settings to EEPROM", "Cleared EEPROM settings",
-                                "GLITCH", "SENSOR", "[DBG]", "[WARN]"
-                            ]):
+                            if is_important_event_line(line):
                                 write_event(f"Device: {line}")
                     else:
                         # Wrong number of columns, treat as device message
                         print(f"[DEVICE]: {line}")
                         # Log important events even if the line contains commas
-                        if any(key in line for key in [
-                            "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
-                            "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
-                            "pendRawDeg=", "baseRawDeg=", "targetRawDeg=", "targetRawDegCal=", "motorZeroDeg=",
-                            "Alpha trim",
-                            "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
-                            "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
-                            "stateFeedback=", "Derivative Filter", "omega_c=",
-                            "speedStopHz=",
-                            "VEL_LEAK=", "leakAlphaWinDeg=", "leakThetaWinDeg=",
-                            "Saved settings to EEPROM", "Cleared EEPROM settings",
-                            "GLITCH", "SENSOR", "[DBG]", "[WARN]"
-                        ]):
+                        if is_important_event_line(line):
                             write_event(f"Device: {line}")
                 else:
                     # Status/command lines from firmware
                     print(f"[DEVICE]: {line}")
 
                     # Log important events
-                    if any(key in line for key in [
-                        "CALIBRATED", "ENGAGED", "FALLEN", "armEnabled",
-                        "motorSign=", "ALPHA_SIGN=", "THETA_SIGN=", "CTRL_SIGN=",
-                        "pendRawDeg=", "baseRawDeg=", "targetRawDeg=", "targetRawDegCal=", "motorZeroDeg=",
-                        "Alpha trim",
-                        "K_THETA=", "K_ALPHA=", "K_THETADOT=", "K_ALPHADOT=",
-                        "ACC_KP=", "ACC_KD=", "KTHETA=", "KTHETADOT=",
-                        "stateFeedback=", "Derivative Filter", "omega_c=",
-                        "speedStopHz=",
-                        "VEL_LEAK=", "leakAlphaWinDeg=", "leakThetaWinDeg=",
-                        "Saved settings to EEPROM", "Cleared EEPROM settings",
-                        "GLITCH", "SENSOR", "[DBG]", "[WARN]"
-                    ]):
+                    if is_important_event_line(line):
                         write_event(f"Device: {line}")
 
         except Exception as e:
@@ -200,11 +199,6 @@ def main():
     print("    N <val>       motor velocity deadband (steps/s); N0 disables")
     print("    U <val>       VEL_LEAK (1/s)")
     print("    1/2/4/5 <val>  K_THETA, K_ALPHA, K_THETADOT, K_ALPHADOT")
-    print()
-    print("  Mode/Testing:")
-    print("    O             Toggle state feedback ON/OFF")
-    print("    J <deg>       Jog arm by <deg> degrees")
-    print("    T             Toggle alpha debug output")
     print("─" * 60)
     print()
 
@@ -221,6 +215,17 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\nInterrupted by user (Ctrl+C)")
+
+    # Best-effort disarm to avoid leaving the driver energized between runs.
+    # (Firmware handles '!' as an emergency disarm that disables motor outputs.)
+    try:
+        ser.write(b'!\n')
+        ser.flush()
+        time.sleep(0.05)
+        print("→ Sent: ! (auto disarm)")
+        write_event("User command (auto): !")
+    except Exception:
+        pass
 
     # Cleanup
     stop_event.set()
