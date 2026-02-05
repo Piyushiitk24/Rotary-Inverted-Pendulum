@@ -81,11 +81,51 @@ float VEL_LEAK = 2.0f; // 1/s
 const float VEL_LEAK_ALPHA_WINDOW_DEG = 5.0f; // only leak when |alpha| is small (near upright)
 const float VEL_LEAK_THETA_WINDOW_DEG = 20.0f; // only leak when |theta| is small (near center)
 
+// ---------------- BASE POSITION COMMAND ("NUDGE" MODE) ----------------
+const float THETA_TARGET_LIMIT_DEG = 35.0f;
+float thetaMoveMaxVelDegS = 12.0f;
+float thetaMoveMaxAccDegS2 = 60.0f;
+
+const float MOVE_ALPHA_WINDOW_DEG = 5.0f;
+const float MOVE_ALPHADOT_WINDOW_DEG_S = 80.0f;
+
+const float THETA_REF_SNAP_EPS_DEG = 0.05f;
+const float THETA_REF_SNAP_VEL_EPS_DEG_S = 0.2f;
+
+const uint32_t MOVE_ENGAGE_GRACE_MS = 200;
+const uint8_t MOVE_UNSTABLE_TICKS_REQ = 10;  // 50ms @ 200Hz (debounce)
+const uint8_t MOVE_STABLE_TICKS_REQ = 10;    // 50ms @ 200Hz (debounce)
+
+// ---------------- NONLINEAR UPRIGHT CONTROL (SMC) ----------------
+// Identified plant constants (tools/modelling_complete.md):
+//   alphaDDot = A*sin(alpha) + sin(alpha)*cos(alpha)*thetaDot^2 - B*cos(alpha)*thetaDDot
+const float MODEL_A = 100.8f;  // 1/s^2 (rad-based)
+const float MODEL_B = 1.952f;  // dimensionless
+
+float smcLambda = 15.0f;       // 1/s
+float smcKDegS2 = 800.0f;      // deg/s^2
+float smcPhiDegS = 50.0f;      // deg/s (boundary layer thickness)
+float smcSign = +1.0f;         // SMC-only sign flip knob (+1 or -1)
+float smcBaseScale = 1.0f;     // 0..2 scale for base tracking blend (default: keep arm near center)
+
+const float SMC_ALPHA_ABORT_DEG = 25.0f;  // upright-only hard window (no swing-up)
+const float SMC_ALPHADOT_ABORT_DEG_S = 250.0f;  // abort if pendulum rate is extreme (upright-only)
+const uint8_t SMC_ALPHADOT_ABORT_TICKS_REQ = 3; // debounce to avoid single-sample noise
+// Gate the SMC base-centering blend with a looser window than MOVE_* (which is only for profile advance).
+// We still want centering active during typical alphaDot transients.
+const float SMC_BASE_GATE_ALPHA_WINDOW_DEG = 5.0f;
+const float SMC_BASE_GATE_ALPHADOT_WINDOW_DEG_S = 150.0f;
+const float SMC_COS_MIN = 0.2f;           // glitch guard for cos(alpha) in division
+const float THETA_DDOT_MAX_DEG_S2 = MAX_ACC_STEPS / STEPS_PER_DEG;  // clamp before steps conversion
+
 // Signs
 int motorSign  = +1;   // +steps = CW from above
 int ALPHA_SIGN = -1;   // default (matches historical working builds); verify with 'S' and save with 'Y'
 int THETA_SIGN = +1;
 int CTRL_SIGN  = +1;
+
+enum CtrlMode { CTRL_LINEAR = 0, CTRL_SMC = 1 };
+CtrlMode ctrlMode = CTRL_LINEAR;
 
 bool armEnabled   = false;
 bool firstIdle    = true;
@@ -108,6 +148,15 @@ State currentState = STATE_CALIBRATE;
 float targetRawDeg = 0.0f;
 float targetRawDegCal = 0.0f;  // calibration reference (for auto-trim clamp)
 float motorZeroDeg = 0.0f;
+
+// ---------------- BASE POSITION REFERENCE STATE ----------------
+float thetaTargetDeg = 0.0f;
+float thetaRefDeg = 0.0f;
+float thetaRefVelDegS = 0.0f;
+float thetaRefAccDegS2 = 0.0f;
+bool movePaused = false;
+uint8_t moveStableTicks = 0;
+uint8_t moveUnstableTicks = 0;
 
 // Controller command state (now ONLY speed is used for actuation)
 float thetaDotCmdMotor   = 0.0f;   // steps/s (MOTOR coordinates)
@@ -134,6 +183,7 @@ int32_t lastAccCmdDiag = 0;
 float thetaDegPrevForStall = 0.0f;
 uint16_t stallNoMoveTicks = 0;
 bool stallWarned = false;
+uint8_t smcAlphaDotAbortTicks = 0;
 
 // ---------------- DIAGNOSTIC COUNTERS (ACTIVE ONLY) ----------------
 uint32_t dbgTicksActive = 0;
@@ -319,6 +369,52 @@ float averageMuxAngleDeg(uint8_t ch, int samples, int delayUs) {
   return wrap360(avgDeg);
 }
 
+static int signum(float x) {
+  return (x > 0.0f) - (x < 0.0f);
+}
+
+static void flushSerialLine() {
+  while (Serial.available()) {
+    char ch = (char)Serial.read();
+    if (ch == '\n' || ch == '\r') break;
+  }
+}
+
+static void stepThetaReferenceTrapezoid(float dt) {
+  float dist = getAngleDiffDeg(thetaTargetDeg, thetaRefDeg);  // target - ref (wrap-safe)
+
+  if (fabs(dist) < THETA_REF_SNAP_EPS_DEG &&
+      fabs(thetaRefVelDegS) < THETA_REF_SNAP_VEL_EPS_DEG_S) {
+    thetaRefDeg = thetaTargetDeg;
+    thetaRefVelDegS = 0.0f;
+    thetaRefAccDegS2 = 0.0f;
+    return;
+  }
+
+  const float amax = max(thetaMoveMaxAccDegS2, 1e-3f);
+  const float vmax = max(thetaMoveMaxVelDegS, 1e-3f);
+
+  float stopDist = (thetaRefVelDegS * thetaRefVelDegS) / (2.0f * amax);
+
+  if (fabs(dist) <= stopDist) {
+    thetaRefAccDegS2 = -((float)signum(thetaRefVelDegS)) * amax;
+  } else {
+    thetaRefAccDegS2 = ((float)signum(dist)) * amax;
+  }
+
+  thetaRefVelDegS += thetaRefAccDegS2 * dt;
+  thetaRefVelDegS = constrain(thetaRefVelDegS, -vmax, vmax);
+
+  thetaRefDeg += thetaRefVelDegS * dt;
+
+  float newDist = getAngleDiffDeg(thetaTargetDeg, thetaRefDeg);
+  if (signum(dist) != 0 && signum(newDist) != signum(dist)) {
+    thetaRefDeg = thetaTargetDeg;
+    thetaRefVelDegS = 0.0f;
+    thetaRefAccDegS2 = 0.0f;
+  }
+}
+
 // Command motor in continuous velocity mode
 void commandMotorSpeed(float v_steps_per_s) {
   const int prevRunDir = runDir;
@@ -374,6 +470,12 @@ void resetController() {
   alphaDotFilt         = 0.0f;
   thetaDotFilt         = 0.0f;
 
+  thetaRefVelDegS      = 0.0f;
+  thetaRefAccDegS2     = 0.0f;
+  movePaused           = false;
+  moveStableTicks      = 0;
+  moveUnstableTicks    = 0;
+
   // Reset history for professor's derivative filter
   last_alpha_raw       = 0.0f;
   last_alpha_dot       = 0.0f;
@@ -389,6 +491,7 @@ void resetController() {
   thetaDegPrevForStall = 0.0f;
   stallNoMoveTicks     = 0;
   stallWarned          = false;
+  smcAlphaDotAbortTicks = 0;
   resetDebugCounters();
 }
 
@@ -613,6 +716,14 @@ void handleSerial() {
       Serial.print(" (old="); Serial.print(oldTarget, 2); Serial.println(")");
       Serial.print("motorZeroDeg="); Serial.println(motorZeroDeg, 2);
 
+      thetaTargetDeg = 0.0f;
+      thetaRefDeg = 0.0f;
+      thetaRefVelDegS = 0.0f;
+      thetaRefAccDegS2 = 0.0f;
+      movePaused = false;
+      moveStableTicks = 0;
+      moveUnstableTicks = 0;
+
       stepper->setCurrentPosition(0);
       resetController();
 
@@ -727,6 +838,21 @@ void handleSerial() {
       Serial.print(" K_ALPHA="); Serial.print(K_ALPHA, 2);
       Serial.print(" K_THETADOT="); Serial.print(K_THETADOT, 2);
       Serial.print(" K_ALPHADOT="); Serial.println(K_ALPHADOT, 2);
+
+      Serial.print("thetaTargetDeg="); Serial.print(thetaTargetDeg, 2);
+      Serial.print(" thetaRefDeg="); Serial.print(thetaRefDeg, 2);
+      Serial.print(" thetaRefVelDegS="); Serial.print(thetaRefVelDegS, 2);
+      Serial.print(" thetaRefAccDegS2="); Serial.println(thetaRefAccDegS2, 2);
+      Serial.print("thetaMoveMaxVelDegS="); Serial.print(thetaMoveMaxVelDegS, 2);
+      Serial.print(" thetaMoveMaxAccDegS2="); Serial.print(thetaMoveMaxAccDegS2, 2);
+      Serial.print(" movePaused="); Serial.println(movePaused ? 1 : 0);
+
+      Serial.print("ctrlMode="); Serial.println((ctrlMode == CTRL_SMC) ? "SMC" : "LIN");
+      Serial.print("smcLambda="); Serial.print(smcLambda, 2);
+      Serial.print(" smcKDegS2="); Serial.print(smcKDegS2, 2);
+      Serial.print(" smcPhiDegS="); Serial.print(smcPhiDegS, 2);
+      Serial.print(" smcSign="); Serial.print(smcSign, 1);
+      Serial.print(" smcBaseScale="); Serial.println(smcBaseScale, 2);
       return;
     }
 
@@ -734,6 +860,103 @@ void handleSerial() {
       float v = Serial.parseFloat();
       if (v >= 0.0f && v <= 20.0f) VEL_LEAK = v;
       Serial.print("VEL_LEAK="); Serial.println(VEL_LEAK, 3);
+      return;
+    }
+
+    // Controller mode select (linear full-state vs nonlinear SMC)
+    if (c == 'C' || c == 'c') {
+      if (currentState != STATE_IDLE) {
+        flushSerialLine();
+        Serial.println("ERR: SMC mode changes only allowed in IDLE.");
+        return;
+      }
+      int v = (int)Serial.parseInt();
+      ctrlMode = (v == 1) ? CTRL_SMC : CTRL_LINEAR;
+      Serial.print("[CTRL] mode="); Serial.println((ctrlMode == CTRL_SMC) ? "SMC" : "LIN");
+      return;
+    }
+
+    // Nonlinear upright SMC tuning
+    if (c == 'J' || c == 'j') {
+      if (currentState != STATE_IDLE) {
+        flushSerialLine();
+        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+        return;
+      }
+      float v = Serial.parseFloat();
+      if (v > 0.0f && v <= 200.0f) smcLambda = v;
+      Serial.print("smcLambda="); Serial.println(smcLambda, 2);
+      return;
+    }
+
+    if (c == 'K' || c == 'k') {
+      if (currentState != STATE_IDLE) {
+        flushSerialLine();
+        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+        return;
+      }
+      float v = Serial.parseFloat();
+      if (v > 0.0f && v <= 20000.0f) smcKDegS2 = v;
+      Serial.print("smcKDegS2="); Serial.println(smcKDegS2, 2);
+      return;
+    }
+
+    if (c == 'P' || c == 'p') {
+      if (currentState != STATE_IDLE) {
+        flushSerialLine();
+        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+        return;
+      }
+      float v = Serial.parseFloat();
+      if (v > 0.0f && v <= 10000.0f) smcPhiDegS = v;
+      Serial.print("smcPhiDegS="); Serial.println(smcPhiDegS, 2);
+      return;
+    }
+
+    if (c == 'Q' || c == 'q') {
+      if (currentState != STATE_IDLE) {
+        flushSerialLine();
+        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+        return;
+      }
+      int v = (int)Serial.parseInt();
+      if (v == 1 || v == -1) smcSign = (float)v;
+      Serial.print("smcSign="); Serial.println(smcSign, 1);
+      return;
+    }
+
+    if (c == 'O' || c == 'o') {
+      if (currentState != STATE_IDLE) {
+        flushSerialLine();
+        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+        return;
+      }
+      float v = Serial.parseFloat();
+      if (v >= 0.0f && v <= 2.0f) smcBaseScale = v;
+      Serial.print("smcBaseScale="); Serial.println(smcBaseScale, 2);
+      return;
+    }
+
+    // Base position command (nudge mode)
+    if (c == 'T' || c == 't') {
+      float v = Serial.parseFloat();
+      const float lim = min(THETA_TARGET_LIMIT_DEG, (LIM_MOTOR_DEG - 2.0f));
+      thetaTargetDeg = constrain(v, -lim, lim);
+      Serial.print("thetaTargetDeg="); Serial.println(thetaTargetDeg, 2);
+      return;
+    }
+
+    if (c == 'V' || c == 'v') {
+      float v = Serial.parseFloat();
+      if (v > 0.0f && v <= 200.0f) thetaMoveMaxVelDegS = v;
+      Serial.print("thetaMoveMaxVelDegS="); Serial.println(thetaMoveMaxVelDegS, 2);
+      return;
+    }
+
+    if (c == 'X' || c == 'x') {
+      float v = Serial.parseFloat();
+      if (v > 0.0f && v <= 2000.0f) thetaMoveMaxAccDegS2 = v;
+      Serial.print("thetaMoveMaxAccDegS2="); Serial.println(thetaMoveMaxAccDegS2, 2);
       return;
     }
 
@@ -783,6 +1006,17 @@ void setup() {
   Serial.println("Quick run:");
   Serial.println("  Z  -> Calibrate (arm centered; pendulum UPRIGHT)");
   Serial.println("  E  -> Arm/disarm (auto-engages when upright & still)");
+  Serial.println("Motion:");
+  Serial.println("  T <deg>     -> Base target angle (deg)");
+  Serial.println("  V <deg/s>   -> Move max velocity");
+  Serial.println("  X <deg/s^2> -> Move max acceleration");
+  Serial.println("Control (SMC commands only in IDLE):");
+  Serial.println("  C <0|1>     -> Controller mode (0=linear, 1=SMC)");
+  Serial.println("  J <val>     -> SMC lambda (1/s)");
+  Serial.println("  K <val>     -> SMC K (deg/s^2)");
+  Serial.println("  P <val>     -> SMC phi (deg/s)");
+  Serial.println("  Q <+1|-1>   -> SMC sign flip");
+  Serial.println("  O <0..2>    -> SMC base tracking scale");
   Serial.println("Useful:");
   Serial.println("  S (sign wizard), G (print config), R (clear EEPROM), Y (save), W/N/U (tuning)");
   Serial.println("Log: t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped");
@@ -998,6 +1232,20 @@ void loop() {
         fallCount = 0;
       }
 
+      // Upright-only nonlinear controller validity window (no swing-up).
+      // Abort immediately rather than relying on cos clamps or the wider mechanical limits.
+      if (ctrlMode == CTRL_SMC && fabs(alphaRawSigned) > SMC_ALPHA_ABORT_DEG) {
+        Serial.print("FALLEN limit=smc_alpha");
+        Serial.print(" | alpha="); Serial.print(alphaRawSigned, 2);
+        Serial.print(" alphaDot="); Serial.print(alphaDotFilt, 1);
+        Serial.print(" | theta="); Serial.print(thetaDeg, 2);
+        Serial.print(" thetaDot="); Serial.println(thetaDotFilt, 1);
+        enterIdle(true);
+        Serial.println("FALLEN (will auto-rearm when upright)");
+        fallCount = 0;
+        break;
+      }
+
       // ============================================================
       // PROFESSOR'S DERIVATIVE FILTER METHOD
       // Formula: y[n] = b0*(x[n] - x[n-1]) - a1*y[n-1]
@@ -1029,6 +1277,30 @@ void loop() {
       
       last_theta_raw = thetaDeg;
       last_theta_dot = thetaDotFilt;
+
+      // Additional upright-only SMC abort: extreme alphaDot inside the angle window tends to rail accel
+      // and can walk the base. Debounced to avoid single-sample noise.
+      if (ctrlMode == CTRL_SMC) {
+        if (fabs(alphaDotFilt) > SMC_ALPHADOT_ABORT_DEG_S) {
+          if (smcAlphaDotAbortTicks < 255) smcAlphaDotAbortTicks++;
+          if (smcAlphaDotAbortTicks >= SMC_ALPHADOT_ABORT_TICKS_REQ) {
+            Serial.print("FALLEN limit=smc_alphaDot");
+            Serial.print(" | alpha="); Serial.print(alphaRawSigned, 2);
+            Serial.print(" alphaDot="); Serial.print(alphaDotFilt, 1);
+            Serial.print(" | theta="); Serial.print(thetaDeg, 2);
+            Serial.print(" thetaDot="); Serial.println(thetaDotFilt, 1);
+            enterIdle(true);
+            Serial.println("FALLEN (will auto-rearm when upright)");
+            fallCount = 0;
+            smcAlphaDotAbortTicks = 0;
+            break;
+          }
+        } else {
+          smcAlphaDotAbortTicks = 0;
+        }
+      } else {
+        smcAlphaDotAbortTicks = 0;
+      }
 
       // Base motion watchdog: if we're commanding significant speed but theta doesn't move,
       // this strongly suggests a motor/driver/mechanical dropout (or the base sensor is stuck).
@@ -1080,17 +1352,143 @@ void loop() {
       thetaDegPrevForStall = thetaDeg;
 
       // ============================================================
-      // FULL-STATE FEEDBACK CONTROLLER (Section 11.7 modelling_complete.md)
-      // Control law: accCmdPhysical = K_THETA*theta + K_ALPHA*alpha + K_THETADOT*thetaDot + K_ALPHADOT*alphaDot
-      // Gains are negative (from pole placement), providing restoring force
+      // BASE POSITION REFERENCE ("NUDGE" MODE): trapezoidal theta_ref
       // ============================================================
-      
-      float alphaCtrl = alphaRawSigned;
-      if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
+      const float distNow = getAngleDiffDeg(thetaTargetDeg, thetaRefDeg);
+      const bool moveInProgress = movePaused ||
+          (fabs(distNow) > THETA_REF_SNAP_EPS_DEG) ||
+          (fabs(thetaRefVelDegS) > THETA_REF_SNAP_VEL_EPS_DEG_S);
 
-      float accCmdPhysical =
-          K_THETA * thetaDeg + K_ALPHA * alphaCtrl +
-          K_THETADOT * thetaDotFilt + K_ALPHADOT * alphaDotFilt;
+      const bool moveStable =
+          (fabs(alphaRawSigned) < MOVE_ALPHA_WINDOW_DEG) &&
+          (fabs(alphaDotFilt) < MOVE_ALPHADOT_WINDOW_DEG_S);
+
+      const bool engageGraceOver = (millis() - engageStartMs) > MOVE_ENGAGE_GRACE_MS;
+      const bool stableNow = engageGraceOver && moveStable;
+
+      if (moveInProgress) {
+        if (movePaused) {
+          if (stableNow) {
+            if (moveStableTicks < 255) moveStableTicks++;
+            if (moveStableTicks >= MOVE_STABLE_TICKS_REQ) {
+              movePaused = false;
+              moveStableTicks = 0;
+              moveUnstableTicks = 0;
+              Serial.println("[MOVE] RESUMED");
+            }
+          } else {
+            moveStableTicks = 0;
+          }
+        } else {
+          if (!stableNow) {
+            // Freeze the reference kinematics while we debounce instability (prevents stale refVel/refAcc usage).
+            thetaRefVelDegS = 0.0f;
+            thetaRefAccDegS2 = 0.0f;
+
+            if (moveUnstableTicks < 255) moveUnstableTicks++;
+            moveStableTicks = 0;
+            if (moveUnstableTicks >= MOVE_UNSTABLE_TICKS_REQ) {
+              movePaused = true;
+              moveUnstableTicks = 0;
+              moveStableTicks = 0;
+              thetaRefDeg = thetaDeg;  // one-shot handoff (no reference chasing while paused)
+              thetaRefVelDegS = 0.0f;
+              thetaRefAccDegS2 = 0.0f;
+              Serial.println("[MOVE] PAUSED");
+            }
+          } else {
+            moveUnstableTicks = 0;
+            stepThetaReferenceTrapezoid(dt);
+          }
+        }
+      } else {
+        movePaused = false;
+        moveStableTicks = 0;
+        moveUnstableTicks = 0;
+        thetaRefDeg = thetaTargetDeg;
+        thetaRefVelDegS = 0.0f;
+        thetaRefAccDegS2 = 0.0f;
+      }
+
+      const bool moveActive = moveInProgress && !movePaused;
+
+      const float thetaErr = getAngleDiffDeg(thetaDeg, thetaRefDeg);
+      const float thetaDotErr = thetaDotFilt - thetaRefVelDegS;
+      const float accFF_steps_s2 = STEPS_PER_DEG * thetaRefAccDegS2;
+
+      // ============================================================
+      // CONTROL LAW:
+      //  - CTRL_LINEAR: full-state feedback about upright (Section 11.7)
+      //  - CTRL_SMC: nonlinear sliding mode control about upright (no swing-up)
+      // ============================================================
+      float accCmdPhysical = 0.0f;  // steps/s^2 (physical coords, before motorSign)
+      float smcS = 0.0f;            // deg/s (diag)
+      float thetaDDotSmcDegS2 = 0.0f;  // deg/s^2 (diag)
+      float accSmcStepsS2Diag = 0.0f;
+      float accBaseStepsS2Diag = 0.0f;
+      int smcBaseGateDiag = 0;
+
+      if (ctrlMode == CTRL_SMC) {
+        const float deg2rad = PI / 180.0f;
+        const float rad2deg = 180.0f / PI;
+
+        const float alphaDeg = alphaRawSigned;
+        const float alphaDotDegS = alphaDotFilt;
+        const float thetaDotDegS = thetaDotFilt;  // measured (not commanded)
+
+        const float alphaRad = alphaDeg * deg2rad;
+        const float sinA = sin(alphaRad);
+        const float cosA = cos(alphaRad);
+        const float cosSafe = copysignf(max(fabs(cosA), SMC_COS_MIN), cosA);
+
+        const float A_deg = MODEL_A * rad2deg;  // deg/s^2
+        const float fDeg =
+            A_deg * sinA +
+            (sinA * cosA) * (thetaDotDegS * thetaDotDegS) * deg2rad;
+
+        smcS = alphaDotDegS + smcLambda * alphaDeg;
+        const float phi = max(smcPhiDegS, 1e-3f);
+        const float smcSat = constrain(smcS / phi, -1.0f, 1.0f);
+
+        thetaDDotSmcDegS2 =
+            (fDeg + smcLambda * alphaDotDegS + smcKDegS2 * smcSat) /
+            (MODEL_B * cosSafe);
+
+        thetaDDotSmcDegS2 *= smcSign;
+        thetaDDotSmcDegS2 = constrain(thetaDDotSmcDegS2, -THETA_DDOT_MAX_DEG_S2, THETA_DDOT_MAX_DEG_S2);
+
+        const float accSMC_steps_s2 = STEPS_PER_DEG * thetaDDotSmcDegS2;
+        accSmcStepsS2Diag = accSMC_steps_s2;
+
+        // Secondary objective: gentle base tracking (reference + feedforward), optionally gated by stability.
+        float accBase_steps_s2 =
+            accFF_steps_s2 +
+            K_THETA * thetaErr +
+            K_THETADOT * thetaDotErr;
+
+        accBase_steps_s2 *= constrain(smcBaseScale, 0.0f, 2.0f);
+        const bool smcBaseGate =
+            engageGraceOver &&
+            (fabs(alphaRawSigned) < SMC_BASE_GATE_ALPHA_WINDOW_DEG) &&
+            (fabs(alphaDotFilt) < SMC_BASE_GATE_ALPHADOT_WINDOW_DEG_S);
+        if (!smcBaseGate) accBase_steps_s2 = 0.0f;
+        accBaseStepsS2Diag = accBase_steps_s2;
+        smcBaseGateDiag = smcBaseGate ? 1 : 0;
+
+        accCmdPhysical = accSMC_steps_s2 + accBase_steps_s2;
+      } else {
+        // FULL-STATE FEEDBACK CONTROLLER (Section 11.7 modelling_complete.md)
+        // Control law (reference tracking):
+        //   accCmdPhysical = accFF + K_THETA*(theta-thetaRef) + K_ALPHA*alpha
+        //                  + K_THETADOT*(thetaDot-thetaRefDot) + K_ALPHADOT*alphaDot
+        float alphaCtrl = alphaRawSigned;
+        if (fabs(alphaCtrl) < ALPHA_DEADBAND_DEG) alphaCtrl = 0.0f;
+
+        accCmdPhysical =
+            accFF_steps_s2 +
+            K_THETA * thetaErr + K_ALPHA * alphaCtrl +
+            K_THETADOT * thetaDotErr + K_ALPHADOT * alphaDotFilt;
+      }
 
       // Apply control sign convention
       accCmdPhysical *= CTRL_SIGN;
@@ -1108,6 +1506,7 @@ void loop() {
 
       // Auto-trim pendulum reference when stable (kills small alpha bias that otherwise creates large theta offset).
       if (!sat &&
+          !moveActive &&
           fabs(alphaRawSigned) < ALPHA_TRIM_ALPHA_WINDOW_DEG &&
           fabs(alphaDotFilt) < ALPHA_TRIM_ALPHADOT_WINDOW_DEG_S) {
         dbgTrimActiveTicks++;
@@ -1122,9 +1521,11 @@ void loop() {
 
       // Integrate accel -> desired speed (leaky integrator near upright to prevent slow drift).
       float leak = 0.0f;
-      if (VEL_LEAK > 0.0f &&
+      if (ctrlMode != CTRL_SMC &&
+          !moveActive &&
+          VEL_LEAK > 0.0f &&
           fabs(alphaRawSigned) < VEL_LEAK_ALPHA_WINDOW_DEG &&
-          fabs(thetaDeg) < VEL_LEAK_THETA_WINDOW_DEG) {
+          fabs(thetaErr) < VEL_LEAK_THETA_WINDOW_DEG) {
         leak = VEL_LEAK;
         dbgLeakActiveTicks++;
       }
@@ -1151,7 +1552,19 @@ void loop() {
         Serial.print(" | theta="); Serial.print(thetaDeg,2);
         Serial.print(" thetaDot="); Serial.print(thetaDotFilt,1);
         Serial.print(" | acc="); Serial.print((int)accCmdPhysical);
-        Serial.print(" vel="); Serial.println((int)thetaDotCmdMotor);
+        Serial.print(" vel="); Serial.print((int)thetaDotCmdMotor);
+        Serial.print(" | ref="); Serial.print(thetaRefDeg, 2);
+        Serial.print(" tgt="); Serial.print(thetaTargetDeg, 2);
+        Serial.print(" paused="); Serial.print(movePaused ? 1 : 0);
+        Serial.print(" mode="); Serial.print((ctrlMode == CTRL_SMC) ? "SMC" : "LIN");
+        if (ctrlMode == CTRL_SMC) {
+          Serial.print(" s="); Serial.print(smcS, 1);
+          Serial.print(" thetaDDot="); Serial.print(thetaDDotSmcDegS2, 0);
+          Serial.print(" accSMC="); Serial.print((int)accSmcStepsS2Diag);
+          Serial.print(" accBase="); Serial.print((int)accBaseStepsS2Diag);
+          Serial.print(" gate="); Serial.print(smcBaseGateDiag);
+        }
+        Serial.println();
 
         // Low-rate diagnostics so we can tell what protections/nonlinearities are active.
         uint32_t ticks = (dbgTicksActive > 0) ? dbgTicksActive : 1;

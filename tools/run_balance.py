@@ -34,6 +34,7 @@ IMPORTANT_EVENT_KEYS = [
     "ENGAGED",
     "FALLEN",
     "DISARMED",
+    "[CTRL]",
     "armEnabled",
     "motorSign=",
     "ALPHA_SIGN=",
@@ -54,8 +55,18 @@ IMPORTANT_EVENT_KEYS = [
     "VEL_LEAK=",
     "leakAlphaWinDeg=",
     "leakThetaWinDeg=",
+    "thetaTargetDeg=",
+    "thetaMoveMaxVelDegS=",
+    "thetaMoveMaxAccDegS2=",
+    "[MOVE]",
+    "smcLambda=",
+    "smcKDegS2=",
+    "smcPhiDegS=",
+    "smcSign=",
+    "smcBaseScale=",
     "Saved settings to EEPROM",
     "Cleared EEPROM settings",
+    "[STATUS]",
     "[DBG]",
     "[WARN]",
 ]
@@ -83,6 +94,8 @@ print("\nFirmware telemetry format:")
 print("  t_ms, alpha×100, alphaDot×100, theta×100, thetaDot×100,")
 print("  accCmd, velCmd, posSteps, clamped")
 print("=" * 60)
+print()
+print("Quickstart doc: tools/experiment_quickstart.md")
 print()
 
 stop_event = threading.Event()
@@ -180,7 +193,7 @@ def main():
     print("  Every balance attempt:")
     print("    Z             Calibrate (arm centered; pendulum UPRIGHT)")
     print("    E             Arm/disarm (auto-engages when upright & still)")
-    print("    Q             Quit logger")
+    print("    q             Quit logger")
     print()
     print("OTHER COMMANDS (advanced):")
     print("─" * 60)
@@ -199,6 +212,20 @@ def main():
     print("    N <val>       motor velocity deadband (steps/s); N0 disables")
     print("    U <val>       VEL_LEAK (1/s)")
     print("    1/2/4/5 <val>  K_THETA, K_ALPHA, K_THETADOT, K_ALPHADOT")
+    print()
+    print("  Controller:")
+    print("    (Note: firmware only accepts these in IDLE)")
+    print("    C 0/1         Controller mode (0=linear, 1=SMC)")
+    print("    J <val>       SMC lambda (1/s)")
+    print("    K <val>       SMC K (deg/s^2)")
+    print("    P <val>       SMC phi (deg/s)")
+    print("    Q 1/-1        SMC sign flip (SMC only)")
+    print("    O <0..2>      SMC base tracking scale")
+    print()
+    print("  Motion:")
+    print("    T <deg>       Base target angle (deg)")
+    print("    V <deg/s>     Move max velocity")
+    print("    X <deg/s^2>   Move max acceleration")
     print("─" * 60)
     print()
 
