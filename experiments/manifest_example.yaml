@@ -1,0 +1,24 @@
+sessions:
+  # Minimal form (string paths)
+  - logs/balance/session_20260205_160604
+  - logs/balance/session_20260206_114346
+
+  # Rich form (mapping with metadata)
+  - path: logs/balance/session_20260205_102040
+    label: "SMC regression run"
+    experiment: "hold_center"
+    notes: "Multiple FALLEN events; keep for failure statistics"
+
+# Optional: pin representative runs for thesis figures (avoids any 'auto-pick' concerns).
+# trial_index refers to the extracted trial index in metrics_trials.csv for that session.
+representatives:
+  LIN:
+    session: logs/balance/session_20260205_102040
+    trial_index: 0
+  SMC:
+    session: logs/balance/session_20260205_160604
+    trial_index: 1
+  SMC4:
+    session: logs/balance/session_20260206_114346
+    trial_index: 0
+

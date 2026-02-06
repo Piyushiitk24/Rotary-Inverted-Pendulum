@@ -1149,3 +1149,509 @@ The runtime-tunable parameter `smcBaseScale` (command `O <val>`, range 0–2, de
 The implemented system supports runtime switching between `CTRL_LINEAR` and `CTRL_SMC` modes (command `C`), enabling direct performance comparison under identical conditions.
 
 ---
+
+## 13. Full-state surface Sliding Mode Control for upright stabilization with base reference tracking
+
+The nonlinear SMC law derived in Sec. 12 uses a sliding surface defined solely by the pendulum states $(\alpha,\dot\alpha)$, with base centering implemented as a separate gated blend term. This section extends the SMC framework by defining a **full-state sliding surface** that incorporates all four system states—pendulum angle, pendulum velocity, base position error, and base velocity error—into a single scalar manifold.
+
+The resulting controller, implemented as `CTRL_SMC_FULL` (command `C 2`), unifies upright stabilization and base reference tracking into one SMC acceleration command, eliminating the need for separate blend logic. This approach represents a pure SMC formulation where both control objectives (pendulum stabilization and base tracking) emerge from the single sliding surface design.
+
+**Design objectives:**
+
+- Stabilize the pendulum at upright equilibrium ($\alpha\to 0$).
+- Track a base reference trajectory $\theta_{\mathrm{ref}}(t)$ provided by the trapezoidal motion profile generator.
+- Maintain SMC robustness characteristics (finite-time reaching, boundary layer chattering suppression).
+- Ensure numerical safety through denominator protection and validity region enforcement.
+
+### 13.1 Plant model and reference tracking formulation
+
+The nonlinear pendulum dynamics (Sec. 12.1) remain the foundation:
+
+$$\ddot\alpha = A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2 - B\cos\alpha\,\ddot\theta$$
+
+where the plant constants are
+
+$$A\equiv \frac{G}{\hat J_2},\qquad B\equiv \frac{K}{\hat J_2}$$
+
+with numerical values (Sec. 8)
+
+$$A=100.8\ \mathrm{rad/s^2},\qquad B=1.952$$
+
+The control input is the commanded arm angular acceleration:
+
+$$u \equiv \ddot\theta$$
+
+**Reference trajectory:** A desired base trajectory $\theta_{\mathrm{ref}}(t)$ is specified with its derivatives $\dot\theta_{\mathrm{ref}}(t)$ and $\ddot\theta_{\mathrm{ref}}(t)$ (generated via trapezoidal velocity profile). For regulation to upright with base centering, $\theta_{\mathrm{ref}}(t)\equiv 0$.
+
+**Tracking error coordinates:** Define
+
+$$\theta_{\mathrm{err}} \equiv \theta - \theta_{\mathrm{ref}},\qquad
+\dot\theta_{\mathrm{err}} \equiv \dot\theta - \dot\theta_{\mathrm{ref}}$$
+
+so that
+
+$$\ddot\theta_{\mathrm{err}} = \ddot\theta - \ddot\theta_{\mathrm{ref}}$$
+
+### 13.2 Full-state sliding surface definition
+
+Define the **full-state sliding surface** as a scalar function of all four system states:
+
+$$s \equiv \dot\alpha + \lambda_\alpha\,\alpha + k\left(\dot\theta_{\mathrm{err}} + \lambda_\theta\,\theta_{\mathrm{err}}\right)$$
+
+where the design parameters are:
+
+- $\lambda_\alpha>0$ (units: $\mathrm{s^{-1}}$): pendulum angle convergence rate,
+- $\lambda_\theta>0$ (units: $\mathrm{s^{-1}}$): base error shaping parameter,
+- $k\ge 0$ (dimensionless): coupling weight between pendulum and base dynamics.
+
+**Interpretation:** The surface $s=0$ defines a three-dimensional manifold in the four-dimensional state space. When the system reaches and remains on this surface, the constrained dynamics are
+
+$$\dot\alpha = -\lambda_\alpha\,\alpha - k\left(\dot\theta_{\mathrm{err}} + \lambda_\theta\,\theta_{\mathrm{err}}\right)$$
+
+**Special cases:**
+
+1. **Pure upright stabilization** ($k=0$): The surface reduces to $s=\dot\alpha+\lambda_\alpha\alpha$, recovering the pendulum-only SMC (Sec. 12.2). On the surface, $\dot\alpha=-\lambda_\alpha\alpha$ gives exponential decay $\alpha(t)=\alpha_0 e^{-\lambda_\alpha t}$.
+
+2. **Perfect base tracking** ($\theta_{\mathrm{err}}=\dot\theta_{\mathrm{err}}=0$): The base terms vanish and the pendulum dynamics are identical to case 1.
+
+3. **Nonzero coupling** ($k>0$): Base tracking errors $\theta_{\mathrm{err}},\dot\theta_{\mathrm{err}}$ influence the pendulum sliding manifold, creating a unified control objective where pendulum stabilization and base tracking are coupled through the single surface $s$.
+
+### 13.3 Sliding surface dynamics and control effectiveness
+
+Differentiate the sliding surface with respect to time:
+
+\begin{align}
+\dot s
+&= \frac{d}{dt}\left(\dot\alpha + \lambda_\alpha\alpha + k\dot\theta_{\mathrm{err}} + k\lambda_\theta\theta_{\mathrm{err}}\right)\\
+&= \ddot\alpha + \lambda_\alpha\dot\alpha + k\ddot\theta_{\mathrm{err}} + k\lambda_\theta\dot\theta_{\mathrm{err}}
+\end{align}
+
+Substitute the error acceleration $\ddot\theta_{\mathrm{err}}=\ddot\theta-\ddot\theta_{\mathrm{ref}}$:
+
+$$\dot s = \ddot\alpha + \lambda_\alpha\dot\alpha + k(\ddot\theta-\ddot\theta_{\mathrm{ref}}) + k\lambda_\theta\dot\theta_{\mathrm{err}}$$
+
+Now substitute the nonlinear plant model for $\ddot\alpha$:
+
+\begin{align}
+\dot s
+&= \left(A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2 - B\cos\alpha\,\ddot\theta\right) + \lambda_\alpha\dot\alpha\\
+&\quad + k\ddot\theta - k\ddot\theta_{\mathrm{ref}} + k\lambda_\theta\dot\theta_{\mathrm{err}}
+\end{align}
+
+Collect all terms involving the control input $\ddot\theta$:
+
+\begin{align}
+\dot s
+&= \underbrace{A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2}_{\triangleq f_0(\alpha,\dot\theta)}
+  + \lambda_\alpha\dot\alpha + k\lambda_\theta\dot\theta_{\mathrm{err}} - k\ddot\theta_{\mathrm{ref}}\\
+&\quad + (k - B\cos\alpha)\ddot\theta
+\end{align}
+
+Define the **drift function**
+
+$$f_{\mathrm{full}}(\alpha,\dot\alpha,\dot\theta,\dot\theta_{\mathrm{err}}) \equiv f_0(\alpha,\dot\theta) + \lambda_\alpha\dot\alpha + k\lambda_\theta\dot\theta_{\mathrm{err}} - k\ddot\theta_{\mathrm{ref}}$$
+
+where $f_0(\alpha,\dot\theta)=A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2$ represents the unforced pendulum dynamics (gravitational and centrifugal terms). Then the surface dynamics are
+
+$$\dot s = f_{\mathrm{full}} + (k - B\cos\alpha)\ddot\theta$$
+
+**Control effectiveness analysis:** The coefficient $(k-B\cos\alpha)$ multiplies the control input $\ddot\theta$. Rearranging:
+
+$$\ddot\theta\text{ contributes to }\dot s\text{ with gain }(k-B\cos\alpha)$$
+
+For the control to influence $\dot s$ with the correct sign, we require
+
+$$(B\cos\alpha - k) > 0$$
+
+Near upright, $\cos\alpha\approx 1$, so $B\cos\alpha\approx B=1.952$. Therefore:
+
+- If $k=0$ (no base coupling), the effectiveness is $B\cos\alpha$, which is the same as the pendulum-only SMC (Sec. 12).
+- If $0<k<B\cos\alpha$, the effective gain is reduced but remains positive. Larger $k$ reduces the denominator, requiring larger $\ddot\theta$ to achieve the same $\dot s$.
+- If $k\to B\cos\alpha$, the effectiveness vanishes and the control law becomes singular.
+- If $k>B\cos\alpha$, the sign of the effectiveness reverses, invalidating the reaching law stability analysis.
+
+**Safety constraint:** To ensure well-conditioned control, enforce $k < B\cos\alpha$ with a safety margin (Sec. 13.7). For upright operation with $|\alpha|<25^\circ$, we have $\cos\alpha\ge 0.906$, giving $B\cos\alpha\ge 1.77$. A conservative limit is $k\le 1.2$, providing margin $B\cos\alpha-k\ge 0.57$.
+
+### 13.4 Equivalent control
+
+The **equivalent control** $\ddot\theta_{\mathrm{eq}}$ is the particular control input that maintains $\dot s=0$ exactly, thereby enforcing sliding mode operation on the surface $s=0$. Set $\dot s=0$ in the surface dynamics:
+
+$$0 = f_{\mathrm{full}} + (k - B\cos\alpha)\ddot\theta_{\mathrm{eq}}$$
+
+Solve for $\ddot\theta_{\mathrm{eq}}$:
+
+$$(k - B\cos\alpha)\ddot\theta_{\mathrm{eq}} = -f_{\mathrm{full}}$$
+
+$$(B\cos\alpha - k)\ddot\theta_{\mathrm{eq}} = f_{\mathrm{full}}$$
+
+$$\ddot\theta_{\mathrm{eq}} = \frac{f_{\mathrm{full}}}{B\cos\alpha - k}$$
+
+Expanding the drift function:
+
+$$\ddot\theta_{\mathrm{eq}} = \frac{A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2 + \lambda_\alpha\dot\alpha + k\lambda_\theta\dot\theta_{\mathrm{err}} - k\ddot\theta_{\mathrm{ref}}}{B\cos\alpha - k}$$
+
+This equivalent control compensates for:
+
+1. **Gravitational torque**: $A\sin\alpha$ (unstable upright equilibrium),
+2. **Centrifugal coupling**: $\sin\alpha\cos\alpha\,\dot\theta^2$ (base rotation induced pendulum acceleration),
+3. **Sliding surface transient shaping**: $\lambda_\alpha\dot\alpha$ (desired pendulum velocity decay),
+4. **Base error dynamics**: $k\lambda_\theta\dot\theta_{\mathrm{err}}$ (base velocity error correction),
+5. **Reference feedforward**: $-k\ddot\theta_{\mathrm{ref}}$ (acceleration tracking).
+
+However, equivalent control alone does **not guarantee convergence to the surface** from arbitrary initial conditions. A reaching law is required.
+
+### 13.5 Reaching law with boundary layer and complete control law
+
+To ensure finite-time convergence to the sliding surface, augment the equivalent control with a **reaching term**. Use the same continuous approximation as Sec. 12.7 to eliminate chattering. The reaching law is
+
+$$\dot s = -K\cdot\mathrm{sat}\!\left(\frac{s}{\phi}\right)$$
+
+where $K>0$ is the reaching gain (units: $\mathrm{rad/s^2}$ or $\mathrm{deg/s^2}$), $\phi>0$ is the boundary layer thickness (units: $\mathrm{rad/s}$ or $\mathrm{deg/s}$), and the saturation function is
+
+$$\mathrm{sat}(x)=\begin{cases}+1 & x>1\\ x & |x|\le 1\\ -1 & x<-1\end{cases}$$
+
+**Behavior:**
+
+- **Outside the boundary layer** ($|s|>\phi$): $\mathrm{sat}(s/\phi)=\pm 1$, giving $\dot s=-K\cdot\mathrm{sgn}(s)$. This drives the surface coordinate toward zero at constant rate $K$ (finite-time reaching).
+- **Inside the boundary layer** ($|s|\le\phi$): $\mathrm{sat}(s/\phi)=s/\phi$, giving $\dot s=-Ks/\phi$. This is a stable linear dynamics with exponential convergence to $s=0$.
+
+Substitute the reaching law into the surface dynamics:
+
+$$-K\cdot\mathrm{sat}\!\left(\frac{s}{\phi}\right) = f_{\mathrm{full}} + (k - B\cos\alpha)\ddot\theta$$
+
+Solve for the control input $\ddot\theta$:
+
+$$(k - B\cos\alpha)\ddot\theta = -K\cdot\mathrm{sat}\!\left(\frac{s}{\phi}\right) - f_{\mathrm{full}}$$
+
+$$(B\cos\alpha - k)\ddot\theta = f_{\mathrm{full}} + K\cdot\mathrm{sat}\!\left(\frac{s}{\phi}\right)$$
+
+Thus the **complete full-state surface sliding mode control law** is
+
+$$\boxed{
+\ddot\theta
+=
+\frac{
+f_0(\alpha,\dot\theta)
++ \lambda_\alpha\dot\alpha
++ k\lambda_\theta\dot\theta_{\mathrm{err}}
+- k\ddot\theta_{\mathrm{ref}}
++ K\cdot\mathrm{sat}\!\left(\dfrac{s}{\phi}\right)
+}{
+B\cos\alpha - k
+}
+}$$
+
+where
+
+\begin{align}
+f_0(\alpha,\dot\theta) &= A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2\\
+s &= \dot\alpha + \lambda_\alpha\alpha + k(\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}})
+\end{align}
+
+**Components:**
+
+1. $f_0(\alpha,\dot\theta)/(B\cos\alpha-k)$: nonlinear plant inversion (gravity + centrifugal compensation),
+2. $\lambda_\alpha\dot\alpha/(B\cos\alpha-k)$: sliding surface transient shaping,
+3. $k\lambda_\theta\dot\theta_{\mathrm{err}}/(B\cos\alpha-k)$: base velocity error coupling,
+4. $-k\ddot\theta_{\mathrm{ref}}/(B\cos\alpha-k)$: reference acceleration feedforward,
+5. $K\cdot\mathrm{sat}(s/\phi)/(B\cos\alpha-k)$: reaching control with chattering elimination.
+
+**Reduction to Sec. 12:** Setting $k=0$ eliminates all base tracking terms and recovers the pendulum-only SMC law:
+
+$$\ddot\theta
+=
+\frac{
+A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2
++ \lambda_\alpha\dot\alpha
++ K\cdot\mathrm{sat}\!\left(\dfrac{\dot\alpha+\lambda_\alpha\alpha}{\phi}\right)
+}{
+B\cos\alpha
+}$$
+
+### 13.6 Lyapunov stability and finite-time reaching
+
+Define the Lyapunov function candidate
+
+$$V(s)=\frac{1}{2}s^2$$
+
+This is a measure of the squared distance from the sliding surface. Clearly $V\geq 0$ with $V=0$ if and only if $s=0$. Differentiate with respect to time:
+
+$$\dot V = s\dot s$$
+
+Substitute the reaching law $\dot s=-K\cdot\mathrm{sat}(s/\phi)$:
+
+$$\dot V = -K\,s\cdot\mathrm{sat}\!\left(\frac{s}{\phi}\right)$$
+
+**Case 1: Outside the boundary layer** ($|s|>\phi$)
+
+Here $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$, so
+
+$$\dot V = -K\,s\,\mathrm{sgn}(s) = -K|s|$$
+
+Since $K>0$, we have $\dot V<0$ for all $s\neq 0$ outside the layer. This proves that $V$ decreases monotonically.
+
+To find the **reaching time** to the boundary layer, note that from $s\dot s=-K|s|$ we have
+
+$$\frac{d}{dt}\left(\frac{1}{2}s^2\right)=-K|s|$$
+
+For $s>0$:
+
+$$s\dot s = -Ks$$
+
+$$\dot s = -K$$
+
+$$s(t)=s_0-Kt$$
+
+The boundary is reached when $s(t_r)=\phi$, giving
+
+$$t_r=\frac{s_0-\phi}{K}\quad\text{(for }s_0>\phi\text{)}$$
+
+If $s_0<0$, by symmetry $t_r=(|s_0|-\phi)/K$. Thus the **worst-case reaching time** to the boundary layer is
+
+$$t_r=\frac{|s_0|-\phi}{K}$$
+
+This is **finite-time reaching**: the system is guaranteed to enter the boundary layer $|s|\le\phi$ in finite time regardless of the initial condition $s_0$, provided the controller does not saturate.
+
+**Case 2: Inside the boundary layer** ($|s|\le\phi$)
+
+Here $\mathrm{sat}(s/\phi)=s/\phi$, so
+
+$$\dot V = -K\,s\cdot\frac{s}{\phi}=-\frac{K}{\phi}s^2=-\frac{2K}{\phi}V$$
+
+This is exponential convergence with rate $K/\phi$:
+
+$$V(t)=V_0 e^{-2Kt/(\phi)}$$
+
+which means
+
+$$s(t)=s_0 e^{-Kt/(\phi)}$$
+
+**Steady-state error bound:** On the sliding surface ($s\approx 0$), the pendulum angle satisfies
+
+$$\dot\alpha \approx -\lambda_\alpha\alpha - k(\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}})$$
+
+For perfect base tracking ($\theta_{\mathrm{err}}=\dot\theta_{\mathrm{err}}=0$), this gives $|\alpha|\lesssim|s|/\lambda_\alpha\le\phi/\lambda_\alpha$. With typical values $\phi=50\ \mathrm{deg/s}$ and $\lambda_\alpha=15\ \mathrm{s^{-1}}$, the steady-state pendulum angle error is bounded by $\approx 3.3^\circ$ (in practice, much smaller due to exponential convergence within the layer).
+
+**Summary of stability properties:**
+
+- **Global attractivity** (within the validity region): Any trajectory starting with $|s|>\phi$ reaches the boundary layer in finite time $t_r=(|s_0|-\phi)/K$.
+- **Exponential convergence** inside the layer: Once $|s|\le\phi$, exponential decay to $s=0$ with time constant $\phi/K$.
+- **Chattering suppression**: The continuous saturation function eliminates infinite-frequency switching while preserving convergence.
+
+### 13.7 Implementation safeguards: denominator protection and coupling limits
+
+The control law denominator $(B\cos\alpha-k)$ requires careful treatment to prevent numerical issues and ensure well-conditioned control. The implementation enforces multiple layers of protection:
+
+**1. Validity region enforcement**
+
+Restrict operation to the near-upright region where the linearization-based surface design is valid and $\cos\alpha$ is bounded safely away from zero:
+
+$$|\alpha|<\alpha_{\mathrm{max}}=25^\circ$$
+
+In this region, $\cos\alpha\ge\cos(25^\circ)=0.906$, giving $B\cos\alpha\ge 1.952\times 0.906\approx 1.77$.
+
+**2. Cosine floor protection**
+
+Enforce a minimum magnitude for $\cos\alpha$ to prevent division issues if the pendulum exceeds the validity window:
+
+$$\cos\alpha_{\mathrm{safe}}=\max(|\cos\alpha|,\cos\alpha_{\min})\cdot\mathrm{sign}(\cos\alpha)$$
+
+where $\cos\alpha_{\min}=0.2$ (corresponding to $|\alpha|\approx 78^\circ$, well outside normal operation).
+
+**3. Coupling parameter hard limit**
+
+Clamp the user-specified coupling to a conservative maximum:
+
+$$k_{\mathrm{user}}\le k_{\mathrm{max,hard}}=1.20$$
+
+This ensures $B\cos\alpha_{\mathrm{safe}}-k_{\mathrm{max,hard}}\ge 1.77-1.20=0.57$ in the validity region.
+
+**4. Ramp-in after engagement**
+
+To avoid transient kicks at control onset, ramp the effective coupling from zero to the requested value over a period $T_{\mathrm{ramp}}$:
+
+$$k_{\mathrm{req}}(t)=k_{\mathrm{user}}\cdot\min\!\left(\frac{t-t_{\mathrm{engage}}}{T_{\mathrm{ramp}}},1\right)$$
+
+A typical ramp time is $T_{\mathrm{ramp}}=500\ \mathrm{ms}$.
+
+**5. Denominator-safe effective coupling**
+
+Enforce a minimum denominator margin $\mathrm{den}_{\min}>0$ (e.g., $\mathrm{den}_{\min}=0.60$):
+
+$$k_{\mathrm{eff}}=\max\!\left(0,\min\!\left(k_{\mathrm{req}},\ B\cos\alpha_{\mathrm{safe}}-\mathrm{den}_{\min}\right)\right)$$
+
+This ensures
+
+$$\mathrm{den}=B\cos\alpha_{\mathrm{safe}}-k_{\mathrm{eff}}\ge\mathrm{den}_{\min}$$
+
+at all times, preventing division by small numbers.
+
+**6. Theta-term clamps**
+
+Clamp the base tracking error signals before they enter the sliding surface to prevent large outliers (from sensor glitches or reference discontinuities) from dominating the control:
+
+\begin{align}
+\theta_{\mathrm{err,c}} &= \mathrm{constrain}(\theta_{\mathrm{err}},-\theta_{\max},+\theta_{\max})\\
+\dot\theta_{\mathrm{err,c}} &= \mathrm{constrain}(\dot\theta_{\mathrm{err}},-\dot\theta_{\max},+\dot\theta_{\max})\\
+\theta_{\mathrm{term}} &= \dot\theta_{\mathrm{err,c}}+\lambda_\theta\theta_{\mathrm{err,c}}\\
+\theta_{\mathrm{term,c}} &= \mathrm{constrain}(\theta_{\mathrm{term}},-\theta_{\mathrm{term,max}},+\theta_{\mathrm{term,max}})
+\end{align}
+
+Typical limits (firmware defaults): $\theta_{\max}=78^\circ$, $\dot\theta_{\max}=200\ \mathrm{deg/s}$, $\theta_{\mathrm{term,max}}=300\ \mathrm{deg/s}$. These are large enough to be inactive during normal operation but protective against edge cases.
+
+### 13.8 Parameter selection guidelines
+
+The full-state surface SMC has five tunable parameters. This section provides guidance for systematic tuning based on the identified plant constants (Sec. 8) and implementation constraints.
+
+**Shared parameters (from Sec. 12):**
+
+1. **$\lambda_\alpha$ (pendulum convergence rate):** Sets the time constant $\tau=1/\lambda_\alpha$ for pendulum decay on the sliding surface.
+   - **Default:** $\lambda_\alpha=15.0\ \mathrm{s^{-1}}$ (matching the fast pole in Sec. 11.6, giving $\tau\approx 67\ \mathrm{ms}$).
+   - **Effect:** Larger $\lambda_\alpha$ increases pendulum stiffness and bandwidth but amplifies noise sensitivity and increases required control authority.
+   - **Range:** Typical range $10$–$20\ \mathrm{s^{-1}}$ for this hardware.
+
+2. **$K$ (reaching gain):** Controls the rate of convergence to the sliding surface outside the boundary layer.
+   - **Default:** $K=800\ \mathrm{deg/s^2}$ (equivalent to $\approx 3555\ \mathrm{steps/s^2}$, well below the saturation limit of $20{,}000\ \mathrm{steps/s^2}$).
+   - **Effect:** Larger $K$ reduces reaching time but increases control effort and can cause saturation during large disturbances; smaller $K$ reduces aggressiveness at the cost of slower transient response.
+   - **Range:** $500$–$1500\ \mathrm{deg/s^2}$.
+
+3. **$\phi$ (boundary layer thickness):** Trades off chattering suppression against steady-state tracking accuracy.
+   - **Default:** $\phi=50.0\ \mathrm{deg/s}$.
+   - **Effect:** Larger $\phi$ produces smoother control (less chattering) but increases steady-state error; smaller $\phi$ improves tracking but can cause residual switching noise.
+   - **Guideline:** Choose $\phi$ larger than the observed noise magnitude in $\dot\alpha$ (typical sensor noise after filtering: $10$–$30\ \mathrm{deg/s}$).
+   - **Range:** $30$–$80\ \mathrm{deg/s}$.
+
+**New parameters (full-state coupling):**
+
+4. **$k$ (base-pendulum coupling weight):** Determines how strongly base tracking errors influence the sliding surface and modifies the control effectiveness denominator $(B\cos\alpha-k)$.
+   - **Default:** $k=0.50$ (conservative; provides base tracking while maintaining robust denominator margin).
+   - **Effect:** Increasing $k$ strengthens base tracking authority but reduces the effective control gain (smaller denominator) and can cause twitchy behavior if $k\to B\cos\alpha$; decreasing $k$ toward zero decouples the base dynamics and approaches the hybrid SMC behavior (Sec. 12).
+   - **Range:** $0.2$–$1.0$ (hard limit $k\le 1.2$, but typical operation uses $k\le 0.8$ for safety margin).
+   - **Tuning strategy:** Start with $k=0.3$; if base drift is excessive, increase gradually in steps of $0.1$ while monitoring control effort and checking for saturation or oscillations.
+
+5. **$\lambda_\theta$ (base error shaping):** Shapes how base position error $\theta_{\mathrm{err}}$ and velocity error $\dot\theta_{\mathrm{err}}$ combine in the sliding surface term $\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}}$.
+   - **Default:** $\lambda_\theta=1.0\ \mathrm{s^{-1}}$ (gentle base centering, comparable to the slow mode in Sec. 11.6).
+   - **Effect:** Larger $\lambda_\theta$ increases the weight of position error relative to velocity error, providing stronger centering stiffness; smaller $\lambda_\theta$ makes the surface more sensitive to base velocity error.
+   - **Range:** $0.5$–$2.0\ \mathrm{s^{-1}}$.
+
+**Interaction effects:**
+
+- **$k$ and $K$:** Increasing $k$ reduces the effective gain (larger numerator coefficient, smaller denominator), which may necessitate reducing $K$ to avoid saturation or increasing $\phi$ to suppress resulting chatter.
+- **$\lambda_\alpha$ and $\phi$:** Increasing $\lambda_\alpha$ increases the magnitude of the surface velocity $\dot s$, which may require increasing $\phi$ proportionally to maintain smooth control.
+
+**Systematic tuning procedure:**
+
+1. Start with the default values.
+2. If pendulum stabilization is inadequate (large $|\alpha|$ oscillations), increase $\lambda_\alpha$ or $K$ (check for saturation).
+3. If control is chattery or noisy, increase $\phi$.
+4. If base drift is significant, increase $k$ gradually (monitor denominator margin and control smoothness).
+5. If base position error overshoots or oscillates, adjust $\lambda_\theta$ (decrease for more damping, increase for stiffer centering).
+
+### 13.9 Conversion to stepper units and implementable formula
+
+The control law derivation (Sec. 13.5) uses radian-based quantities. The firmware implementation uses degree variables for states and stepper units ($\mathrm{steps/s^2}$) for acceleration commands. This section provides the unit conversions and implementable formula.
+
+**Unit conversion constants:**
+
+$$\deg2\mathrm{rad}=\frac{\pi}{180}=0.017453,\qquad \mathrm{rad}2\deg=\frac{180}{\pi}=57.2958$$
+
+$$\mathrm{steps/deg}=\frac{N}{360}=\frac{1600}{360}=4.444$$
+
+where $N=1600$ is the microsteps per motor revolution (Sec. 9).
+
+**Implementable computation sequence (degree-based):**
+
+Given sensor readings in degrees: $\alpha_{\deg}$, $\dot\alpha_{\deg}$, $\theta_{\deg}$, $\dot\theta_{\deg}$, and reference signals $\theta_{\mathrm{ref},\deg}$, $\dot\theta_{\mathrm{ref},\deg}$, $\ddot\theta_{\mathrm{ref},\deg}$:
+
+1. **Convert angles for trigonometric functions:**
+   $$\alpha_{\mathrm{rad}}=\alpha_{\deg}\cdot\deg2\mathrm{rad}$$
+
+2. **Compute trig terms with cosine protection:**
+   $$\sin\alpha=\sin(\alpha_{\mathrm{rad}}),\qquad \cos\alpha=\cos(\alpha_{\mathrm{rad}})$$
+   $$\cos\alpha_{\mathrm{safe}}=\max(|\cos\alpha|,0.2)\cdot\mathrm{sign}(\cos\alpha)$$
+
+3. **Compute tracking errors with clamps (Sec. 13.7):**
+   $$\theta_{\mathrm{err}}=\theta_{\deg}-\theta_{\mathrm{ref},\deg}$$
+   $$\dot\theta_{\mathrm{err}}=\dot\theta_{\deg}-\dot\theta_{\mathrm{ref},\deg}$$
+   (In firmware, $\theta_{\mathrm{err}}$ uses a wrap-safe shortest-path difference; apply clamps: $|\theta_{\mathrm{err}}|\le 78^\circ$, $|\dot\theta_{\mathrm{err}}|\le 200\ \mathrm{deg/s}$.)
+
+4. **Compute effective coupling with ramp-in and denominator safety:**
+   $$t_{\mathrm{active}}=\text{time since engagement (ms)}$$
+   $$k_{\mathrm{ramp}}=\min(t_{\mathrm{active}}/T_{\mathrm{ramp}},1.0)\quad(T_{\mathrm{ramp}}=500\ \mathrm{ms})$$
+   $$k_{\mathrm{req}}=k_{\mathrm{user}}\cdot k_{\mathrm{ramp}}$$
+   $$k_{\mathrm{max}}=B\cos\alpha_{\mathrm{safe}}-0.60$$
+   $$k_{\mathrm{eff}}=\max(0,\min(k_{\mathrm{req}},k_{\mathrm{max}}))$$
+
+5. **Theta-term with clamp:**
+   $$\theta_{\mathrm{term}}=\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}}$$
+   (Apply clamp: $|\theta_{\mathrm{term}}|\le 300\ \mathrm{deg/s}$)
+
+6. **Sliding surface:**
+   $$s=\dot\alpha_{\deg}+\lambda_\alpha\alpha_{\deg}+k_{\mathrm{eff}}\theta_{\mathrm{term}}\quad(\mathrm{deg/s})$$
+
+7. **Saturation function:**
+   $$\mathrm{sat}(s/\phi)=\min(1,\max(-1,s/\phi))$$
+
+8. **Drift function in deg/s² (mixed units):** The term $f_0$ involves $\dot\theta^2$ which must be converted. Internal computation in radians is cleaner:
+   $$\dot\theta_{\mathrm{rad}}=\dot\theta_{\deg}\cdot\deg2\mathrm{rad}$$
+   $$f_{0,\mathrm{rad}}=A\sin\alpha+\sin\alpha\cos\alpha\,\dot\theta_{\mathrm{rad}}^2\quad(A=100.8\ \mathrm{rad/s^2})$$
+   $$f_{0,\deg}=f_{0,\mathrm{rad}}\cdot\mathrm{rad}2\deg$$
+
+9. **Full drift term:**
+   $$f_{\mathrm{full},\deg}=f_{0,\deg}+\lambda_\alpha\dot\alpha_{\deg}+k_{\mathrm{eff}}\lambda_\theta\dot\theta_{\mathrm{err}}-k_{\mathrm{eff}}\ddot\theta_{\mathrm{ref},\deg}$$
+
+10. **Control law in deg/s²:**
+    $$\ddot\theta_{\deg}=\frac{f_{\mathrm{full},\deg}+K\cdot\mathrm{sat}(s/\phi)}{B\cos\alpha_{\mathrm{safe}}-k_{\mathrm{eff}}}$$
+
+11. **Clamp to maximum acceleration:**
+    $$\ddot\theta_{\deg}=\mathrm{constrain}(\ddot\theta_{\deg},-\ddot\theta_{\max},+\ddot\theta_{\max})\quad(\ddot\theta_{\max}=4500\ \mathrm{deg/s^2})$$
+
+12. **Convert to stepper acceleration:**
+    $$\ddot\theta_{\mathrm{steps}}=4.444\cdot\ddot\theta_{\deg}\quad(\mathrm{steps/s^2})$$
+
+13. **Apply overall sign flip and global saturation** (shared acceleration pipeline, Sec. 12.10):
+    $$\ddot\theta_{\mathrm{steps}}=\mathrm{constrain}(\mathrm{CTRL\_SIGN}\cdot\ddot\theta_{\mathrm{steps}},-20{,}000,+20{,}000)$$
+
+This sequence is implemented in the firmware `CTRL_SMC_FULL` branch, which outputs the final stepper acceleration command $\ddot\theta_{\mathrm{steps}}$ to the existing velocity-integration and speed-command pipeline (unchanged from Sec. 12).
+
+### 13.10 Comparison with hybrid SMC and linear controllers
+
+The full-state surface SMC (Sec. 13) represents the third nonlinear control mode implemented in the system, alongside the hybrid SMC (Sec. 12) and linear full-state feedback (Sec. 11). This section compares the three approaches to clarify design tradeoffs and guide mode selection.
+
+**Linear full-state feedback (`CTRL_LINEAR`, command `C 0`):**
+
+- **Surface/law:** Uses the linearized plant model $\ddot\alpha=A\alpha-B\ddot\theta$ (small-angle approximation). Control law is a linear combination of all four states: $\ddot\theta=-k_\theta\theta-k_\alpha\alpha-k_{\dot\theta}\dot\theta-k_{\dot\alpha}\dot\alpha$.
+- **Tuning:** Gains are computed analytically via pole placement (Sec. 11.5) using two second-order characteristic polynomial factors. Straightforward to tune by specifying desired natural frequencies $\omega_1,\omega_2$ and damping ratios $\zeta_1,\zeta_2$.
+- **Advantages:** Simple (no trig functions in real-time loop); smooth control (no switching behavior); globally valid if linearization errors are small.
+- **Limitations:** Does not explicitly compensate for centrifugal coupling $\sin\alpha\cos\alpha\,\dot\theta^2$ or nonlinear gravity term $A\sin\alpha$; performance degrades for large angles ($|\alpha|>5^\circ$) or fast base motion.
+
+**Hybrid SMC (`CTRL_SMC`, command `C 1`):**
+
+- **Surface/law:** Uses a pendulum-only sliding surface $s=\dot\alpha+\lambda\alpha$ with nonlinear plant compensation. Outputs SMC acceleration for upright stabilization; adds a separate PD-based base-centering term (gated by $|\alpha|<5^\circ$, $|\dot\alpha|<150\ \mathrm{deg/s}$). Two control objectives are separated and blended.
+- **Tuning:** Pendulum SMC parameters ($\lambda,K,\phi$) are tuned independently; base centering is controlled by a scale factor $s_{\mathrm{scale}}\in[0,2]$ (command `O`).
+- **Advantages:** Easier to tune than full-state surface SMC (decoupled objectives); robust pendulum stabilization using exact $\sin\alpha$, $\cos\alpha$ terms; base centering is optional and can be disabled without affecting upright control.
+- **Limitations:** Base tracking is secondary and only active when pendulum is nearly upright and still; gate logic introduces switching behavior that can be conservative.
+
+**Full-state surface SMC (`CTRL_SMC_FULL`, command `C 2`):**
+
+- **Surface/law:** Uses a unified sliding surface $s=\dot\alpha+\lambda_\alpha\alpha+k(\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}})$ encoding both pendulum and base dynamics. Single SMC acceleration command; no separate blend or gating logic.
+- **Tuning:** Five parameters ($\lambda_\alpha,K,\phi,k,\lambda_\theta$) with interactions: $k$ directly affects control effectiveness denominator $(B\cos\alpha-k)$.
+- **Advantages:** Pure SMC formulation (no hybrid gating); both objectives emerge from single surface; theoretically elegant and suitable for formal analysis.
+- **Limitations:** More sensitive to parameter choice (coupling $k$ affects both surface dynamics and denominator conditioning); requires careful safety margins (Sec. 13.7); tuning is less intuitive than decoupled hybrid approach.
+
+**Performance comparison (empirically, near-upright operation $|\alpha|<5^\circ$):**
+
+- **Pendulum stabilization:** All three modes achieve similar RMS pendulum angle ($<1^\circ$) for typical disturbances. SMC modes slightly outperform linear for larger angles or fast base motion due to explicit nonlinear compensation.
+- **Base tracking:** Linear and full-state surface SMC provide continuous base actuation; hybrid SMC base response depends on gate state. For reference tracking tasks (trapezoidal profiles), linear and SMC_FULL are preferred.
+- **Control smoothness:** Linear mode produces the smoothest acceleration commands; hybrid SMC has minor discontinuities at gate transitions; SMC_FULL smoothness depends on boundary layer thickness $\phi$.
+- **Computational cost:** Linear mode is cheapest (no trig); both SMC modes compute $\sin\alpha$, $\cos\alpha$, and $f_0$ (similar cost).
+
+**Mode selection guidelines:**
+
+- Use **`CTRL_LINEAR`** for typical upright balancing with gentle base centering; easiest to tune and adequate for $|\alpha|<5^\circ$.
+- Use **`CTRL_SMC`** (hybrid) for robust pendulum stabilization with optional aggressive base tracking (tune $s_{\mathrm{scale}}$); best for disturbance rejection experiments where base drift is secondary.
+- Use **`CTRL_SMC_FULL`** for unified SMC formulation with simultaneous base tracking; best for theoretical validation and reference tracking tasks where gate-free operation is desired.
+
+The runtime command `C <0|1|2>` enables switching between modes (only when disarmed) for direct experimental comparison under identical conditions.
+
+---

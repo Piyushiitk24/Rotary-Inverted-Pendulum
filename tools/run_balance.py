@@ -7,6 +7,8 @@ import serial
 import time
 import csv
 import os
+import sys
+from pathlib import Path
 from datetime import datetime
 import threading
 
@@ -64,6 +66,8 @@ IMPORTANT_EVENT_KEYS = [
     "smcPhiDegS=",
     "smcSign=",
     "smcBaseScale=",
+    "smcFullK=",
+    "smcFullLambdaTheta=",
     "Saved settings to EEPROM",
     "Cleared EEPROM settings",
     "[STATUS]",
@@ -74,6 +78,19 @@ IMPORTANT_EVENT_KEYS = [
 
 def is_important_event_line(line: str) -> bool:
     return any(key in line for key in IMPORTANT_EVENT_KEYS)
+
+# --- ENVIRONMENT CHECK ---
+def warn_if_not_venv():
+    repo_root = Path(__file__).resolve().parents[1]
+    venv_dir = repo_root / ".venv"
+    if not venv_dir.exists():
+        return
+    # sys.executable may be a symlink to system Python; sys.prefix is the robust venv indicator.
+    prefix = Path(getattr(sys, "prefix", "")).resolve()
+    in_venv = prefix == venv_dir.resolve()
+    if not in_venv:
+        recommended = repo_root / ".venv" / "bin" / "python"
+        print(f"[WARN] Not running from repo venv. Recommended: {recommended} tools/run_balance.py", file=sys.stderr)
 
 # --- SETUP SESSION ---
 session_name = datetime.now().strftime("session_%Y%m%d_%H%M%S")
@@ -166,6 +183,7 @@ def read_serial(ser, writer):
 
 def main():
     """Main entry point: connect to Arduino, start logging, handle user commands."""
+    warn_if_not_venv()
     try:
         print("Connecting to Arduino...")
         ser = serial.Serial(PORT, BAUD, timeout=0.1)
@@ -185,15 +203,18 @@ def main():
     t = threading.Thread(target=read_serial, args=(ser, writer), daemon=True)
     t.start()
 
-    print("WORKFLOW (recommended):")
-    print("  After uploading firmware (once):")
-    print("    R             Clear EEPROM + apply defaults")
-    print("    G             Print current config (verify signs + tuning)")
-    print()
-    print("  Every balance attempt:")
+    print("WORKFLOW (thesis/repeatable):")
+    print("  Per attempt (recommended order):")
+    print("    !             Disarm (safe reset; stop motor)")
+    print("    G             Print config (captures params in events.txt)")
+    print("    C 0/1/2       Select controller (0=LIN, 1=SMC, 2=SMC4)")
     print("    Z             Calibrate (arm centered; pendulum UPRIGHT)")
     print("    E             Arm/disarm (auto-engages when upright & still)")
+    print("    !             Stop at end of trial")
     print("    q             Quit logger")
+    print()
+    print("  Markers (logger-only, not sent to device):")
+    print("    # <text>      Write a timestamped marker into events.txt")
     print()
     print("OTHER COMMANDS (advanced):")
     print("─" * 60)
@@ -215,12 +236,14 @@ def main():
     print()
     print("  Controller:")
     print("    (Note: firmware only accepts these when disarmed / not ACTIVE)")
-    print("    C 0/1         Controller mode (0=linear, 1=SMC)")
+    print("    C 0/1/2       Controller mode (0=linear, 1=SMC, 2=SMC4)")
     print("    J <val>       SMC lambda (1/s)")
     print("    K <val>       SMC K (deg/s^2)")
     print("    P <val>       SMC phi (deg/s)")
-    print("    Q 1/-1        SMC sign flip (SMC only)")
-    print("    O <0..2>      SMC base tracking scale")
+    print("    Q 1/-1        SMC sign flip (SMC/SMC4)")
+    print("    O <0..2>      SMC base tracking scale (hybrid)")
+    print("    D <val>       SMC4 k (theta coupling)")
+    print("    L <val>       SMC4 lambda_theta (1/s)")
     print()
     print("  Motion:")
     print("    T <deg>       Base target angle (deg)")
@@ -235,6 +258,11 @@ def main():
             if cmd.lower() == 'q':
                 print("\nShutting down...")
                 break
+            if cmd.startswith("#"):
+                note = cmd[1:].strip()
+                write_event(f"Marker: {note}")
+                print(f"→ Marker: {note}")
+                continue
             if cmd:
                 ser.write((cmd + '\n').encode())
                 print(f"→ Sent: {cmd}")

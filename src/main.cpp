@@ -108,6 +108,10 @@ float smcPhiDegS = 50.0f;      // deg/s (boundary layer thickness)
 float smcSign = +1.0f;         // SMC-only sign flip knob (+1 or -1)
 float smcBaseScale = 1.0f;     // 0..2 scale for base tracking blend (default: keep arm near center)
 
+// Full-state surface SMC (SMC4): surface includes alpha/alphaDot/thetaErr/thetaDotErr.
+float smcFullK = 0.50f;              // dimensionless coupling weight
+float smcFullLambdaTheta = 1.0f;     // 1/s
+
 const float SMC_ALPHA_ABORT_DEG = 25.0f;  // upright-only hard window (no swing-up)
 const float SMC_ALPHADOT_ABORT_DEG_S = 250.0f;  // abort if pendulum rate is extreme (upright-only)
 const uint8_t SMC_ALPHADOT_ABORT_TICKS_REQ = 3; // debounce to avoid single-sample noise
@@ -118,13 +122,21 @@ const float SMC_BASE_GATE_ALPHADOT_WINDOW_DEG_S = 150.0f;
 const float SMC_COS_MIN = 0.2f;           // glitch guard for cos(alpha) in division
 const float THETA_DDOT_MAX_DEG_S2 = MAX_ACC_STEPS / STEPS_PER_DEG;  // clamp before steps conversion
 
+// Full-state SMC (SMC4) safeguards.
+const float SMC_FULL_K_MAX = 1.20f;
+const float SMC_FULL_DENOM_MIN = 0.60f;
+const uint32_t SMC_FULL_K_RAMP_MS = 500;
+const float SMC_FULL_THETA_ERR_CLAMP_DEG = 78.0f;
+const float SMC_FULL_THETADOT_ERR_CLAMP_DEG_S = 200.0f;
+const float SMC_FULL_THETA_TERM_CLAMP_DEG_S = 300.0f;
+
 // Signs
 int motorSign  = +1;   // +steps = CW from above
 int ALPHA_SIGN = -1;   // default (matches historical working builds); verify with 'S' and save with 'Y'
 int THETA_SIGN = +1;
 int CTRL_SIGN  = +1;
 
-enum CtrlMode { CTRL_LINEAR = 0, CTRL_SMC = 1 };
+enum CtrlMode { CTRL_LINEAR = 0, CTRL_SMC = 1, CTRL_SMC_FULL = 2 };
 CtrlMode ctrlMode = CTRL_LINEAR;
 
 bool armEnabled   = false;
@@ -850,12 +862,17 @@ void handleSerial() {
       Serial.print(" thetaMoveMaxAccDegS2="); Serial.print(thetaMoveMaxAccDegS2, 2);
       Serial.print(" movePaused="); Serial.println(movePaused ? 1 : 0);
 
-      Serial.print("ctrlMode="); Serial.println((ctrlMode == CTRL_SMC) ? "SMC" : "LIN");
+      Serial.print("ctrlMode=");
+      if (ctrlMode == CTRL_SMC) Serial.println("SMC");
+      else if (ctrlMode == CTRL_SMC_FULL) Serial.println("SMC4");
+      else Serial.println("LIN");
       Serial.print("smcLambda="); Serial.print(smcLambda, 2);
       Serial.print(" smcKDegS2="); Serial.print(smcKDegS2, 2);
       Serial.print(" smcPhiDegS="); Serial.print(smcPhiDegS, 2);
       Serial.print(" smcSign="); Serial.print(smcSign, 1);
       Serial.print(" smcBaseScale="); Serial.println(smcBaseScale, 2);
+      Serial.print("smcFullK="); Serial.print(smcFullK, 2);
+      Serial.print(" smcFullLambdaTheta="); Serial.println(smcFullLambdaTheta, 2);
       return;
     }
 
@@ -874,8 +891,19 @@ void handleSerial() {
         return;
       }
       int v = (int)Serial.parseInt();
-      ctrlMode = (v == 1) ? CTRL_SMC : CTRL_LINEAR;
-      Serial.print("[CTRL] mode="); Serial.println((ctrlMode == CTRL_SMC) ? "SMC" : "LIN");
+      if (v == 2) ctrlMode = CTRL_SMC_FULL;
+      else if (v == 1) ctrlMode = CTRL_SMC;
+      else ctrlMode = CTRL_LINEAR;
+
+      Serial.print("[CTRL] mode=");
+      if (ctrlMode == CTRL_SMC) Serial.println("SMC");
+      else if (ctrlMode == CTRL_SMC_FULL) Serial.println("SMC4");
+      else Serial.println("LIN");
+
+      if (ctrlMode == CTRL_SMC_FULL) {
+        Serial.print("smcFullK="); Serial.print(smcFullK, 2);
+        Serial.print(" smcFullLambdaTheta="); Serial.println(smcFullLambdaTheta, 2);
+      }
       return;
     }
 
@@ -937,6 +965,31 @@ void handleSerial() {
       float v = Serial.parseFloat();
       if (v >= 0.0f && v <= 2.0f) smcBaseScale = v;
       Serial.print("smcBaseScale="); Serial.println(smcBaseScale, 2);
+      return;
+    }
+
+    // Full-state surface SMC (SMC4) tuning
+    if (c == 'D' || c == 'd') {
+      if (currentState == STATE_ACTIVE) {
+        dropUntilEol = true;
+        Serial.println("ERR: SMC4 tuning only allowed when DISARMED (send '!' first).");
+        return;
+      }
+      float v = Serial.parseFloat();
+      if (v >= 0.0f && v <= SMC_FULL_K_MAX) smcFullK = v;
+      Serial.print("smcFullK="); Serial.println(smcFullK, 2);
+      return;
+    }
+
+    if (c == 'L' || c == 'l') {
+      if (currentState == STATE_ACTIVE) {
+        dropUntilEol = true;
+        Serial.println("ERR: SMC4 tuning only allowed when DISARMED (send '!' first).");
+        return;
+      }
+      float v = Serial.parseFloat();
+      if (v >= 0.0f && v <= 50.0f) smcFullLambdaTheta = v;
+      Serial.print("smcFullLambdaTheta="); Serial.println(smcFullLambdaTheta, 2);
       return;
     }
 
@@ -1014,12 +1067,14 @@ void setup() {
   Serial.println("  V <deg/s>   -> Move max velocity");
   Serial.println("  X <deg/s^2> -> Move max acceleration");
   Serial.println("Control (SMC commands only when DISARMED):");
-  Serial.println("  C <0|1>     -> Controller mode (0=linear, 1=SMC)");
+  Serial.println("  C <0|1|2>   -> Controller mode (0=linear, 1=SMC, 2=SMC4)");
   Serial.println("  J <val>     -> SMC lambda (1/s)");
   Serial.println("  K <val>     -> SMC K (deg/s^2)");
   Serial.println("  P <val>     -> SMC phi (deg/s)");
   Serial.println("  Q <+1|-1>   -> SMC sign flip");
-  Serial.println("  O <0..2>    -> SMC base tracking scale");
+  Serial.println("  O <0..2>    -> SMC base tracking scale (hybrid)");
+  Serial.println("  D <val>     -> SMC4 k (theta coupling)");
+  Serial.println("  L <val>     -> SMC4 lambda_theta (1/s)");
   Serial.println("Useful:");
   Serial.println("  S (sign wizard), G (print config), R (clear EEPROM), Y (save), W/N/U (tuning)");
   Serial.println("Log: t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped");
@@ -1237,7 +1292,7 @@ void loop() {
 
       // Upright-only nonlinear controller validity window (no swing-up).
       // Abort immediately rather than relying on cos clamps or the wider mechanical limits.
-      if (ctrlMode == CTRL_SMC && fabs(alphaRawSigned) > SMC_ALPHA_ABORT_DEG) {
+      if (ctrlMode != CTRL_LINEAR && fabs(alphaRawSigned) > SMC_ALPHA_ABORT_DEG) {
         Serial.print("FALLEN limit=smc_alpha");
         Serial.print(" | alpha="); Serial.print(alphaRawSigned, 2);
         Serial.print(" alphaDot="); Serial.print(alphaDotFilt, 1);
@@ -1283,7 +1338,7 @@ void loop() {
 
       // Additional upright-only SMC abort: extreme alphaDot inside the angle window tends to rail accel
       // and can walk the base. Debounced to avoid single-sample noise.
-      if (ctrlMode == CTRL_SMC) {
+      if (ctrlMode != CTRL_LINEAR) {
         if (fabs(alphaDotFilt) > SMC_ALPHADOT_ABORT_DEG_S) {
           if (smcAlphaDotAbortTicks < 255) smcAlphaDotAbortTicks++;
           if (smcAlphaDotAbortTicks >= SMC_ALPHADOT_ABORT_TICKS_REQ) {
@@ -1423,6 +1478,7 @@ void loop() {
       // CONTROL LAW:
       //  - CTRL_LINEAR: full-state feedback about upright (Section 11.7)
       //  - CTRL_SMC: nonlinear sliding mode control about upright (no swing-up)
+      //  - CTRL_SMC_FULL: full-state surface SMC (alpha/alphaDot/thetaErr/thetaDotErr)
       // ============================================================
       float accCmdPhysical = 0.0f;  // steps/s^2 (physical coords, before motorSign)
       float smcS = 0.0f;            // deg/s (diag)
@@ -1430,6 +1486,11 @@ void loop() {
       float accSmcStepsS2Diag = 0.0f;
       float accBaseStepsS2Diag = 0.0f;
       int smcBaseGateDiag = 0;
+      float smcFullDenDiag = 0.0f;
+      float smcFullKEffDiag = 0.0f;
+      float smcFullKRampDiag = 0.0f;
+      float smcFullThetaErrCDiag = 0.0f;
+      float smcFullThetaTermDiag = 0.0f;
 
       if (ctrlMode == CTRL_SMC) {
         const float deg2rad = PI / 180.0f;
@@ -1479,6 +1540,63 @@ void loop() {
         smcBaseGateDiag = smcBaseGate ? 1 : 0;
 
         accCmdPhysical = accSMC_steps_s2 + accBase_steps_s2;
+      } else if (ctrlMode == CTRL_SMC_FULL) {
+        const float deg2rad = PI / 180.0f;
+        const float rad2deg = 180.0f / PI;
+
+        const float alphaDeg = alphaRawSigned;
+        const float alphaDotDegS = alphaDotFilt;
+        const float thetaDotDegS = thetaDotFilt;  // measured (not commanded)
+
+        const float alphaRad = alphaDeg * deg2rad;
+        const float sinA = sin(alphaRad);
+        const float cosA = cos(alphaRad);
+        const float cosSafe = copysignf(max(fabs(cosA), SMC_COS_MIN), cosA);
+
+        const float A_deg = MODEL_A * rad2deg;  // deg/s^2
+        const float fDeg =
+            A_deg * sinA +
+            (sinA * cosA) * (thetaDotDegS * thetaDotDegS) * deg2rad;
+
+        const float thetaErrC =
+            constrain(thetaErr, -SMC_FULL_THETA_ERR_CLAMP_DEG, SMC_FULL_THETA_ERR_CLAMP_DEG);
+        const float thetaDotErrC =
+            constrain(thetaDotErr, -SMC_FULL_THETADOT_ERR_CLAMP_DEG_S, SMC_FULL_THETADOT_ERR_CLAMP_DEG_S);
+        float thetaTerm = thetaDotErrC + smcFullLambdaTheta * thetaErrC;
+        thetaTerm = constrain(thetaTerm, -SMC_FULL_THETA_TERM_CLAMP_DEG_S, SMC_FULL_THETA_TERM_CLAMP_DEG_S);
+        smcFullThetaErrCDiag = thetaErrC;
+        smcFullThetaTermDiag = thetaTerm;
+
+        const float kRamp = constrain((float)(millis() - engageStartMs) * (1.0f / (float)SMC_FULL_K_RAMP_MS), 0.0f, 1.0f);
+        float kReq = constrain(smcFullK, 0.0f, SMC_FULL_K_MAX) * kRamp;
+
+        float kMaxByDen = (MODEL_B * cosSafe) - SMC_FULL_DENOM_MIN;
+        if (kMaxByDen < 0.0f) kMaxByDen = 0.0f;
+        float kEff = min(kReq, kMaxByDen);
+        float den = (MODEL_B * cosSafe) - kEff;  // guaranteed >= SMC_FULL_DENOM_MIN
+
+        smcFullDenDiag = den;
+        smcFullKEffDiag = kEff;
+        smcFullKRampDiag = kRamp;
+
+        smcS = alphaDotDegS + smcLambda * alphaDeg + kEff * thetaTerm;
+        const float phi = max(smcPhiDegS, 1e-3f);
+        const float smcSat = constrain(smcS / phi, -1.0f, 1.0f);
+
+        thetaDDotSmcDegS2 =
+            (fDeg +
+             smcLambda * alphaDotDegS +
+             (kEff * smcFullLambdaTheta * thetaDotErrC) -
+             (kEff * thetaRefAccDegS2) +
+             smcKDegS2 * smcSat) /
+            den;
+
+        thetaDDotSmcDegS2 *= smcSign;
+        thetaDDotSmcDegS2 = constrain(thetaDDotSmcDegS2, -THETA_DDOT_MAX_DEG_S2, THETA_DDOT_MAX_DEG_S2);
+
+        const float accSMC_steps_s2 = STEPS_PER_DEG * thetaDDotSmcDegS2;
+        accSmcStepsS2Diag = accSMC_steps_s2;
+        accCmdPhysical = accSMC_steps_s2;
       } else {
         // FULL-STATE FEEDBACK CONTROLLER (Section 11.7 modelling_complete.md)
         // Control law (reference tracking):
@@ -1524,7 +1642,7 @@ void loop() {
 
       // Integrate accel -> desired speed (leaky integrator near upright to prevent slow drift).
       float leak = 0.0f;
-      if (ctrlMode != CTRL_SMC &&
+      if (ctrlMode == CTRL_LINEAR &&
           !moveActive &&
           VEL_LEAK > 0.0f &&
           fabs(alphaRawSigned) < VEL_LEAK_ALPHA_WINDOW_DEG &&
@@ -1559,13 +1677,24 @@ void loop() {
         Serial.print(" | ref="); Serial.print(thetaRefDeg, 2);
         Serial.print(" tgt="); Serial.print(thetaTargetDeg, 2);
         Serial.print(" paused="); Serial.print(movePaused ? 1 : 0);
-        Serial.print(" mode="); Serial.print((ctrlMode == CTRL_SMC) ? "SMC" : "LIN");
+        Serial.print(" mode=");
+        if (ctrlMode == CTRL_SMC) Serial.print("SMC");
+        else if (ctrlMode == CTRL_SMC_FULL) Serial.print("SMC4");
+        else Serial.print("LIN");
         if (ctrlMode == CTRL_SMC) {
           Serial.print(" s="); Serial.print(smcS, 1);
           Serial.print(" thetaDDot="); Serial.print(thetaDDotSmcDegS2, 0);
           Serial.print(" accSMC="); Serial.print((int)accSmcStepsS2Diag);
           Serial.print(" accBase="); Serial.print((int)accBaseStepsS2Diag);
           Serial.print(" gate="); Serial.print(smcBaseGateDiag);
+        } else if (ctrlMode == CTRL_SMC_FULL) {
+          Serial.print(" s="); Serial.print(smcS, 1);
+          Serial.print(" thetaDDot="); Serial.print(thetaDDotSmcDegS2, 0);
+          Serial.print(" den="); Serial.print(smcFullDenDiag, 2);
+          Serial.print(" kEff="); Serial.print(smcFullKEffDiag, 2);
+          Serial.print(" kRamp="); Serial.print(smcFullKRampDiag, 2);
+          Serial.print(" thetaErrC="); Serial.print(smcFullThetaErrCDiag, 1);
+          Serial.print(" thetaTerm="); Serial.print(smcFullThetaTermDiag, 1);
         }
         Serial.println();
 
