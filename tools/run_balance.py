@@ -214,7 +214,7 @@ def main():
     print("    1/2/4/5 <val>  K_THETA, K_ALPHA, K_THETADOT, K_ALPHADOT")
     print()
     print("  Controller:")
-    print("    (Note: firmware only accepts these in IDLE)")
+    print("    (Note: firmware only accepts these when disarmed / not ACTIVE)")
     print("    C 0/1         Controller mode (0=linear, 1=SMC)")
     print("    J <val>       SMC lambda (1/s)")
     print("    K <val>       SMC K (deg/s^2)")

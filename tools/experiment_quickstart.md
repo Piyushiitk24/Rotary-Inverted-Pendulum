@@ -25,12 +25,12 @@ Notes:
 - `C 0`  Linear controller (baseline)
 - `C 1`  Nonlinear SMC controller
 
-**SMC-only essentials (IDLE only)**
+**SMC-only essentials (disarmed only)**
 - `Q 1` / `Q -1`  Flip SMC direction if it reacts the wrong way (default: `Q 1`)
 - `O <0..2>`      Base-centering strength (default: `O 1.0`)
 
-Important: firmware accepts `C/J/K/P/Q/O` **only in IDLE** (disarmed). If you’re engaged, send `!` first.
-After power-up you start in `STATE_CALIBRATE`, so do `Z` first, then `C ...` (then `E`).
+Important: firmware accepts `C/J/K/P/Q/O` **only when disarmed** (not balancing in `STATE_ACTIVE`). If you’re engaged, send `!` first.
+After power-up you start in `STATE_CALIBRATE`, so do `Z` before `E`. (You may send `C/Q/O/...` either before or after `Z`.)
 
 ## 3) Workflow A — Linear baseline (fast sanity check)
 

@@ -373,13 +373,6 @@ static int signum(float x) {
   return (x > 0.0f) - (x < 0.0f);
 }
 
-static void flushSerialLine() {
-  while (Serial.available()) {
-    char ch = (char)Serial.read();
-    if (ch == '\n' || ch == '\r') break;
-  }
-}
-
 static void stepThetaReferenceTrapezoid(float dt) {
   float dist = getAngleDiffDeg(thetaTargetDeg, thetaRefDeg);  // target - ref (wrap-safe)
 
@@ -510,8 +503,18 @@ void enterIdle(bool keepArmed = false) {
 }
 
 void handleSerial() {
+  // When we reject a command that has an argument (e.g., "C 1"), we must
+  // discard the remainder of that line so the trailing bytes don't get
+  // interpreted as separate one-letter commands (e.g., "1" -> K_THETA=0).
+  static bool dropUntilEol = false;
+
   while (Serial.available()) {
     char c = Serial.read();
+
+    if (dropUntilEol) {
+      if (c == '\n' || c == '\r') dropUntilEol = false;
+      continue;
+    }
 
     // Emergency disarm (used by tools/run_balance.py on exit).
     // Stops motion, disables motor outputs, and returns to IDLE.
@@ -865,9 +868,9 @@ void handleSerial() {
 
     // Controller mode select (linear full-state vs nonlinear SMC)
     if (c == 'C' || c == 'c') {
-      if (currentState != STATE_IDLE) {
-        flushSerialLine();
-        Serial.println("ERR: SMC mode changes only allowed in IDLE.");
+      if (currentState == STATE_ACTIVE) {
+        dropUntilEol = true;
+        Serial.println("ERR: SMC mode changes only allowed when DISARMED (send '!' first).");
         return;
       }
       int v = (int)Serial.parseInt();
@@ -878,9 +881,9 @@ void handleSerial() {
 
     // Nonlinear upright SMC tuning
     if (c == 'J' || c == 'j') {
-      if (currentState != STATE_IDLE) {
-        flushSerialLine();
-        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+      if (currentState == STATE_ACTIVE) {
+        dropUntilEol = true;
+        Serial.println("ERR: SMC tuning only allowed when DISARMED (send '!' first).");
         return;
       }
       float v = Serial.parseFloat();
@@ -890,9 +893,9 @@ void handleSerial() {
     }
 
     if (c == 'K' || c == 'k') {
-      if (currentState != STATE_IDLE) {
-        flushSerialLine();
-        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+      if (currentState == STATE_ACTIVE) {
+        dropUntilEol = true;
+        Serial.println("ERR: SMC tuning only allowed when DISARMED (send '!' first).");
         return;
       }
       float v = Serial.parseFloat();
@@ -902,9 +905,9 @@ void handleSerial() {
     }
 
     if (c == 'P' || c == 'p') {
-      if (currentState != STATE_IDLE) {
-        flushSerialLine();
-        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+      if (currentState == STATE_ACTIVE) {
+        dropUntilEol = true;
+        Serial.println("ERR: SMC tuning only allowed when DISARMED (send '!' first).");
         return;
       }
       float v = Serial.parseFloat();
@@ -914,9 +917,9 @@ void handleSerial() {
     }
 
     if (c == 'Q' || c == 'q') {
-      if (currentState != STATE_IDLE) {
-        flushSerialLine();
-        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+      if (currentState == STATE_ACTIVE) {
+        dropUntilEol = true;
+        Serial.println("ERR: SMC tuning only allowed when DISARMED (send '!' first).");
         return;
       }
       int v = (int)Serial.parseInt();
@@ -926,9 +929,9 @@ void handleSerial() {
     }
 
     if (c == 'O' || c == 'o') {
-      if (currentState != STATE_IDLE) {
-        flushSerialLine();
-        Serial.println("ERR: SMC tuning only allowed in IDLE.");
+      if (currentState == STATE_ACTIVE) {
+        dropUntilEol = true;
+        Serial.println("ERR: SMC tuning only allowed when DISARMED (send '!' first).");
         return;
       }
       float v = Serial.parseFloat();
@@ -1010,7 +1013,7 @@ void setup() {
   Serial.println("  T <deg>     -> Base target angle (deg)");
   Serial.println("  V <deg/s>   -> Move max velocity");
   Serial.println("  X <deg/s^2> -> Move max acceleration");
-  Serial.println("Control (SMC commands only in IDLE):");
+  Serial.println("Control (SMC commands only when DISARMED):");
   Serial.println("  C <0|1>     -> Controller mode (0=linear, 1=SMC)");
   Serial.println("  J <val>     -> SMC lambda (1/s)");
   Serial.println("  K <val>     -> SMC K (deg/s^2)");
