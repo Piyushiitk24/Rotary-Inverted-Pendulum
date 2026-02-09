@@ -1,0 +1,43 @@
+sessions:
+  # Experiment 1 — Linear controller hold (no disturbance)
+  - path: logs/balance/session_20260209_095631
+    label: Exp1_LIN_hold
+    experiment: hold
+    notes: "Linear (C 0) upright hold at center"
+
+  # Experiment 2 — Hybrid SMC hold (no disturbance)
+  - path: logs/balance/session_20260209_095908
+    label: Exp2_SMC_hold
+    experiment: hold
+    notes: "Hybrid SMC (C 1) upright hold at center"
+
+  # Experiment 3 — Full-surface SMC4 hold (no disturbance)
+  - path: logs/balance/session_20260209_121635
+    label: Exp3_SMC4_hold
+    experiment: hold
+    notes: "SMC4 (C 2) upright hold at center"
+
+  # Experiment 4 — Guided position tracking / nudge mode (linear only)
+  - path: logs/balance/session_20260209_114605
+    label: Exp4_LIN_nudge
+    experiment: nudge
+    notes: "Linear (C 0) commanded thetaTargetDeg steps (nudge/reference tracking)"
+
+  # Experiment 5 — Disturbance / tap test (linear)
+  - path: logs/balance/session_20260209_114857
+    label: Exp5_LIN_tap
+    experiment: tap
+    notes: "Linear (C 0) finger-tap disturbances (no explicit markers)"
+
+  # Experiment 6 — Disturbance / tap test (hybrid SMC)
+  - path: logs/balance/session_20260209_114953
+    label: Exp6_SMC_tap
+    experiment: tap
+    notes: "Hybrid SMC (C 1) finger-tap disturbances (no explicit markers)"
+
+  # Experiment 7 — Disturbance / tap test (SMC4)
+  - path: logs/balance/session_20260209_121803
+    label: Exp7_SMC4_tap
+    experiment: tap
+    notes: "SMC4 (C 2) finger-tap disturbances (no explicit markers)"
+

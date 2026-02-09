@@ -1146,7 +1146,7 @@ The runtime-tunable parameter `smcBaseScale` (command `O <val>`, range 0–2, de
 - **Linear advantage**: Simpler gains (no trig functions in real-time loop); easier to tune (just pole locations); globally valid if linearization errors are small.
 - **Performance**: For small angles ($|\alpha|<5^\circ$), both approaches perform similarly. For larger disturbances or faster base motion, SMC provides better tracking by leveraging the true nonlinear dynamics.
 
-The implemented system supports runtime switching between `CTRL_LINEAR` and `CTRL_SMC` modes (command `C`), enabling direct performance comparison under identical conditions.
+The implemented system supports mode selection via `C <0|1|2>` **when disarmed** (i.e., not in `STATE_ACTIVE`), enabling direct performance comparison under identical experiment protocols without introducing mode-switch transients or serial-parse stalls in the control loop.
 
 ---
 
@@ -1154,7 +1154,10 @@ The implemented system supports runtime switching between `CTRL_LINEAR` and `CTR
 
 The nonlinear SMC law derived in Sec. 12 uses a sliding surface defined solely by the pendulum states $(\alpha,\dot\alpha)$, with base centering implemented as a separate gated blend term. This section extends the SMC framework by defining a **full-state sliding surface** that incorporates all four system states—pendulum angle, pendulum velocity, base position error, and base velocity error—into a single scalar manifold.
 
-The resulting controller, implemented as `CTRL_SMC_FULL` (command `C 2`), unifies upright stabilization and base reference tracking into one SMC acceleration command, eliminating the need for separate blend logic. This approach represents a pure SMC formulation where both control objectives (pendulum stabilization and base tracking) emerge from the single sliding surface design.
+The resulting controller is implemented in firmware as `CTRL_SMC_FULL` (command `C 2`, status label `mode=SMC4`). In theory, this full-state surface can unify upright stabilization and base reference tracking in a single SMC law. In practice (on this stepper-driven rig), two additional implementation details are critical for repeatable experiments:
+
+1. **Reference-aware formulation:** all $\theta$ terms use the same reference-tracking coordinates as Sec. 11–12, i.e., $\theta_{\mathrm{err}}=\theta-\theta_{\mathrm{ref}}$ and $\dot\theta_{\mathrm{err}}=\dot\theta-\dot\theta_{\mathrm{ref}}$, where $(\theta_{\mathrm{ref}},\dot\theta_{\mathrm{ref}},\ddot\theta_{\mathrm{ref}})$ come from the trapezoidal profile generator (Sec. 12.10, `tools/base_tracking.md`).
+2. **Stepper-friendly robustness additions:** the firmware retains a **gated base-centering assist term** (PD+FF, scaled by `O`) and applies SMC4-only command shaping (tighter accel/speed caps, plus an $\dot\alpha$ clamp inside the SMC4 math). These additions mitigate slow base “random-walk” drift and reduce missed-step / “tick” failures under finger-tap disturbances.
 
 **Design objectives:**
 
@@ -1472,7 +1475,7 @@ To avoid transient kicks at control onset, ramp the effective coupling from zero
 
 $$k_{\mathrm{req}}(t)=k_{\mathrm{user}}\cdot\min\!\left(\frac{t-t_{\mathrm{engage}}}{T_{\mathrm{ramp}}},1\right)$$
 
-A typical ramp time is $T_{\mathrm{ramp}}=500\ \mathrm{ms}$.
+**Firmware value:** $T_{\mathrm{ramp}}=200\ \mathrm{ms}$ (`SMC_FULL_K_RAMP_MS` in `src/main.cpp`).
 
 **5. Denominator-safe effective coupling**
 
@@ -1498,6 +1501,21 @@ Clamp the base tracking error signals before they enter the sliding surface to p
 \end{align}
 
 Typical limits (firmware defaults): $\theta_{\max}=78^\circ$, $\dot\theta_{\max}=200\ \mathrm{deg/s}$, $\theta_{\mathrm{term,max}}=300\ \mathrm{deg/s}$. These are large enough to be inactive during normal operation but protective against edge cases.
+
+**7. SMC4 (full-surface) internal $\dot\alpha$ clamp (stepper-friendly)**
+
+In `CTRL_SMC_FULL` (SMC4), the implementation clamps the measured $\dot\alpha$ used **inside the SMC4 math** to reduce spikes in the $\lambda_\alpha\dot\alpha$ term:
+
+$$\dot\alpha_{\mathrm{ctrl}}=\mathrm{constrain}(\dot\alpha,\ -200,\ +200)\ \mathrm{deg/s}$$
+
+This clamp does **not** change the safety abort logic: the separate upright-only abort on extreme $|\dot\alpha|$ still uses the filtered measured $\dot\alpha$.
+
+**8. SMC4 actuator shaping (stepper-friendly)**
+
+To reduce “tick”/missed-step events during disturbance recovery, the firmware applies tighter caps in SMC4:
+
+- acceleration saturation: $|\ddot\theta_{\mathrm{steps}}|\le 12{,}000\ \mathrm{steps/s^2}$ (in addition to the global $20{,}000$ cap)
+- speed saturation: $|\dot\theta_{\mathrm{steps}}|\le 2{,}000\ \mathrm{steps/s}$
 
 ### 13.8 Parameter selection guidelines
 
@@ -1530,9 +1548,11 @@ The full-state surface SMC has five tunable parameters. This section provides gu
    - **Tuning strategy:** Start with $k=0.3$; if base drift is excessive, increase gradually in steps of $0.1$ while monitoring control effort and checking for saturation or oscillations.
 
 5. **$\lambda_\theta$ (base error shaping):** Shapes how base position error $\theta_{\mathrm{err}}$ and velocity error $\dot\theta_{\mathrm{err}}$ combine in the sliding surface term $\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}}$.
-   - **Default:** $\lambda_\theta=1.0\ \mathrm{s^{-1}}$ (gentle base centering, comparable to the slow mode in Sec. 11.6).
+   - **Default (firmware):** $\lambda_\theta=2.0\ \mathrm{s^{-1}}$ (`smcFullLambdaTheta` in `src/main.cpp`).
    - **Effect:** Larger $\lambda_\theta$ increases the weight of position error relative to velocity error, providing stronger centering stiffness; smaller $\lambda_\theta$ makes the surface more sensitive to base velocity error.
    - **Range:** $0.5$–$2.0\ \mathrm{s^{-1}}$.
+
+**Practical note (important for this rig):** Although the SMC4 surface couples base errors via $k$, the firmware also retains a **gated base-centering assist term** (PD+FF on $\theta_{\mathrm{err}},\dot\theta_{\mathrm{err}}$, scaled by `O` / `smcBaseScale`). Empirically, this assist prevents slow base “random-walk” drift that can occur from modeling mismatch / unmodeled friction when relying purely on the surface coupling. For thesis runs, treat `O` as a first-line knob for “keep arm near center”, and keep $k$ moderate to preserve denominator margin.
 
 **Interaction effects:**
 
@@ -1546,6 +1566,17 @@ The full-state surface SMC has five tunable parameters. This section provides gu
 3. If control is chattery or noisy, increase $\phi$.
 4. If base drift is significant, increase $k$ gradually (monitor denominator margin and control smoothness).
 5. If base position error overshoots or oscillates, adjust $\lambda_\theta$ (decrease for more damping, increase for stiffer centering).
+
+**Firmware mapping (SMC4 controls):**
+
+- Select mode: `C 2` → `CTRL_SMC_FULL` (`mode=SMC4` in `[STATUS]`)
+- Tune full-surface parameters:
+  - `D <k>` sets $k$ (firmware enforces $k\ge 0$ and $k\le 1.2$)
+  - `L <lambda_theta>` sets $\lambda_\theta$ (firmware enforces $\lambda_\theta>0$)
+- Shared SMC parameters (also affect SMC4): `J` ($\lambda_\alpha$), `K` (reaching gain), `P` ($\phi$), `Q` (`smcSign`), `O` (base-centering assist scale).
+- Use `G` once per run to log the current parameter values into `events.txt`.
+
+For safety and timing integrity, these controller/tuning commands are allowed only when **disarmed** (not in `STATE_ACTIVE`); use `!` to disarm before changing them.
 
 ### 13.9 Conversion to stepper units and implementable formula
 
@@ -1577,7 +1608,7 @@ Given sensor readings in degrees: $\alpha_{\deg}$, $\dot\alpha_{\deg}$, $\theta_
 
 4. **Compute effective coupling with ramp-in and denominator safety:**
    $$t_{\mathrm{active}}=\text{time since engagement (ms)}$$
-   $$k_{\mathrm{ramp}}=\min(t_{\mathrm{active}}/T_{\mathrm{ramp}},1.0)\quad(T_{\mathrm{ramp}}=500\ \mathrm{ms})$$
+   $$k_{\mathrm{ramp}}=\min(t_{\mathrm{active}}/T_{\mathrm{ramp}},1.0)\quad(T_{\mathrm{ramp}}=200\ \mathrm{ms})$$
    $$k_{\mathrm{req}}=k_{\mathrm{user}}\cdot k_{\mathrm{ramp}}$$
    $$k_{\mathrm{max}}=B\cos\alpha_{\mathrm{safe}}-0.60$$
    $$k_{\mathrm{eff}}=\max(0,\min(k_{\mathrm{req}},k_{\mathrm{max}}))$$
@@ -1586,31 +1617,57 @@ Given sensor readings in degrees: $\alpha_{\deg}$, $\dot\alpha_{\deg}$, $\theta_
    $$\theta_{\mathrm{term}}=\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}}$$
    (Apply clamp: $|\theta_{\mathrm{term}}|\le 300\ \mathrm{deg/s}$)
 
-6. **Sliding surface:**
-   $$s=\dot\alpha_{\deg}+\lambda_\alpha\alpha_{\deg}+k_{\mathrm{eff}}\theta_{\mathrm{term}}\quad(\mathrm{deg/s})$$
+6. **SMC4 internal $\dot\alpha$ control value (firmware):**
+   In `CTRL_SMC_FULL` (SMC4), the firmware uses a clamped pendulum rate inside the SMC4 computation:
+   $$\dot\alpha_{\mathrm{ctrl}}=\mathrm{constrain}(\dot\alpha_{\deg},\ -200,\ +200)\ \mathrm{deg/s}$$
 
-7. **Saturation function:**
+7. **Sliding surface:**
+   $$s=\dot\alpha_{\mathrm{ctrl}}+\lambda_\alpha\alpha_{\deg}+k_{\mathrm{eff}}\theta_{\mathrm{term}}\quad(\mathrm{deg/s})$$
+
+8. **Saturation function:**
    $$\mathrm{sat}(s/\phi)=\min(1,\max(-1,s/\phi))$$
 
-8. **Drift function in deg/s² (mixed units):** The term $f_0$ involves $\dot\theta^2$ which must be converted. Internal computation in radians is cleaner:
+9. **Drift function in deg/s² (mixed units):** The term $f_0$ involves $\dot\theta^2$ which must be converted. Internal computation in radians is cleaner:
    $$\dot\theta_{\mathrm{rad}}=\dot\theta_{\deg}\cdot\deg2\mathrm{rad}$$
    $$f_{0,\mathrm{rad}}=A\sin\alpha+\sin\alpha\cos\alpha\,\dot\theta_{\mathrm{rad}}^2\quad(A=100.8\ \mathrm{rad/s^2})$$
    $$f_{0,\deg}=f_{0,\mathrm{rad}}\cdot\mathrm{rad}2\deg$$
 
-9. **Full drift term:**
-   $$f_{\mathrm{full},\deg}=f_{0,\deg}+\lambda_\alpha\dot\alpha_{\deg}+k_{\mathrm{eff}}\lambda_\theta\dot\theta_{\mathrm{err}}-k_{\mathrm{eff}}\ddot\theta_{\mathrm{ref},\deg}$$
+10. **Full drift term:**
+   $$f_{\mathrm{full},\deg}=f_{0,\deg}+\lambda_\alpha\dot\alpha_{\mathrm{ctrl}}+k_{\mathrm{eff}}\lambda_\theta\dot\theta_{\mathrm{err}}-k_{\mathrm{eff}}\ddot\theta_{\mathrm{ref},\deg}$$
 
-10. **Control law in deg/s²:**
+11. **Control law in deg/s²:**
     $$\ddot\theta_{\deg}=\frac{f_{\mathrm{full},\deg}+K\cdot\mathrm{sat}(s/\phi)}{B\cos\alpha_{\mathrm{safe}}-k_{\mathrm{eff}}}$$
 
-11. **Clamp to maximum acceleration:**
+12. **Clamp to maximum acceleration (numeric safety):**
     $$\ddot\theta_{\deg}=\mathrm{constrain}(\ddot\theta_{\deg},-\ddot\theta_{\max},+\ddot\theta_{\max})\quad(\ddot\theta_{\max}=4500\ \mathrm{deg/s^2})$$
+    This corresponds to the global firmware limit $20{,}000\ \mathrm{steps/s^2}$.
 
-12. **Convert to stepper acceleration:**
+13. **Convert to stepper acceleration:**
     $$\ddot\theta_{\mathrm{steps}}=4.444\cdot\ddot\theta_{\deg}\quad(\mathrm{steps/s^2})$$
 
-13. **Apply overall sign flip and global saturation** (shared acceleration pipeline, Sec. 12.10):
-    $$\ddot\theta_{\mathrm{steps}}=\mathrm{constrain}(\mathrm{CTRL\_SIGN}\cdot\ddot\theta_{\mathrm{steps}},-20{,}000,+20{,}000)$$
+14. **Base-centering assist term (firmware addition, stepper-friendly):**
+
+    In addition to the SMC4 acceleration computed from the surface, the firmware retains a small, gated base-centering assist:
+
+    $$\ddot\theta_{\mathrm{base,steps}} = O\cdot\left(\ddot\theta_{\mathrm{ref,steps}} + K_{\Theta}\,\theta_{\mathrm{err}} + K_{\dot\Theta}\,\dot\theta_{\mathrm{err}}\right)$$
+
+    where $\ddot\theta_{\mathrm{ref,steps}} = 4.444\cdot \ddot\theta_{\mathrm{ref},\deg}$ and $O\in[0,2]$ is the runtime-tunable scale (command `O <val>`, firmware variable `smcBaseScale`). In firmware this term uses the same gains as the linear mode (`K_THETA`, `K_THETADOT`, units: steps/s² per deg and steps/s² per deg/s).
+
+    **Gate (SMC4):** enabled only when engaged and near upright, approximately
+    $$|\alpha|<5^\circ,\quad |\dot\alpha|<250\ \mathrm{deg/s}$$
+    so it does not fight recovery when far from upright. The final physical acceleration is the sum:
+
+    $$\ddot\theta_{\mathrm{cmd,steps}} = \ddot\theta_{\mathrm{SMC4,steps}} + \ddot\theta_{\mathrm{base,steps}}$$
+
+15. **Apply overall sign and actuator limits** (firmware pipeline):
+
+    - Apply `smcSign` to $\ddot\theta$ (SMC-only sign knob), then apply `CTRL_SIGN` after assembling the mode’s full `accCmdPhysical`.
+    - Apply the engage ramp (100 ms) and saturation. In SMC4, the firmware uses a tighter acceleration limit:
+      $$\ddot\theta_{\mathrm{steps}}=\mathrm{constrain}(\ddot\theta_{\mathrm{steps}},-12{,}000,+12{,}000)$$
+    - Integrate to a speed command and apply a tighter SMC4 speed limit:
+      $$\dot\theta_{\mathrm{steps}}=\mathrm{constrain}(\dot\theta_{\mathrm{steps}},-2{,}000,+2{,}000)$$
+
+    These SMC4-specific caps are a stepper-friendly robustness choice and are not part of the ideal continuous-time derivation.
 
 This sequence is implemented in the firmware `CTRL_SMC_FULL` branch, which outputs the final stepper acceleration command $\ddot\theta_{\mathrm{steps}}$ to the existing velocity-integration and speed-command pipeline (unchanged from Sec. 12).
 
@@ -1634,10 +1691,10 @@ The full-state surface SMC (Sec. 13) represents the third nonlinear control mode
 
 **Full-state surface SMC (`CTRL_SMC_FULL`, command `C 2`):**
 
-- **Surface/law:** Uses a unified sliding surface $s=\dot\alpha+\lambda_\alpha\alpha+k(\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}})$ encoding both pendulum and base dynamics. Single SMC acceleration command; no separate blend or gating logic.
+- **Surface/law:** Uses a unified sliding surface $s=\dot\alpha+\lambda_\alpha\alpha+k(\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}})$ encoding both pendulum and base dynamics. The firmware computes an SMC4 acceleration from this surface **and** (for this stepper rig) retains a small gated base-centering assist term (PD+FF on $\theta_{\mathrm{err}},\dot\theta_{\mathrm{err}}$, scaled by `O`), plus SMC4-only actuator shaping (Sec. 13.7).
 - **Tuning:** Five parameters ($\lambda_\alpha,K,\phi,k,\lambda_\theta$) with interactions: $k$ directly affects control effectiveness denominator $(B\cos\alpha-k)$.
-- **Advantages:** Pure SMC formulation (no hybrid gating); both objectives emerge from single surface; theoretically elegant and suitable for formal analysis.
-- **Limitations:** More sensitive to parameter choice (coupling $k$ affects both surface dynamics and denominator conditioning); requires careful safety margins (Sec. 13.7); tuning is less intuitive than decoupled hybrid approach.
+- **Advantages:** Both objectives emerge primarily from a single surface; theoretically elegant and suitable for formal analysis (denominator conditioning and surface coupling are explicit).
+- **Limitations:** More sensitive to parameter choice (coupling $k$ affects both surface dynamics and denominator conditioning); requires careful safety margins (Sec. 13.7); on a stepper actuator it can be more stall-sensitive under aggressive disturbances unless $\phi$ is large and actuator shaping is enabled.
 
 **Performance comparison (empirically, near-upright operation $|\alpha|<5^\circ$):**
 
@@ -1650,8 +1707,8 @@ The full-state surface SMC (Sec. 13) represents the third nonlinear control mode
 
 - Use **`CTRL_LINEAR`** for typical upright balancing with gentle base centering; easiest to tune and adequate for $|\alpha|<5^\circ$.
 - Use **`CTRL_SMC`** (hybrid) for robust pendulum stabilization with optional aggressive base tracking (tune $s_{\mathrm{scale}}$); best for disturbance rejection experiments where base drift is secondary.
-- Use **`CTRL_SMC_FULL`** for unified SMC formulation with simultaneous base tracking; best for theoretical validation and reference tracking tasks where gate-free operation is desired.
+- Use **`CTRL_SMC_FULL`** (SMC4) for thesis demonstration of a full-state surface SMC with $\theta$ terms. In this implementation it is “full-surface” in the SMC law, but still uses stepper-friendly additions (base-centering assist `O`, actuator shaping); treat it as a proof-of-concept mode and expect more sensitivity to actuator limits under aggressive tap/nudge tests.
 
-The runtime command `C <0|1|2>` enables switching between modes (only when disarmed) for direct experimental comparison under identical conditions.
+The command `C <0|1|2>` selects the controller mode (only when disarmed) for direct experimental comparison under identical conditions.
 
 ---

@@ -29,14 +29,24 @@ Desktop.ini
 *.bak
 *.orig
 logs/
+reports/
 
 # Python cache artifacts
 __pycache__/
 *.py[cod]
 *$py.class
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Python virtual environments
 .venv/
 venv/
 env/
 .env/
+.env
+.env.*
+!.env.example

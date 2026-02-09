@@ -109,26 +109,47 @@ float smcSign = +1.0f;         // SMC-only sign flip knob (+1 or -1)
 float smcBaseScale = 1.0f;     // 0..2 scale for base tracking blend (default: keep arm near center)
 
 // Full-state surface SMC (SMC4): surface includes alpha/alphaDot/thetaErr/thetaDotErr.
-float smcFullK = 0.50f;              // dimensionless coupling weight
-float smcFullLambdaTheta = 1.0f;     // 1/s
+//
+// IMPORTANT:
+// - Keep `smcFullK >= 0`. This gain multiplies `thetaDotErr` in the surface. Making it negative
+//   introduces anti-damping on base velocity, and has repeatedly caused immediate base run-away
+//   to the mechanical limits in SMC4 experiments.
+// - Keep `smcFullLambdaTheta > 0`. On the sliding manifold, it yields theta dynamics
+//     thetaDotErr = -smcFullLambdaTheta * thetaErr
+//   so negative values are mathematically unstable (theta drifts toward a limit).
+// - If SMC4 accelerates in the wrong physical direction, flip `smcSign` (command `Q -1` / `Q 1`).
+float smcFullK = 0.50f;              // >=0, dimensionless (theta coupling weight)
+float smcFullLambdaTheta = 2.00f;    // 1/s (>0 for stable centering)
 
 const float SMC_ALPHA_ABORT_DEG = 25.0f;  // upright-only hard window (no swing-up)
 const float SMC_ALPHADOT_ABORT_DEG_S = 250.0f;  // abort if pendulum rate is extreme (upright-only)
 const uint8_t SMC_ALPHADOT_ABORT_TICKS_REQ = 3; // debounce to avoid single-sample noise
+const uint32_t SMC_ABORT_GRACE_MS = 200;        // ignore alphaDot abort briefly after ENGAGED! (engage transient)
+const float SMC_ALPHADOT_ABORT_MIN_ALPHA_DEG = 5.0f;  // avoid aborting when alpha is near 0 but alphaDot spikes
 // Gate the SMC base-centering blend with a looser window than MOVE_* (which is only for profile advance).
 // We still want centering active during typical alphaDot transients.
 const float SMC_BASE_GATE_ALPHA_WINDOW_DEG = 5.0f;
 const float SMC_BASE_GATE_ALPHADOT_WINDOW_DEG_S = 150.0f;
+// SMC4 needs base-centering assist more often (otherwise it can "random walk" the arm while balancing).
+// Use a wider alphaDot window (up to the abort threshold) so centering is active during typical transients.
+const float SMC4_BASE_GATE_ALPHADOT_WINDOW_DEG_S = SMC_ALPHADOT_ABORT_DEG_S;
 const float SMC_COS_MIN = 0.2f;           // glitch guard for cos(alpha) in division
 const float THETA_DDOT_MAX_DEG_S2 = MAX_ACC_STEPS / STEPS_PER_DEG;  // clamp before steps conversion
 
 // Full-state SMC (SMC4) safeguards.
 const float SMC_FULL_K_MAX = 1.20f;
 const float SMC_FULL_DENOM_MIN = 0.60f;
-const uint32_t SMC_FULL_K_RAMP_MS = 500;
+const uint32_t SMC_FULL_K_RAMP_MS = 200;
 const float SMC_FULL_THETA_ERR_CLAMP_DEG = 78.0f;
 const float SMC_FULL_THETADOT_ERR_CLAMP_DEG_S = 200.0f;
 const float SMC_FULL_THETA_TERM_CLAMP_DEG_S = 300.0f;
+
+// SMC4 actuator shaping (stepper-friendly):
+// - Clamp alphaDot used *inside* SMC4 math (keeps lambda*alphaDot from producing extreme thetaDDot spikes).
+// - Use tighter accel/speed limits than the global ones (reduces "tick"/stall events during disturbance recovery).
+const float SMC4_ALPHA_DOT_CTRL_CLAMP_DEG_S = 200.0f;
+const float SMC4_MAX_ACC_STEPS = 12000.0f;  // steps/s^2 (<= MAX_ACC_STEPS)
+const float SMC4_MAX_SPEED_HZ = 2000.0f;    // steps/s (<= MAX_SPEED_HZ)
 
 // Signs
 int motorSign  = +1;   // +steps = CW from above
@@ -976,7 +997,11 @@ void handleSerial() {
         return;
       }
       float v = Serial.parseFloat();
-      if (v >= 0.0f && v <= SMC_FULL_K_MAX) smcFullK = v;
+      if (v < 0.0f) {
+        Serial.println("ERR: smcFullK must be >= 0 (negative k causes base velocity anti-damping).");
+      } else if (v <= SMC_FULL_K_MAX) {
+        smcFullK = v;
+      }
       Serial.print("smcFullK="); Serial.println(smcFullK, 2);
       return;
     }
@@ -988,7 +1013,11 @@ void handleSerial() {
         return;
       }
       float v = Serial.parseFloat();
-      if (v >= 0.0f && v <= 50.0f) smcFullLambdaTheta = v;
+      if (v <= 0.0f) {
+        Serial.println("ERR: smcFullLambdaTheta must be > 0 (negative/zero makes theta centering unstable).");
+      } else if (v <= 50.0f) {
+        smcFullLambdaTheta = v;
+      }
       Serial.print("smcFullLambdaTheta="); Serial.println(smcFullLambdaTheta, 2);
       return;
     }
@@ -1072,9 +1101,9 @@ void setup() {
   Serial.println("  K <val>     -> SMC K (deg/s^2)");
   Serial.println("  P <val>     -> SMC phi (deg/s)");
   Serial.println("  Q <+1|-1>   -> SMC sign flip");
-  Serial.println("  O <0..2>    -> SMC base tracking scale (hybrid)");
-  Serial.println("  D <val>     -> SMC4 k (theta coupling)");
-  Serial.println("  L <val>     -> SMC4 lambda_theta (1/s)");
+  Serial.println("  O <0..2>    -> Base-centering assist scale (SMC/SMC4)");
+  Serial.println("  D <val>     -> SMC4 k (>=0; thetaDot coupling)");
+  Serial.println("  L <val>     -> SMC4 lambda_theta (1/s; must be > 0)");
   Serial.println("Useful:");
   Serial.println("  S (sign wizard), G (print config), R (clear EEPROM), Y (save), W/N/U (tuning)");
   Serial.println("Log: t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped");
@@ -1339,7 +1368,11 @@ void loop() {
       // Additional upright-only SMC abort: extreme alphaDot inside the angle window tends to rail accel
       // and can walk the base. Debounced to avoid single-sample noise.
       if (ctrlMode != CTRL_LINEAR) {
-        if (fabs(alphaDotFilt) > SMC_ALPHADOT_ABORT_DEG_S) {
+        const bool abortGraceOver = (millis() - engageStartMs) > SMC_ABORT_GRACE_MS;
+        if (!abortGraceOver) {
+          smcAlphaDotAbortTicks = 0;
+        } else if (fabs(alphaDotFilt) > SMC_ALPHADOT_ABORT_DEG_S &&
+                   fabs(alphaRawSigned) > SMC_ALPHADOT_ABORT_MIN_ALPHA_DEG) {
           if (smcAlphaDotAbortTicks < 255) smcAlphaDotAbortTicks++;
           if (smcAlphaDotAbortTicks >= SMC_ALPHADOT_ABORT_TICKS_REQ) {
             Serial.print("FALLEN limit=smc_alphaDot");
@@ -1545,7 +1578,7 @@ void loop() {
         const float rad2deg = 180.0f / PI;
 
         const float alphaDeg = alphaRawSigned;
-        const float alphaDotDegS = alphaDotFilt;
+        const float alphaDotDegS = constrain(alphaDotFilt, -SMC4_ALPHA_DOT_CTRL_CLAMP_DEG_S, SMC4_ALPHA_DOT_CTRL_CLAMP_DEG_S);
         const float thetaDotDegS = thetaDotFilt;  // measured (not commanded)
 
         const float alphaRad = alphaDeg * deg2rad;
@@ -1570,10 +1603,18 @@ void loop() {
         const float kRamp = constrain((float)(millis() - engageStartMs) * (1.0f / (float)SMC_FULL_K_RAMP_MS), 0.0f, 1.0f);
         float kReq = constrain(smcFullK, 0.0f, SMC_FULL_K_MAX) * kRamp;
 
-        float kMaxByDen = (MODEL_B * cosSafe) - SMC_FULL_DENOM_MIN;
-        if (kMaxByDen < 0.0f) kMaxByDen = 0.0f;
-        float kEff = min(kReq, kMaxByDen);
-        float den = (MODEL_B * cosSafe) - kEff;  // guaranteed >= SMC_FULL_DENOM_MIN
+        float kEff = kReq;
+        float den = (MODEL_B * cosSafe) - kEff;
+        // Denominator safety: never divide by a too-small effective input coefficient.
+        if (fabs(den) < SMC_FULL_DENOM_MIN) {
+          if (den >= 0.0f) {
+            kEff = (MODEL_B * cosSafe) - SMC_FULL_DENOM_MIN;
+            den = SMC_FULL_DENOM_MIN;
+          } else {
+            kEff = (MODEL_B * cosSafe) + SMC_FULL_DENOM_MIN;
+            den = -SMC_FULL_DENOM_MIN;
+          }
+        }
 
         smcFullDenDiag = den;
         smcFullKEffDiag = kEff;
@@ -1596,7 +1637,24 @@ void loop() {
 
         const float accSMC_steps_s2 = STEPS_PER_DEG * thetaDDotSmcDegS2;
         accSmcStepsS2Diag = accSMC_steps_s2;
-        accCmdPhysical = accSMC_steps_s2;
+
+        // Base centering assist (same mechanism as hybrid SMC): keeps theta near thetaRef, prevents random-walk drift.
+        // This is gated so it doesn't fight recovery when the pendulum is far from upright.
+        float accBase_steps_s2 =
+            accFF_steps_s2 +
+            K_THETA * thetaErr +
+            K_THETADOT * thetaDotErr;
+
+        accBase_steps_s2 *= constrain(smcBaseScale, 0.0f, 2.0f);
+        const bool smcBaseGate =
+            engageGraceOver &&
+            (fabs(alphaRawSigned) < SMC_BASE_GATE_ALPHA_WINDOW_DEG) &&
+            (fabs(alphaDotFilt) < SMC4_BASE_GATE_ALPHADOT_WINDOW_DEG_S);
+        if (!smcBaseGate) accBase_steps_s2 = 0.0f;
+        accBaseStepsS2Diag = accBase_steps_s2;
+        smcBaseGateDiag = smcBaseGate ? 1 : 0;
+
+        accCmdPhysical = accSMC_steps_s2 + accBase_steps_s2;
       } else {
         // FULL-STATE FEEDBACK CONTROLLER (Section 11.7 modelling_complete.md)
         // Control law (reference tracking):
@@ -1619,9 +1677,12 @@ void loop() {
       if (ramp > 1.0f) ramp = 1.0f;
       accCmdPhysical *= ramp;
 
+      const float accLimitStepsS2 =
+          (ctrlMode == CTRL_SMC_FULL) ? min(SMC4_MAX_ACC_STEPS, MAX_ACC_STEPS) : MAX_ACC_STEPS;
+
       int sat = 0;
-      if (accCmdPhysical >  MAX_ACC_STEPS) { accCmdPhysical =  MAX_ACC_STEPS; sat = 1; }
-      if (accCmdPhysical < -MAX_ACC_STEPS) { accCmdPhysical = -MAX_ACC_STEPS; sat = 1; }
+      if (accCmdPhysical >  accLimitStepsS2) { accCmdPhysical =  accLimitStepsS2; sat = 1; }
+      if (accCmdPhysical < -accLimitStepsS2) { accCmdPhysical = -accLimitStepsS2; sat = 1; }
       lastAccCmdDiag = (int32_t)accCmdPhysical;
       if (sat) dbgAccSat++;
 
@@ -1651,7 +1712,9 @@ void loop() {
         dbgLeakActiveTicks++;
       }
       thetaDotCmdMotor += (accCmdMotor - leak * thetaDotCmdMotor) * dt;
-      thetaDotCmdMotor = constrain(thetaDotCmdMotor, -MAX_SPEED_HZ, MAX_SPEED_HZ);
+      const float speedLimitHz =
+          (ctrlMode == CTRL_SMC_FULL) ? min(SMC4_MAX_SPEED_HZ, MAX_SPEED_HZ) : MAX_SPEED_HZ;
+      thetaDotCmdMotor = constrain(thetaDotCmdMotor, -speedLimitHz, speedLimitHz);
 
       // soft limit using MEASURED theta
       const float LIM_MARGIN_DEG = 2.0f;
@@ -1690,6 +1753,9 @@ void loop() {
         } else if (ctrlMode == CTRL_SMC_FULL) {
           Serial.print(" s="); Serial.print(smcS, 1);
           Serial.print(" thetaDDot="); Serial.print(thetaDDotSmcDegS2, 0);
+          Serial.print(" accSMC="); Serial.print((int)accSmcStepsS2Diag);
+          Serial.print(" accBase="); Serial.print((int)accBaseStepsS2Diag);
+          Serial.print(" gate="); Serial.print(smcBaseGateDiag);
           Serial.print(" den="); Serial.print(smcFullDenDiag, 2);
           Serial.print(" kEff="); Serial.print(smcFullKEffDiag, 2);
           Serial.print(" kRamp="); Serial.print(smcFullKRampDiag, 2);

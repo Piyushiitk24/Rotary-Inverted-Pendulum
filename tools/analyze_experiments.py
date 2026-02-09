@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tempfile
@@ -56,16 +57,21 @@ def _set_matplotlib_cache_dir() -> None:
 
 
 def _parse_manifest(path: Path) -> dict[str, Any]:
-    try:
-        import yaml  # type: ignore
-    except Exception as e:
-        raise RuntimeError(
-            "Manifest requires PyYAML. Install: ./.venv/bin/pip install -r tools/requirements_thesis.txt"
-        ) from e
+    if path.suffix.lower() == ".json":
+        data = json.loads(path.read_text())
+    else:
+        try:
+            import yaml  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                "YAML manifest requires PyYAML. Either install it "
+                "(`./.venv/bin/pip install -r tools/requirements_thesis.txt`) "
+                "or use a JSON manifest (`.json`)."
+            ) from e
 
-    data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text())
     if not isinstance(data, dict):
-        raise ValueError("manifest must be a YAML mapping")
+        raise ValueError("manifest must be a mapping object (YAML/JSON)")
     return data
 
 
@@ -251,7 +257,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Batch analysis for Furuta/RIP balance sessions (thesis-ready outputs).")
     ap.add_argument("--glob", help="Glob pattern for session dirs (e.g. 'logs/balance/session_20260205_*').")
     ap.add_argument("--sessions", nargs="*", help="Explicit session directories (logs/balance/session_...).")
-    ap.add_argument("--manifest", help="Optional YAML manifest file (requires PyYAML).")
+    ap.add_argument(
+        "--manifest",
+        help="Optional manifest file (.json or .yaml). YAML requires PyYAML; JSON works without extra deps.",
+    )
     ap.add_argument("--out", help="Output directory. Default: reports/thesis/<timestamp>/")
     ap.add_argument("--gap-ms", type=int, default=500, help="CSV timestamp gap (ms) used only in fallback segmentation.")
     ap.add_argument("--no-spectrum", action="store_true", help="Disable low-frequency spectrum plots.")
@@ -278,6 +287,11 @@ def main() -> int:
         session_dir = Path(session_dir)
         session_name = session_dir.name
         print(f"[INFO] Processing {session_name} ...")
+
+        m = manifest_meta.get(str(session_dir), {})
+        manifest_label = m.get("label", "") if isinstance(m, dict) else ""
+        manifest_experiment = m.get("experiment", "") if isinstance(m, dict) else ""
+        manifest_notes = m.get("notes", "") if isinstance(m, dict) else ""
 
         try:
             df = load_balance_csv(session_dir)
@@ -335,6 +349,12 @@ def main() -> int:
             t.diagnostics.update(_summarize_dbg_within(t, ev))
             t.diagnostics.update(_summarize_move_within(t, ev))
             row = compute_trial_metrics(t)
+            if manifest_label:
+                row["label"] = manifest_label
+            if manifest_experiment:
+                row["experiment"] = manifest_experiment
+            if manifest_notes:
+                row["notes"] = manifest_notes
             # include a few diagnostics columns
             for k in ["dbg_dtUsMax_max", "dbg_over_max", "dbg_sat_max", "dbg_stallE_max", "move_paused_total_s", "move_paused_count"]:
                 if k in t.diagnostics:
@@ -370,16 +390,23 @@ def main() -> int:
                             steps_for_trial[i]["t_next_cmd_s"] = steps_for_trial[i + 1]["t_cmd_s"]
 
             if steps_for_trial:
-                nudge_rows.extend(compute_nudge_step_metrics(t, steps_for_trial))
+                rows = compute_nudge_step_metrics(t, steps_for_trial)
+                for r in rows:
+                    if manifest_label:
+                        r["label"] = manifest_label
+                    if manifest_experiment:
+                        r["experiment"] = manifest_experiment
+                    if manifest_notes:
+                        r["notes"] = manifest_notes
+                nudge_rows.extend(rows)
 
-        m = manifest_meta.get(str(session_dir), {})
         manifest_rows.append(
             {
                 "session": str(session_dir),
                 "events_start_dt": ev.start_dt.isoformat() if ev.start_dt else "",
-                "manifest_label": m.get("label", "") if isinstance(m, dict) else "",
-                "manifest_experiment": m.get("experiment", "") if isinstance(m, dict) else "",
-                "manifest_notes": m.get("notes", "") if isinstance(m, dict) else "",
+                "manifest_label": manifest_label,
+                "manifest_experiment": manifest_experiment,
+                "manifest_notes": manifest_notes,
             }
         )
 
@@ -408,15 +435,24 @@ def main() -> int:
         summary = summary.reset_index()
         summary.to_csv(out_dir / "metrics_summary_by_mode.csv", index=False)
 
+        # Optional: summary by (experiment, mode) when a manifest provides experiment labels.
+        if "experiment" in trials_df.columns and trials_df["experiment"].notna().any():
+            sub = trials_df[trials_df["experiment"].astype(str) != ""].copy()
+            if not sub.empty:
+                summary2 = sub.groupby(["experiment", "mode"])[existing].agg(["mean", "median", "std", "count"])
+                summary2.columns = [f"{metric}_{stat}" for metric, stat in summary2.columns]
+                summary2 = summary2.reset_index()
+                summary2.to_csv(out_dir / "metrics_summary_by_experiment_mode.csv", index=False)
+
     if nudge_rows:
         pd.DataFrame(nudge_rows).to_csv(out_dir / "metrics_nudge_steps.csv", index=False)
 
     pd.DataFrame(alignment_rows).to_csv(out_dir / "alignment_quality.csv", index=False)
     pd.DataFrame(manifest_rows).to_csv(out_dir / "manifest_resolved.csv", index=False)
 
-    # Representative selection per mode
+    # Representative selection (either per mode, or per (experiment, mode) when a manifest provides experiments).
     if not trials_df.empty:
-        reps: dict[str, pd.Series] = {}
+        reps: list[tuple[str, str, pd.Series]] = []  # (experiment, mode, row)
 
         # Optional: pinned representatives in manifest
         pinned = manifest_data.get("representatives") if isinstance(manifest_data, dict) else None
@@ -428,34 +464,64 @@ def main() -> int:
                 elif isinstance(spec, dict):
                     pinned_map[str(mode).upper()] = spec
 
-        for mode in sorted(trials_df["mode"].unique(), key=_mode_rank):
-            mode_u = str(mode).upper()
-            sub = trials_df[trials_df["mode"] == mode].copy()
-            if sub.empty:
-                continue
+        use_experiment = "experiment" in trials_df.columns and trials_df["experiment"].notna().any()
 
-            # Use pinned representative if provided and present in table.
-            if mode_u in pinned_map:
-                spec = pinned_map[mode_u]
-                sess = spec.get("session")
-                tix = spec.get("trial_index")
-                if sess is not None:
-                    sub2 = sub[sub["session"] == str(sess)]
-                    if tix is not None:
-                        sub2 = sub2[sub2["trial_index"] == int(tix)]
-                    if not sub2.empty:
-                        reps[mode] = sub2.iloc[0]
+        if use_experiment:
+            exp_vals = sorted({str(x) for x in trials_df["experiment"].dropna().tolist() if str(x) != ""})
+            for exp in exp_vals:
+                df_exp = trials_df[trials_df["experiment"].astype(str) == exp]
+                for mode in sorted(df_exp["mode"].unique(), key=_mode_rank):
+                    mode_u = str(mode).upper()
+                    sub = df_exp[df_exp["mode"] == mode].copy()
+                    if sub.empty:
                         continue
 
-            sub["rep_score"] = sub.apply(_score_representative, axis=1)
-            best = sub.sort_values("rep_score", ascending=False).iloc[0]
-            reps[mode] = best
+                    # Pinned representatives are mode-global; apply only when they match this experiment too.
+                    if mode_u in pinned_map:
+                        spec = pinned_map[mode_u]
+                        sess = spec.get("session")
+                        tix = spec.get("trial_index")
+                        if sess is not None:
+                            sub2 = sub[sub["session"] == str(sess)]
+                            if tix is not None:
+                                sub2 = sub2[sub2["trial_index"] == int(tix)]
+                            if not sub2.empty:
+                                reps.append((exp, str(mode), sub2.iloc[0]))
+                                continue
+
+                    sub["rep_score"] = sub.apply(_score_representative, axis=1)
+                    best = sub.sort_values("rep_score", ascending=False).iloc[0]
+                    reps.append((exp, str(mode), best))
+        else:
+            for mode in sorted(trials_df["mode"].unique(), key=_mode_rank):
+                mode_u = str(mode).upper()
+                sub = trials_df[trials_df["mode"] == mode].copy()
+                if sub.empty:
+                    continue
+
+                # Use pinned representative if provided and present in table.
+                if mode_u in pinned_map:
+                    spec = pinned_map[mode_u]
+                    sess = spec.get("session")
+                    tix = spec.get("trial_index")
+                    if sess is not None:
+                        sub2 = sub[sub["session"] == str(sess)]
+                        if tix is not None:
+                            sub2 = sub2[sub2["trial_index"] == int(tix)]
+                        if not sub2.empty:
+                            reps.append(("", str(mode), sub2.iloc[0]))
+                            continue
+
+                sub["rep_score"] = sub.apply(_score_representative, axis=1)
+                best = sub.sort_values("rep_score", ascending=False).iloc[0]
+                reps.append(("", str(mode), best))
 
         import matplotlib
 
         matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
 
-        for mode, best in reps.items():
+        for exp, mode, best in reps:
             session_dir = Path(best["session"])
             trial_index = int(best["trial_index"])
             df = load_balance_csv(session_dir)
@@ -467,21 +533,26 @@ def main() -> int:
             if trial is None or trial.df is None or len(trial.df) == 0:
                 continue
 
-            base_name = f"{mode}_rep_{session_dir.name}_trial{trial_index}"
-            fig1 = plot_timeseries(trial.df, title=f"{mode} representative: {session_dir.name} (trial {trial_index})")
+            prefix = f"{exp}_" if exp else ""
+            base_name = f"{prefix}{mode}_rep_{session_dir.name}_trial{trial_index}"
+            title_prefix = f"{exp} / " if exp else ""
+            fig1 = plot_timeseries(
+                trial.df,
+                title=f"{title_prefix}{mode} representative: {session_dir.name} (trial {trial_index})",
+            )
             fig1.savefig(figs_dir / f"{base_name}_timeseries.png", dpi=160)
             fig1.savefig(figs_dir / f"{base_name}_timeseries.pdf")
-            fig1.clf()
+            plt.close(fig1)
 
-            fig2 = plot_phase_portrait(trial.df, title=f"{mode} α vs α̇")
+            fig2 = plot_phase_portrait(trial.df, title=f"{title_prefix}{mode} α vs α̇")
             fig2.savefig(figs_dir / f"{base_name}_phase_alpha.png", dpi=160)
             fig2.savefig(figs_dir / f"{base_name}_phase_alpha.pdf")
-            fig2.clf()
+            plt.close(fig2)
 
-            fig3 = plot_effort_hist(trial.df, title=f"{mode} effort histogram")
+            fig3 = plot_effort_hist(trial.df, title=f"{title_prefix}{mode} effort histogram")
             fig3.savefig(figs_dir / f"{base_name}_effort_hist.png", dpi=160)
             fig3.savefig(figs_dir / f"{base_name}_effort_hist.pdf")
-            fig3.clf()
+            plt.close(fig3)
 
             # Sparse SMC diagnostics from printed [STATUS] fields (safe; no reconstruction).
             # Only plot when the firmware printed the field (e.g., s=...).
@@ -503,12 +574,12 @@ def main() -> int:
                         fig = plot_sparse_series(
                             np.asarray(xs, dtype=float),
                             np.asarray(ys, dtype=float),
-                            title=f"{mode} sparse {key}(t) from [STATUS]",
+                            title=f"{title_prefix}{mode} sparse {key}(t) from [STATUS]",
                             ylabel=ylabel,
                         )
                         fig.savefig(figs_dir / f"{base_name}_sparse_{key}.png", dpi=160)
                         fig.savefig(figs_dir / f"{base_name}_sparse_{key}.pdf")
-                        fig.clf()
+                        plt.close(fig)
 
                 _plot_sparse_key("s", "s (deg/s)")
                 _plot_sparse_key("den", "den (a.u.)")
@@ -517,10 +588,10 @@ def main() -> int:
 
             if not args.no_spectrum:
                 try:
-                    fig4 = plot_lowfreq_spectrum(trial.df, title=f"{mode} α spectrum", col="alpha_deg")
+                    fig4 = plot_lowfreq_spectrum(trial.df, title=f"{title_prefix}{mode} α spectrum", col="alpha_deg")
                     fig4.savefig(figs_dir / f"{base_name}_alpha_spectrum.png", dpi=160)
                     fig4.savefig(figs_dir / f"{base_name}_alpha_spectrum.pdf")
-                    fig4.clf()
+                    plt.close(fig4)
                 except Exception:
                     pass
 
@@ -531,10 +602,10 @@ def main() -> int:
                 if steps:
                     # Use t_cmd_s / target_deg from the step table (already in trial time).
                     plot_steps = [{"t_cmd_s": float(s["t_cmd_s"]), "target_deg": float(s["target_deg"]), "t_next_cmd_s": float(s.get("t_end_s", trial.df["time_s"].iloc[-1]))} for s in steps]
-                    fig5 = plot_nudge_tracking(trial.df, title=f"{mode} nudge tracking", steps=plot_steps)
+                    fig5 = plot_nudge_tracking(trial.df, title=f"{title_prefix}{mode} nudge tracking", steps=plot_steps)
                     fig5.savefig(figs_dir / f"{base_name}_nudge.png", dpi=160)
                     fig5.savefig(figs_dir / f"{base_name}_nudge.pdf")
-                    fig5.clf()
+                    plt.close(fig5)
 
     # README
     readme = out_dir / "README.md"
@@ -548,6 +619,7 @@ def main() -> int:
                 "## Outputs",
                 "- `metrics_trials.csv`: per-trial metrics",
                 "- `metrics_summary_by_mode.csv`: aggregated metrics by controller mode",
+                "- `metrics_summary_by_experiment_mode.csv`: aggregated metrics by (experiment, mode) when a manifest provides experiment labels",
                 "- `metrics_nudge_steps.csv`: per-step metrics for nudge experiments (when detected)",
                 "- `alignment_quality.csv`: host↔device time alignment quality per session",
                 "- `figures/`: representative-run figures per mode",
