@@ -711,6 +711,73 @@ $$\ddot\theta_{\mathrm{steps}}= -\Big( -9.92\,\theta_{\deg} -858.4\,\alpha_{\deg
 - If acceleration saturates frequently, reduce $\omega_1$ (or increase damping $\zeta_1$) and/or reduce $\omega_2$.
 - If slow drift persists despite adequate gains, augment with a small integral term on $\theta$ (bias rejection), implemented with anti-windup and small limits.
 
+### 11.9 Discrete derivative filter (professor’s bilinear/Tustin method)
+
+The controllers in this project require measurements of $\dot\alpha$ and $\dot\theta$. Direct finite differences are very noisy at 200 Hz and amplify encoder quantization and I²C glitches. Instead, the firmware implements a **filtered derivative** (a differentiator with a first-order roll-off), discretized using the **bilinear (Tustin) transform**.
+
+#### 11.9.1 Continuous-time filter
+
+Use the transfer function
+
+$$H(s)=\frac{s}{1+s/\omega_c}$$
+
+where $\omega_c$ (rad/s) is the derivative filter cutoff. This behaves like an ideal differentiator at low frequency but limits high-frequency amplification.
+
+#### 11.9.2 Bilinear transform and discrete-time transfer function
+
+Let the sampling period be $T$ (seconds). Apply the bilinear transform
+
+$$s \leftarrow \frac{2}{T}\,\frac{1-z^{-1}}{1+z^{-1}}$$
+
+to obtain
+
+$$H(z)=\frac{\frac{2}{T}\frac{1-z^{-1}}{1+z^{-1}}}{1+\frac{1}{\omega_c}\frac{2}{T}\frac{1-z^{-1}}{1+z^{-1}}}$$
+
+Multiply numerator and denominator by $(1+z^{-1})$:
+
+$$H(z)=\frac{\frac{2}{T}(1-z^{-1})}{(1+z^{-1})+\frac{2}{\omega_c T}(1-z^{-1})}$$
+
+Define $k\equiv\frac{2}{\omega_c T}$. Then the denominator becomes:
+
+$$(1+z^{-1})+k(1-z^{-1})=(1+k)+(1-k)z^{-1}$$
+
+Divide numerator and denominator by $(1+k)$ to obtain the standard first-order IIR form:
+
+$$H(z)=b_0\,\frac{(1-z^{-1})}{1+a_1 z^{-1}}$$
+
+with coefficients
+
+$$b_0=\frac{\frac{2}{T}}{1+\frac{2}{\omega_c T}}=\frac{2\omega_c}{2+\omega_c T},\qquad
+a_1=\frac{1-\frac{2}{\omega_c T}}{1+\frac{2}{\omega_c T}}=\frac{\omega_c T-2}{\omega_c T+2}$$
+
+#### 11.9.3 Difference equation (firmware form)
+
+Let $x[n]$ be the sampled angle (deg) and $y[n]$ the filtered derivative estimate (deg/s). Taking the inverse $z$-transform yields:
+
+$$y[n]=b_0\,(x[n]-x[n-1]) - a_1\,y[n-1]$$
+
+This is exactly the firmware update:
+
+$$\dot x_{\mathrm{filt}}[n]=b_0\,\Delta x[n] - a_1\,\dot x_{\mathrm{filt}}[n-1]$$
+
+where $\Delta x[n]=x[n]-x[n-1]$ is the one-sample increment.
+
+#### 11.9.4 Numerical example (current firmware defaults)
+
+The control loop runs at 200 Hz, so $T=0.005$ s. With the default $\omega_c=450$ rad/s:
+
+$$\mathrm{denom}=2+\omega_c T = 2 + 450(0.005)=4.25$$
+$$b_0=\frac{2\omega_c}{2+\omega_c T}=\frac{900}{4.25}=211.7647$$
+$$a_1=\frac{\omega_c T-2}{\omega_c T+2}=\frac{2.25-2}{4.25}=0.0588$$
+
+The corresponding cutoff frequency is $f_c=\omega_c/(2\pi)\approx 71.6$ Hz. (This is high relative to 200 Hz sampling, but still useful as a light roll-off while keeping derivative lag small; the output is also clamped in firmware for safety.)
+
+#### 11.9.5 Angle wrap-around and glitch handling (implementation detail)
+
+Because $\alpha$ (and sometimes $\theta$) are periodic, the increment $\Delta x[n]$ should be computed as the **shortest signed angle difference** (wrap-safe), i.e. wrapped into $(-180^\circ,180^\circ]$. In firmware, this is implemented by adjusting $\Delta x$ by $\pm 360^\circ$ when needed.
+
+Additionally, the implementation rejects impossible one-sample jumps (I²C/mux glitches) by zeroing $\Delta x$ if $|\Delta x|$ exceeds a configured threshold, and clamps the resulting derivative estimate to a safe range. These safeguards are critical because both SMC surfaces depend directly on $\dot\alpha$.
+
 ---
 
 ## 12. Nonlinear Sliding Mode Control for upright stabilization
@@ -1060,7 +1127,7 @@ $$\cos\alpha_{\mathrm{safe}}=\max(|\cos\alpha|,\cos\alpha_{\min})\cdot\mathrm{si
 
 where $\cos\alpha_{\min}=0.2$ (corresponding to $|\alpha|\approx 78^\circ$, well outside the validity window). This clamps the denominator and prevents numerical overflow if the pendulum approaches horizontal.
 
-**Derivative measurement:** $\dot\alpha$ and $\dot\theta$ are computed via the bilinear-transform derivative filter (Sec. 11, firmware implementation). Noise in $\dot\alpha$ directly affects $s$ and hence the switching behavior. The boundary layer $\phi$ must be chosen larger than the peak derivative noise to avoid residual chattering.
+**Derivative measurement:** $\dot\alpha$ and $\dot\theta$ are computed via the bilinear-transform derivative filter (Sec. 11.9, firmware implementation). Noise in $\dot\alpha$ directly affects $s$ and hence the switching behavior. The boundary layer $\phi$ must be chosen larger than the peak derivative noise to avoid residual chattering.
 
 **Centrifugal coupling significance:** The term $\sin\alpha\cos\alpha\,\dot\theta^2$ is significant when the base rotates rapidly (e.g., during aggressive recentering maneuvers or large disturbances). For typical operation near upright with $|\dot\theta|<5\ \mathrm{deg/s}=0.087\ \mathrm{rad/s}$, this term contributes $\lesssim 0.087^2\sin\alpha\cos\alpha\approx 0.0076\sin\alpha\cos\alpha\ \mathrm{rad/s^2}$, which is small compared to $A\sin\alpha=100.8\sin\alpha$. However, during rapid base motion ($|\dot\theta|\sim 50\ \mathrm{deg/s}$), the coupling is non-negligible and improves disturbance rejection.
 
