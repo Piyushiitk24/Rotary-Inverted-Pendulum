@@ -6,7 +6,6 @@
 # IDE metadata
 .vscode/
 .idea/
-.github/
 .clangd/
 .cache/
 .ccls-cache/
@@ -28,8 +27,25 @@ Desktop.ini
 *.swo
 *.bak
 *.orig
+
+# LaTeX build artifacts (keep exported thesis figures/tables tracked)
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
 logs/
 reports/
+thesis/build/
+thesis/main.pdf
 
 # Python cache artifacts
 __pycache__/

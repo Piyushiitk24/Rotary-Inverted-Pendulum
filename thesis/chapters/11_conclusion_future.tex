@@ -1,0 +1,20 @@
+\chapter{Conclusion and Future Work}
+
+\section{Conclusion}
+This project developed a complete upright-only control stack for a custom stepper-driven rotary (Furuta) inverted pendulum:
+\begin{itemize}
+  \item A first-principles nonlinear model was derived and numerically specialized for the physical rig (Chapter~\ref{ch:modelling}).
+  \item A practical real-time firmware pipeline was implemented, including robust derivative estimation, wrap-safe angle handling, glitch rejection, engage logic, soft limits, and stall diagnostics (Chapters~\ref{ch:measurement}--\ref{ch:actuation}).
+  \item Three upright controllers were implemented and compared: linear full-state feedback, hybrid sliding mode control, and full-surface sliding mode control (Chapters~\ref{ch:lin}--\ref{ch:smc4}).
+  \item Reference tracking while balancing (``nudge mode'') was demonstrated in the linear controller, converting the system from a regulator to a servo without sacrificing upright stability (Chapter~\ref{ch:lin} and Chapter~\ref{ch:results}).
+\end{itemize}
+
+Across the pinned dataset (Chapter~\ref{ch:experiments}), the linear and hybrid SMC controllers achieved stable hold-at-center behavior and provided a strong baseline for comparison. SMC4 demonstrated upright stabilization in undisturbed conditions, but its disturbance behavior highlights an important practical conclusion: on a stepper-actuated platform, aggressive nonlinear control effort can be limited by missed steps and stall phenomena even when the underlying control law is theoretically well-posed.
+
+\section{Future work}
+\begin{itemize}
+  \item Increase the number of trials per mode for statistical defensibility.
+  \item Add explicit disturbance markers in the logger (so tap timing can be aligned deterministically).
+  \item Increase logging rate for higher-frequency effort/chatter characterization (beyond 25~Hz).
+  \item Investigate actuator upgrades or torque-based actuation to reduce stall/tick events under aggressive SMC4 behavior.
+\end{itemize}

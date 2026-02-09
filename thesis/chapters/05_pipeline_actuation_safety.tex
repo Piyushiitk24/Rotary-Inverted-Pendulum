@@ -1,0 +1,46 @@
+\chapter{Firmware Pipeline: Actuation and Safety}
+\label{ch:actuation}
+
+\section{Stepper actuation pipeline}
+The stepper driver is commanded in continuous-velocity mode. All controllers compute a base acceleration command, which is then mapped to the motor direction convention and integrated to produce the commanded step rate:
+\[
+u \equiv \ddot{\theta}\ \xrightarrow{\text{controller}}\ u_{\mathrm{cmd}}\ (\mathrm{steps/s^2})
+\xrightarrow{\text{sign map}}\ u_{\mathrm{cmd,motor}}
+\xrightarrow{\int}\ \dot{\theta}_{\mathrm{cmd}}\ (\mathrm{steps/s}).
+\]
+The integration is implemented as:
+\[
+\dot{\theta}_{\mathrm{cmd}} \leftarrow \dot{\theta}_{\mathrm{cmd}} + \bigl(\ddot{\theta}_{\mathrm{cmd}} - \lambda_{\mathrm{leak}}\dot{\theta}_{\mathrm{cmd}}\bigr)\,T,
+\]
+where $\lambda_{\mathrm{leak}}$ is optionally enabled only in the \emph{linear} controller (Chapter~\ref{ch:lin}) to suppress slow drift.
+
+\paragraph{Engage ramp.}
+On transition into the active balancing state, the commanded acceleration is multiplied by a short ramp factor (approximately \SI{100}{ms}) to avoid impulsive start-up commands when the derivatives and references are initializing.
+
+\paragraph{Stop-before-reverse.}
+To avoid direction chatter and mechanical jerk near zero, the firmware enforces a stop-before-reverse policy: if the desired direction changes sign while the motor is running, a deceleration stop is commanded for one tick before issuing motion in the opposite direction.
+
+\section{Soft limits and failure modes}
+The firmware includes several safety layers to make experiments repeatable on a stepper-driven rig:
+\begin{itemize}
+  \item \textbf{Soft base limits} near mechanical bounds (prevents ``pushing into the stop'').
+  \item \textbf{Stall detection} when the motor is commanded but the base does not move (prints diagnostics for ``tick'' failures).
+  \item \textbf{Predictable disarm/idle behavior} so runs can be restarted quickly without power-cycling.
+\end{itemize}
+
+\paragraph{Soft limits.}
+In addition to the hard base angle limit (Chapter~\ref{ch:hardware}), a soft limit suppresses commanded velocity when the measured base angle is within a small margin of the limit and the command would push further outward. This reduces the probability of ``hitting the stop'' while the pendulum is still upright.
+
+\paragraph{Stall detection (``tick'' failures).}
+In some runs (especially under aggressive disturbance recovery), the stepper can miss steps or fail to move despite a nonzero commanded velocity. The firmware detects this by monitoring the measured base angle change $\Delta\theta$ over each tick while the motor is commanded above a minimum speed. If the motor is commanded to move but $|\Delta\theta|$ remains below a threshold for multiple ticks, a stall warning diagnostic is printed, including AS5600 magnet-status information to aid debugging.
+
+\paragraph{Disarm and repeatability.}
+When a hard limit is exceeded for several consecutive ticks (debounced), the firmware disables stepper outputs and returns to an idle state. The system remains ready to re-engage once the pendulum is returned upright, enabling rapid repeated trials without power-cycling.
+
+\section{Auto-trim and velocity leak}
+Two slow ``bias killers'' are implemented to improve repeatability under sensor offsets and small persistent disturbances:
+\begin{itemize}
+  \item \textbf{Auto-trim of the upright reference}: when the pendulum is near upright and not moving quickly, the pendulum reference angle is adjusted slowly in the direction that reduces persistent $\alpha$ bias. The trim is clamped to a small range relative to the calibration value to prevent runaway.
+  \item \textbf{Velocity leak}: a small leaky term is applied to the speed integrator in the linear controller when near upright and near the base reference. This reduces slow random-walk drift that can occur due to static bias in the acceleration command.
+\end{itemize}
+The velocity leak is \emph{disabled} in nonlinear modes. In SMC controllers, the acceleration command is derived directly from a nonlinear reaching law; adding a leak alters the effective input channel and can undermine the intended behavior.

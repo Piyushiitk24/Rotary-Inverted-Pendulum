@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{0.95}
+\caption{Summary metrics by controller mode (hold experiments).}
+\label{tab:summary_hold}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrr}
+\toprule
+Mode & Duration (\si{s}) & $\alpha$ RMS (\si{\degree}) & max $|\alpha|$ (\si{\degree}) & max $|\theta|$ (\si{\degree}) & $\theta$ drift (\si{\degree\per\second}) & acc RMS (steps/s$^2$) & max $|acc|$ (steps/s$^2$) \\
+\midrule
+Linear & 70.039 & 0.513 & 6.76 & 12.39 & 0.0 & 1354.846 & 13640.0 \\
+Hybrid SMC & 99.005 & 0.826 & 4.15 & 8.52 & 0.0 & 1465.582 & 5027.0 \\
+Full-surface SMC & 57.085 & 1.61 & 7.88 & 13.0 & -0.142 & 3364.957 & 12000.0 \\
+\bottomrule
+\end{tabular}
+}%
+\end{table}

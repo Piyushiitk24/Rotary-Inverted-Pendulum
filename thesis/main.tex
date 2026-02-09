@@ -1,0 +1,35 @@
+\documentclass[11pt,a4paper,oneside]{report}
+
+\input{preamble}
+\input{metadata}
+
+\title{Rotary (Furuta) Inverted Pendulum: Modelling and Experimental Comparison of Linear and Sliding-Mode Controllers}
+\author{Piyush}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\listoffigures
+\listoftables
+
+% Chapter 0 (problem framing) — printed as Chapter 0
+\setcounter{chapter}{-1}
+\input{chapters/00_problem_framing}
+
+\input{chapters/01_hardware_setup}
+\input{chapters/02_notation_units}
+\input{chapters/03_modelling_derivation}
+\input{chapters/04_pipeline_measurement}
+\input{chapters/05_pipeline_actuation_safety}
+\input{chapters/06_controller_linear}
+\input{chapters/07_controller_hybrid_smc}
+\input{chapters/08_controller_smc4_full_surface}
+\input{chapters/09_experiments_processing}
+\input{chapters/10_results_discussion}
+\input{chapters/11_conclusion_future}
+
+\ThesisPrintBibliography
+
+\end{document}

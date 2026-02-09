@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{0.95}
+\caption{Summary metrics by controller mode (tap experiments).}
+\label{tab:summary_tap}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrr}
+\toprule
+Mode & Duration (\si{s}) & $\alpha$ RMS (\si{\degree}) & max $|\alpha|$ (\si{\degree}) & max $|\theta|$ (\si{\degree}) & $\theta$ drift (\si{\degree\per\second}) & acc RMS (steps/s$^2$) & max $|acc|$ (steps/s$^2$) \\
+\midrule
+Linear & 31.293 & 0.864 & 5.92 & 37.7 & 0.0 & 1695.658 & 12717.0 \\
+Hybrid SMC & 27.877 & 1.847 & 24.87 & 54.93 & -0.155 & 1493.067 & 15384.0 \\
+Full-surface SMC & 31.466 & 2.524 & 22.61 & 38.23 & 0.0 & 3843.042 & 12000.0 \\
+\bottomrule
+\end{tabular}
+}%
+\end{table}

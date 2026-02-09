@@ -1,0 +1,56 @@
+\chapter{Notation, Units, and Recorded Signals}
+\label{ch:notation}
+
+\section{Coordinates}
+The system is described by two angles:
+\begin{itemize}
+  \item $\theta(t)$: base/arm yaw angle about the motor axis,
+  \item $\alpha(t)$: pendulum angle about the hinge, measured from the upright configuration ($\alpha=0$ upright).
+\end{itemize}
+The state vector used by all controllers is
+\[
+\mathbf{x}(t)=\begin{bmatrix}\theta & \alpha & \dot{\theta} & \dot{\alpha}\end{bmatrix}^\mathsf{T}.
+\]
+
+\section{Sign conventions}
+Throughout this report, the sign conventions are chosen such that:
+\begin{itemize}
+  \item positive $\theta$ corresponds to a fixed, consistent arm rotation direction when viewed from above, and
+  \item positive $\alpha$ corresponds to the pendulum tilting in a fixed direction relative to that arm rotation.
+\end{itemize}
+In practice, different builds can differ in wiring and sensor mounting. Therefore, an experimental sign-validation procedure is used so that the measured encoder directions and the commanded motor direction are consistent with the chosen $(\theta,\alpha)$ coordinates. The modelling and controller equations in this report assume this consistency.
+
+\section{Wrap-safe angle differences}
+Both encoders provide absolute angles in $[0,360^\circ)$. For control and reference tracking we use a wrap-safe shortest-path difference operator:
+\[
+\mathrm{diff}(a,b)\in[-180^\circ,180^\circ],\qquad \mathrm{diff}(a,b)\equiv a-b\ \text{wrapped to}\ [-180^\circ,180^\circ].
+\]
+This avoids discontinuities at $0/360^\circ$. It is used, for example, for the base tracking error
+\[
+\theta_{\mathrm{err}}=\mathrm{diff}(\theta,\theta_{\mathrm{ref}}).
+\]
+
+\section{Units policy and stepper conversion}
+The first-principles modelling in Chapter~\ref{ch:modelling} is expressed in SI units (radians, seconds). The embedded implementation and plots in this report use degrees for angles for readability.
+
+The stepper driver is commanded in steps/s. A constant conversion between angle and steps is used:
+\[
+k_s \equiv \frac{\text{steps}}{\text{degree}},
+\]
+so that $\theta$ can be converted to measured steps by $k_s\,\theta$. Likewise, an angular acceleration command (deg/s$^2$) can be converted to a stepper acceleration command (steps/s$^2$) by multiplying by $k_s$.
+
+\section{Recorded signals (experiment logs)}
+Each experimental trial records:
+\begin{itemize}
+  \item the pendulum and base angles and their estimated derivatives, and
+  \item the commanded base acceleration and the resulting commanded step rate sent to the driver.
+\end{itemize}
+In summary, the principal recorded signals are:
+\begin{itemize}
+  \item $\alpha$, $\dot{\alpha}$ (deg, deg/s),
+  \item $\theta$, $\dot{\theta}$ (deg, deg/s),
+  \item commanded base acceleration $u$ (steps/s$^2$),
+  \item commanded step rate $\dot{\theta}_{\mathrm{cmd}}$ (steps/s),
+  \item boolean indicators for acceleration saturation and proximity to mechanical limits.
+\end{itemize}
+In addition to the high-rate CSV stream, the firmware also prints low-rate status and diagnostic lines used to segment trials and (when possible) align host-time events to device-time signals (Chapter~\ref{ch:experiments}).

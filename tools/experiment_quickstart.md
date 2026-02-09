@@ -170,3 +170,15 @@ You typically run:
 
 The notebook auto-loads the **latest** `reports/thesis/*` folder by default.
 If you want to view an older report, edit the `report_dir = ...` cell in the notebook.
+
+### Step 4: Export into `thesis/` and build the PDF (report writing)
+
+The analysis report under `reports/` is great for exploration, but the thesis is built from a stable set of exported assets:
+
+1. Export figures/tables + write `thesis/metadata.tex` + generate the modelling chapter tex:
+   - `./.venv/bin/python tools/export_thesis_assets.py --report reports/thesis/report_thesis_20260209 --manifest experiments/manifest_thesis_20260209.json --out thesis`
+2. Build the thesis:
+   - `cd thesis && latexmk`
+
+Output PDF:
+- `thesis/build/main.pdf`

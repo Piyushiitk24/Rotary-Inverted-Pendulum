@@ -1,0 +1,138 @@
+\chapter{Hybrid Sliding Mode Controller}
+\label{ch:smc}
+
+\section{Nonlinear upright dynamics (acceleration input)}
+The hybrid nonlinear controller uses the exact (nonlinear) upright relation derived from the Euler--Lagrange equations (Chapter~\ref{ch:modelling}), written directly in the acceleration-input form $u\equiv\ddot{\theta}$:
+\begin{equation}
+\ddot{\alpha}
+=
+A\sin\alpha
+\;+\;
+\sin\alpha\cos\alpha\,\dot{\theta}^2
+\;-\;
+B\cos\alpha\,\ddot{\theta}.
+\label{eq:smc_nonlinear_relation}
+\end{equation}
+The constants $A$ and $B$ are identified for this rig (Chapter~\ref{ch:modelling}). Numerically,
+\[
+A=100.8\ \text{rad/s}^2,\qquad B=1.952.
+\]
+This model explicitly captures the gravity term $A\sin\alpha$ and the centrifugal coupling term $\sin\alpha\cos\alpha\,\dot{\theta}^2$.
+
+\section{Sliding surface and desired motion on the surface}
+Define the (pendulum-only) sliding surface
+\begin{equation}
+s \;\equiv\; \dot{\alpha} + \lambda\,\alpha,\qquad \lambda>0.
+\label{eq:smc_surface}
+\end{equation}
+On the surface $s=0$,
+\[
+\dot{\alpha}=-\lambda\alpha \quad\Rightarrow\quad \alpha(t)=\alpha_0 e^{-\lambda t},
+\]
+so $\lambda$ sets the upright convergence time constant $1/\lambda$ in the sliding phase.
+
+\section{Surface dynamics and equivalent control}
+Differentiating \eqref{eq:smc_surface} gives $\dot{s}=\ddot{\alpha}+\lambda\dot{\alpha}$. Substituting \eqref{eq:smc_nonlinear_relation} yields
+\begin{equation}
+\dot{s}
+=
+\Bigl(A\sin\alpha+\sin\alpha\cos\alpha\,\dot{\theta}^2+\lambda\dot{\alpha}\Bigr)
+-\;B\cos\alpha\,\ddot{\theta}.
+\label{eq:smc_sdot}
+\end{equation}
+Define the drift term
+\[
+f(\alpha,\dot{\alpha},\dot{\theta}) \equiv A\sin\alpha+\sin\alpha\cos\alpha\,\dot{\theta}^2+\lambda\dot{\alpha},
+\]
+so that \eqref{eq:smc_sdot} becomes $\dot{s}=f-B\cos\alpha\,\ddot{\theta}$. The equivalent control (maintaining $\dot{s}=0$) is
+\begin{equation}
+\ddot{\theta}_{\mathrm{eq}}=\frac{f}{B\cos\alpha}.
+\label{eq:smc_eq_control}
+\end{equation}
+
+\section{Reaching law, boundary layer, and complete control law}
+To guarantee reaching from off-surface initial conditions, impose the reaching law with a boundary layer (to reduce chattering) \cite{utkin1992,slotine1991}:
+\begin{equation}
+\dot{s} = -K\,\mathrm{sat}\!\left(\frac{s}{\phi}\right),\qquad K>0,\ \phi>0,
+\label{eq:smc_reaching_law}
+\end{equation}
+where
+\[
+\mathrm{sat}(x)=
+\begin{cases}
+ +1, & x>1\\
+ x, & |x|\le 1\\
+ -1, & x<-1.
+\end{cases}
+\]
+Substituting \eqref{eq:smc_reaching_law} into $\dot{s}=f-B\cos\alpha\,\ddot{\theta}$ gives the hybrid SMC acceleration command:
+\begin{equation}
+\ddot{\theta}
+=
+\frac{f(\alpha,\dot{\alpha},\dot{\theta}) + K\,\mathrm{sat}\!\left(\dfrac{s}{\phi}\right)}{B\cos\alpha}.
+\label{eq:smc_control_law}
+\end{equation}
+Outside the boundary layer ($|s|>\phi$), $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$ and reaching is finite-time. Inside ($|s|\le\phi$), $\dot{s}=-(K/\phi)s$ gives exponential decay of $s$.
+
+\section{Lyapunov reaching argument (sketch)}
+Using the Lyapunov candidate $V(s)=\frac{1}{2}s^2$, the reaching law \eqref{eq:smc_reaching_law} yields
+\[
+\dot{V} = s\dot{s} = -K\,s\,\mathrm{sat}\!\left(\frac{s}{\phi}\right)\le 0,
+\]
+with strict negativity for $|s|>\phi$. For $|s|>\phi$ one obtains $\dot{s}=-K\,\mathrm{sgn}(s)$, hence the boundary layer is reached in
+\[
+t_r = \frac{|s_0|-\phi}{K}.
+\]
+In the sliding phase, $\alpha$ decays exponentially with time constant $1/\lambda$.
+
+\section{Stepper-oriented implementation constraints}
+The law \eqref{eq:smc_control_law} contains $\cos\alpha$ in the denominator. This project is explicitly upright-only (no swing-up), and the implementation enforces:
+\begin{itemize}
+  \item \textbf{Validity window}: a hard abort if $|\alpha|$ exceeds a fixed upright window (Chapter~\ref{ch:hardware}).
+  \item \textbf{Cosine guard}: $\cos\alpha$ is clamped away from zero as a numerical glitch guard.
+  \item \textbf{Extreme-rate abort}: a debounced abort on extreme $|\dot{\alpha}|$ to prevent rail commands under violent disturbances.
+  \item \textbf{Acceleration clamp}: the computed $\ddot{\theta}$ is clamped before conversion to stepper units.
+\end{itemize}
+The nonlinear computations use $\sin(\alpha)$ and $\cos(\alpha)$ with $\alpha$ interpreted in radians; angles are recorded and plotted in degrees for readability (Chapter~\ref{ch:notation}).
+
+\section{Base-centering assist term (why this controller is ``hybrid'')}
+The surface \eqref{eq:smc_surface} stabilizes the pendulum but does not directly regulate the base angle. On a stepper-driven actuator, small unmodeled biases can cause a slow base random-walk even while balancing upright. Therefore, the hybrid controller adds a gated secondary objective: a small base reference-tracking acceleration
+\begin{equation}
+\ddot{\theta}_{\mathrm{base}}
+=
+\ddot{\theta}_{\mathrm{ref}}
+ + k_{\theta}\,(\theta_{\mathrm{ref}}-\theta)
+ + k_{\dot{\theta}}\,(\dot{\theta}_{\mathrm{ref}}-\dot{\theta}),
+\label{eq:smc_base_assist}
+\end{equation}
+scaled by a factor $\gamma$ and enabled only when the pendulum is near upright. The total command in stepper acceleration units is
+\[
+u_{\mathrm{cmd}} \;=\; u_{\mathrm{smc}} + \gamma\,u_{\mathrm{base}},
+\]
+where $u_{\mathrm{smc}}$ is \eqref{eq:smc_control_law} and $u_{\mathrm{base}}$ corresponds to \eqref{eq:smc_base_assist} expressed in the same units. This structure preserves nonlinear robustness during recovery while providing a practical centering mechanism when conditions are safe.
+
+\section{Parameters used in experiments}
+For the dataset analyzed in Chapter~\ref{ch:results}, the hybrid SMC used:
+\begin{table}[htbp]
+  \centering
+  \small
+  \setlength{\tabcolsep}{5pt}
+  \caption{Hybrid sliding mode controller parameters used in experiments.}
+  \label{tab:smc_params}
+  \begin{tabular}{lrl}
+    \toprule
+    Parameter & Value & Meaning \\
+    \midrule
+    $\lambda$ & 15\ \si{s^{-1}} & sliding surface slope in \eqref{eq:smc_surface} \\
+    $K$ & 800\ \si{\degree\per\second\squared} & reaching gain in \eqref{eq:smc_reaching_law} \\
+    $\phi$ & 50\ \si{\degree\per\second} & boundary layer thickness \\
+    $\gamma$ & 1.0 & base-centering scale (assist term) \\
+    \midrule
+    $|\alpha|$ validity & \SI{25}{\degree} & upright-only nonlinear validity window \\
+    $|\dot{\alpha}|$ abort & \SI{250}{\degree\per\second} & extreme-rate protection (debounced) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+The base-centering gains $(k_\theta,k_{\dot{\theta}})$ are shared with the linear controller (Table~\ref{tab:lin_gains}) and are gated by an upright/still window so as not to fight recovery.
+
+\ObservedBox{See Figures~\ref{fig:hold_smc_timeseries}, \ref{fig:tap_smc_timeseries} and Tables in Chapter~\ref{ch:results}.}

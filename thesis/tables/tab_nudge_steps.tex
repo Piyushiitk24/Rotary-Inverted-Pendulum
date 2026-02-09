@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{0.95}
+\caption{Nudge/reference tracking step metrics (linear controller).}
+\label{tab:nudge_steps}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{rrrrrrr}
+\toprule
+Step & Target (\si{\degree}) & Rise (s) & Overshoot (\si{\degree}) & Settle (s) & $\theta$ ss err (\si{\degree}) & max $|\alpha|$ (\si{\degree}) \\
+\midrule
+0 & 20.0 & -- & 0.0 & -- & -2.43 & 3.31 \\
+1 & -20.0 & 3.284 & 9.61 & -- & 1.64 & 2.84 \\
+2 & 0.0 & 3.126 & 5.62 & -- & 1.93 & 3.53 \\
+\bottomrule
+\end{tabular}
+}%
+\end{table}

@@ -1,0 +1,41 @@
+\chapter{Experiments and Data Processing}
+\label{ch:experiments}
+
+\section{Dataset definition}
+All results in this report are generated from a fixed dataset of experimental runs (summarized in Table~\ref{tab:dataset_manifest}). This avoids ambiguity and makes the analysis reproducible.
+
+\subsection*{Thesis-facing run identifiers}
+For readability, the internal run labels used by the analysis pipeline are mapped to thesis-facing identifiers:
+\begin{itemize}
+  \item Hold-at-center: \textbf{H1--H3}
+  \item Commanded reference tracking (nudge): \textbf{N1}
+  \item Finger tap disturbance: \textbf{T1--T3}
+\end{itemize}
+Each experimental run is archived using a timestamp-coded run identifier. Table~\ref{tab:dataset_manifest} lists the run identifiers used for this report.
+
+\InputIfExists{tables/tab_dataset_manifest.tex}{\emph{(Run the export script to generate the dataset table.)}}
+
+\section{Logging artifacts}
+Each logger session produces:
+\begin{itemize}
+  \item a device-time time-series log (approximately \SI{50}{Hz}),
+  \item a host-time event log (status + diagnostic messages).
+\end{itemize}
+Within a session, each occurrence of controller engagement followed by a disarm event defines one \emph{trial} (one ``engaged block'').
+
+\section{Event-to-CSV alignment and limitations}
+The event log timestamps are host wall-clock time, while the time-series log uses device time. Therefore, naive alignment (e.g., anchoring to an engage printout) can introduce \SI{100}{ms}--\SI{500}{ms} shifts and corrupt any time-window metrics.
+
+The analysis pipeline aligns host events to device time by matching sparse status snapshots to the nearest device-time samples using a multi-signal error metric (e.g., $\alpha$, $\dot{\alpha}$, $\theta$, $\dot{\theta}$, acceleration, velocity) under a monotonicity constraint. A linear host-to-device mapping is then fit and residuals are reported. If alignment quality is unreliable, the pipeline avoids drawing precise event-time annotations and instead reports metrics computed directly from device-time trajectories.
+
+\section{Metric definitions}
+All metrics are defined once here and reused in tables:
+\begin{itemize}
+  \item \textbf{RMS and max}: $\mathrm{RMS}(|\alpha|)$, $\max|\alpha|$, $\max|\theta|$, etc., computed over the trial duration.
+  \item \textbf{Drift slope}: slope of $\theta(t)$ over the trial (least-squares fit), reported in \si{\degree\per\second}.
+  \item \textbf{Effort}: RMS and max of the commanded base acceleration $u$ (steps/s$^2$).
+  \item \textbf{Saturation/clamp percentages}: fraction of samples where acceleration saturation is active and fraction where the base is near the mechanical limit (clamped flag).
+\end{itemize}
+
+\paragraph{Spectral plots.}
+Because CSV logging is approximately \SI{50}{Hz}, any spectrum is limited to low-frequency content ($\leq\SI{25}{Hz}$). These plots are included only as low-frequency indicators and are \emph{not} used to claim high-frequency SMC chattering characteristics.

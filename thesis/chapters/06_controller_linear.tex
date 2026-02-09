@@ -1,0 +1,178 @@
+\chapter{Linear Full-State Feedback Controller}
+\label{ch:lin}
+
+\section{Linearized plant for control design}
+The linear controller is designed about the upright equilibrium ($\alpha \approx 0$) using the acceleration-input formulation $u \equiv \ddot{\theta}$ (Chapter~\ref{ch:actuation}). Using the linearized model derived in Chapter~\ref{ch:modelling}, the reduced upright dynamics can be written in the state variables
+\[
+\mathbf{x} \;=\; \begin{bmatrix}\theta & \alpha & \dot{\theta} & \dot{\alpha}\end{bmatrix}^{\mathsf{T}}
+\;\equiv\; \begin{bmatrix}x_1 & x_2 & x_3 & x_4\end{bmatrix}^{\mathsf{T}}
+\]
+as
+\begin{align}
+\dot{x}_1 &= x_3, &
+\dot{x}_2 &= x_4, &
+\dot{x}_3 &= u, &
+\dot{x}_4 &= A\,x_2 - B\,u.
+\label{eq:lin_plant}
+\end{align}
+Here $A$ and $B$ are the identified constants (Chapter~\ref{ch:modelling}), with numerical values for this rig
+\[
+A = 100.8,\qquad B = 1.952.
+\]
+In state-space form,
+\[
+\dot{\mathbf{x}} = \mathbf{A}\mathbf{x} + \mathbf{B}u,\qquad
+\mathbf{A}=
+\begin{bmatrix}
+0&0&1&0\\
+0&0&0&1\\
+0&0&0&0\\
+0&A&0&0
+\end{bmatrix},\qquad
+\mathbf{B}=
+\begin{bmatrix}
+0\\0\\1\\-B
+\end{bmatrix}.
+\]
+
+\section{Full-state feedback by pole placement (coefficient matching)}
+Choose a state feedback law
+\begin{equation}
+u = -\mathbf{K}\mathbf{x},\qquad
+\mathbf{K}=\begin{bmatrix}k_\theta & k_\alpha & k_{\dot{\theta}} & k_{\dot{\alpha}}\end{bmatrix}.
+\label{eq:lin_state_feedback}
+\end{equation}
+Substituting \eqref{eq:lin_state_feedback} into \eqref{eq:lin_plant} yields the closed-loop matrix
+\[
+\mathbf{A}_{\mathrm{cl}}=\mathbf{A}-\mathbf{B}\mathbf{K}
+=
+\begin{bmatrix}
+0 & 0 & 1 & 0\\
+0 & 0 & 0 & 1\\
+-k_\theta & -k_\alpha & -k_{\dot{\theta}} & -k_{\dot{\alpha}}\\
+B k_\theta & A + B k_\alpha & B k_{\dot{\theta}} & B k_{\dot{\alpha}}
+\end{bmatrix}.
+\]
+Eliminating $\theta$ from the scalar equations gives a fourth-order characteristic polynomial of the form
+\begin{equation}
+s^4 + a_3 s^3 + a_2 s^2 + a_1 s + a_0 = 0,
+\label{eq:lin_charpoly}
+\end{equation}
+with coefficients expressed directly in terms of the gains:
+\begin{align}
+a_3 &= k_{\dot{\theta}} - B k_{\dot{\alpha}}, &
+a_2 &= k_{\theta} - A - B k_{\alpha}, &
+a_1 &= -A k_{\dot{\theta}}, &
+a_0 &= -A k_{\theta}.
+\label{eq:lin_coeffs}
+\end{align}
+This form enables hand-calculable coefficient matching \cite{ogata_modern_control}: pick a desired polynomial and solve \eqref{eq:lin_coeffs} for the four gains.
+
+\subsection{Desired poles via two second-order factors}
+The desired closed-loop polynomial is chosen as a product of two standard second-order factors:
+\begin{equation}
+\bigl(s^2+2\zeta_1\omega_1 s+\omega_1^2\bigr)\,
+\bigl(s^2+2\zeta_2\omega_2 s+\omega_2^2\bigr)
+= s^4 + \tilde a_3 s^3 + \tilde a_2 s^2 + \tilde a_1 s + \tilde a_0,
+\label{eq:lin_desired_poly}
+\end{equation}
+where $(\omega_1,\zeta_1)$ correspond to a fast ``pendulum mode'' and $(\omega_2,\zeta_2)$ to a slower ``base-centering mode''. Expanding gives
+\begin{align}
+\tilde a_3 &= 2(\zeta_1\omega_1+\zeta_2\omega_2),\nonumber\\
+\tilde a_2 &= \omega_1^2+\omega_2^2+4\zeta_1\zeta_2\omega_1\omega_2,\nonumber\\
+\tilde a_1 &= 2(\zeta_1\omega_1\omega_2^2+\zeta_2\omega_2\omega_1^2),\nonumber\\
+\tilde a_0 &= \omega_1^2\omega_2^2.
+\label{eq:lin_desired_coeffs}
+\end{align}
+
+\subsection{Closed-form gains}
+Setting $(a_0,a_1,a_2,a_3)=(\tilde a_0,\tilde a_1,\tilde a_2,\tilde a_3)$ and solving \eqref{eq:lin_coeffs} yields, in sequence,
+\begin{align}
+k_{\theta} &= -\frac{\tilde a_0}{A}, &
+k_{\dot{\theta}} &= -\frac{\tilde a_1}{A},\nonumber\\
+k_{\dot{\alpha}} &= \frac{k_{\dot{\theta}}-\tilde a_3}{B}, &
+k_{\alpha} &= \frac{k_{\theta}-A-\tilde a_2}{B}.
+\label{eq:lin_gain_formulas}
+\end{align}
+
+\subsection{Numerical example and unit conversion}
+Using $A=100.8$, $B=1.952$ and choosing a fast mode $(\omega_1,\zeta_1)=(15,0.8)$ and a slow mode $(\omega_2,\zeta_2)=(1,1)$ (rad/s), the desired coefficients are
+\[
+\tilde a_3=26,\qquad \tilde a_2=274,\qquad \tilde a_1=474,\qquad \tilde a_0=225,
+\]
+and the resulting gains from \eqref{eq:lin_gain_formulas} are
+\[
+\mathbf{K}=\begin{bmatrix}
+-2.232 & -193.15 & -4.702 & -15.729
+\end{bmatrix}.
+\]
+For implementation with degree states and stepper units, define the constant conversion $k_s$ (steps per degree; Chapter~\ref{ch:notation}). The commanded acceleration in stepper units is
+\[
+u_{\mathrm{steps}} = k_s\,u_{\deg}.
+\]
+Therefore, the gain vector in \emph{steps/s$^2$} per degree (and per deg/s) is
+\[
+\mathbf{K}_{\mathrm{steps}} = k_s\,\mathbf{K}.
+\]
+With $k_s=4.444$ (this rig), the example yields
+\[
+\mathbf{K}_{\mathrm{steps}}=
+\begin{bmatrix}
+-9.92 & -858.4 & -20.9 & -69.9
+\end{bmatrix}.
+\]
+The sign of the gains depends on the chosen $\alpha$ and motor direction conventions; the implementation enforces consistency via a sign-validation procedure (Chapter~\ref{ch:notation}) and a single controller sign on the final acceleration command.
+
+\section{Reference tracking and ``nudge'' servo behavior}
+Rather than regulating the base to $\theta=0$ always, the implemented controller uses reference tracking:
+\[
+\theta_{\mathrm{err}} = \mathrm{diff}(\theta,\theta_{\mathrm{ref}}),\qquad
+\dot{\theta}_{\mathrm{err}} = \dot{\theta} - \dot{\theta}_{\mathrm{ref}},
+\]
+with $\mathrm{diff}(\cdot,\cdot)$ the wrap-safe difference operator (Chapter~\ref{ch:notation}). The reference-tracking full-state feedback law is
+\begin{equation}
+u_{\mathrm{cmd}} =
+u_{\mathrm{ff}} +
+K_\theta\,\theta_{\mathrm{err}} + K_\alpha\,\alpha +
+K_{\dot{\theta}}\,\dot{\theta}_{\mathrm{err}} + K_{\dot{\alpha}}\,\dot{\alpha},
+\label{eq:lin_ref_tracking}
+\end{equation}
+with feedforward term $u_{\mathrm{ff}}=\ddot{\theta}_{\mathrm{ref}}$ provided by the reference generator.
+
+\subsection*{Commanded base position while balancing (``nudge mode'')}
+The reference $\theta_{\mathrm{ref}}$ is generated by a velocity- and acceleration-limited trapezoidal profile driven by a user-specified base angle target. This turns the upright controller into a practical \emph{servo} while maintaining balance.
+
+Because aggressive base motion can destabilize the pendulum, the reference generator includes a pause/resume mechanism: if the pendulum leaves a stability window during a move, the profile is paused and the reference is frozen (without ``chasing'' the measured $\theta$). Once the pendulum returns to the stability window, the profile resumes.
+
+\section{Implementation details (stepper-oriented)}
+Several pragmatic additions are implemented to improve repeatability on real hardware:
+\begin{itemize}
+  \item \textbf{Deadband on $\alpha$}: a small deadband reduces noise-chasing near upright.
+  \item \textbf{Acceleration saturation and engage ramp}: the commanded acceleration is saturated to a safe bound and ramped in during the first \SI{100}{ms} after engage.
+  \item \textbf{Velocity leak (linear-only)}: a small leak is applied to the speed integrator near upright to suppress slow drift (disabled in nonlinear modes).
+  \item \textbf{Auto-trim of upright reference}: compensates slow bias in $\alpha$ and reduces persistent base offsets.
+  \item \textbf{Soft limits}: suppress outward velocity commands near the mechanical bounds.
+\end{itemize}
+
+\section{Parameters used in experiments}
+For the dataset analyzed in Chapter~\ref{ch:results}, the linear controller used the following parameters (printed by the firmware at trial start):
+\begin{table}[htbp]
+  \centering
+  \small
+  \setlength{\tabcolsep}{5pt}
+  \caption{Linear controller gains used in experiments (stepper acceleration units).}
+  \label{tab:lin_gains}
+  \begin{tabular}{lrrl}
+    \toprule
+    Parameter & Value & Units & Meaning \\
+    \midrule
+    $K_{\theta}$ & 31.5 & steps/s$^2$ per \si{\degree} & base/arm position gain \\
+    $K_{\alpha}$ & 725.6 & steps/s$^2$ per \si{\degree} & pendulum angle gain \\
+    $K_{\dot{\theta}}$ & 28.3 & steps/s$^2$ per (\si{\degree\per\second}) & base/arm rate gain \\
+    $K_{\dot{\alpha}}$ & 73.5 & steps/s$^2$ per (\si{\degree\per\second}) & pendulum rate gain \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+Derivative estimation uses the filtered differentiator described in Chapter~\ref{ch:measurement} with cutoff $\omega_c=\SI{450}{rad/s}$.
+
+\ObservedBox{See Figures~\ref{fig:hold_lin_timeseries}, \ref{fig:nudge_lin_tracking}, \ref{fig:tap_lin_timeseries} and Tables in Chapter~\ref{ch:results}.}

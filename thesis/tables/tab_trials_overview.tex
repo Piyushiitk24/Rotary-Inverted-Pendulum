@@ -1,0 +1,23 @@
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{0.95}
+\caption{Trials overview (thesis-facing identifiers H/N/T).}
+\label{tab:trials_overview}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llllrrrrrr}
+\toprule
+Trial & Mode & Type & Outcome & Duration (\si{s}) & $\alpha$ RMS (\si{\degree}) & max $|\alpha|$ (\si{\degree}) & max $|\theta|$ (\si{\degree}) & $\theta$ drift (\si{\degree\per\second}) & acc RMS (steps/s$^2$) \\
+\midrule
+H1 & Linear & Hold & success & 70.039 & 0.513 & 6.76 & 12.39 & 0.0 & 1354.846 \\
+H2 & Hybrid SMC & Hold & success & 99.005 & 0.826 & 4.15 & 8.52 & 0.0 & 1465.582 \\
+H3 & Full-surface SMC & Hold & success & 57.085 & 1.61 & 7.88 & 13.0 & -0.142 & 3364.957 \\
+N1 & Linear & Nudge & success & 50.337 & 0.861 & 3.85 & 29.61 & -0.077 & 2013.631 \\
+T1 & Linear & Tap & success & 31.293 & 0.864 & 5.92 & 37.7 & 0.0 & 1695.658 \\
+T2 & Hybrid SMC & Tap & failed\_fallen & 27.877 & 1.847 & 24.87 & 54.93 & -0.155 & 1493.067 \\
+T3 & Full-surface SMC & Tap & failed\_fallen & 31.466 & 2.524 & 22.61 & 38.23 & 0.0 & 3843.042 \\
+\bottomrule
+\end{tabular}
+}%
+\end{table}

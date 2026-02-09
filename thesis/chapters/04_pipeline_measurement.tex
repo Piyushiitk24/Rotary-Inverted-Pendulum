@@ -1,0 +1,45 @@
+\chapter{Firmware Pipeline: Measurement and Estimation}
+\label{ch:measurement}
+
+\section{Control loop timing}
+All controllers are executed in a fixed-period real-time loop on the Arduino Mega 2560. In this project:
+\begin{itemize}
+  \item the control tick is \SI{200}{Hz} ($T\approx \SI{5}{ms}$),
+  \item the high-rate CSV stream is logged at \SI{50}{Hz} (decimated from the control tick).
+\end{itemize}
+
+Because timing jitter can affect derivative estimation and controller performance, the firmware monitors:
+\begin{itemize}
+  \item minimum and maximum observed tick duration,
+  \item the count of tick overruns beyond the nominal period.
+\end{itemize}
+These diagnostics are printed at \SI{1}{Hz} and are used as a sanity check when adding computation (e.g., trigonometry in nonlinear control modes).
+
+\section{Derivative estimation}
+The control law requires $\dot{\alpha}$ and $\dot{\theta}$. Direct finite differences are too noisy at \SI{200}{Hz}, so the firmware uses a first-order filtered differentiator discretized by the bilinear (Tustin) transform:
+\[
+H(s) = \frac{s}{1+s/\omega_c}.
+\]
+Applying the bilinear mapping $s \approx \frac{2}{T}\frac{1-z^{-1}}{1+z^{-1}}$ yields the discrete-time recursion
+\[
+y[n] = b_0\,(x[n]-x[n-1]) - a_1\,y[n-1],
+\]
+where $x[n]$ is the measured angle (in degrees), $y[n]$ is the filtered derivative (deg/s), and with $T$ the nominal tick period:
+\[
+b_0 = \frac{2\omega_c}{2+\omega_c T},\qquad
+a_1 = \frac{\omega_c T - 2}{2+\omega_c T}.
+\]
+
+The cutoff $\omega_c$ (rad/s) is tuned experimentally, and the coefficients $(b_0,a_1)$ are computed using the nominal tick period $T$.
+
+\paragraph{Wrap handling and clamping.}
+For the pendulum angle $\alpha$, the pre-difference $(x[n]-x[n-1])$ is wrapped to $\pm 180^\circ$ to avoid a spurious $\approx 360^\circ$ jump near the encoder wrap. Both derivatives are clamped to conservative maximum magnitudes to prevent extreme one-sample spikes from dominating the controller.
+
+\section{Wrap safety and glitch rejection}
+The AS5600 sensors are read over I\textsuperscript{2}C via a multiplexer; occasional mux/I\textsuperscript{2}C glitches can produce implausible one-sample jumps. The firmware applies two layers of protection:
+\begin{enumerate}
+  \item \textbf{Raw jump rejection}: if a single-tick jump exceeds a configured threshold, the sample is discarded and the previous value is reused.
+  \item \textbf{Derivative reject accounting}: if the pre-difference is zeroed due to rejection, a diagnostic counter is incremented (visible in low-rate diagnostics).
+\end{enumerate}
+
+All angle differences used in control and reference tracking use the wrap-safe operator described in Chapter~\ref{ch:notation}.

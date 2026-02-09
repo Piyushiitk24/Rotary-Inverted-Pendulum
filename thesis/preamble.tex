@@ -1,0 +1,87 @@
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{siunitx}
+
+\usepackage{hyperref}
+
+% Bibliography (IEEE numeric style).
+% BasicTeX may not ship biblatex by default; we fall back to a minimal
+% bibliography so the thesis still compiles. Install with tlmgr for IEEE style:
+%   tlmgr install biblatex biblatex-ieee
+\IfFileExists{biblatex.sty}{%
+  \usepackage[backend=biber,style=ieee]{biblatex}
+  \addbibresource{bib/references.bib}
+  \newcommand{\ThesisPrintBibliography}{\printbibliography}
+}{%
+  \newcommand{\ThesisPrintBibliography}{%
+    \begin{thebibliography}{99}
+      \bibitem{ogata_modern_control}
+      K.~Ogata, \emph{Modern Control Engineering}, 5th~ed. Prentice Hall, 2010.
+
+      \bibitem{khalil_nonlinear}
+      H.~K.~Khalil, \emph{Nonlinear Systems}, 3rd~ed. Prentice Hall, 2002.
+
+      \bibitem{slotine1991}
+      J.-J.~E.~Slotine and W.~Li, \emph{Applied Nonlinear Control}. Prentice Hall, 1991.
+
+      \bibitem{utkin1992}
+      V.~I.~Utkin, \emph{Sliding Modes in Control and Optimization}. Springer, 1992.
+    \end{thebibliography}
+  }
+}
+
+% Pandoc sometimes emits \tightlist; define it as a no-op.
+\providecommand{\tightlist}{}
+
+% ----------------- Figure helpers (PDF preferred; PNG fallback; placeholder if missing) -----------------
+\newcommand{\IncludeGraphicAuto}[2]{%
+  \IfFileExists{#1.pdf}{%
+    \includegraphics[width=#2]{#1.pdf}%
+  }{%
+    \IfFileExists{#1.png}{%
+      \includegraphics[width=#2]{#1.png}%
+    }{%
+      \fbox{\parbox{0.95\linewidth}{Missing figure: \texttt{#1.(pdf|png)}}}%
+    }%
+  }%
+}
+
+\newcommand{\ThesisFigure}[4]{%
+  \begin{figure}[htbp]
+    \centering
+    \IncludeGraphicAuto{#1}{#4}
+    \caption{#2}
+    \label{#3}
+  \end{figure}
+}
+
+\newcommand{\InputIfExists}[2]{%
+  \IfFileExists{#1}{\input{#1}}{#2}%
+}
+
+% ----------------- Controller "mini conclusions" box -----------------
+\newcommand{\ObservedBox}[1]{%
+  \begin{center}
+    \fbox{\parbox{0.95\linewidth}{\textbf{Observed behavior (HOLD/NUDGE/TAP).}~#1}}
+  \end{center}
+}
+
+% Units (siunitx) defaults.
+\sisetup{
+  detect-all,
+  group-digits = integer,
+  group-separator = {,},
+  group-minimum-digits = 4
+}

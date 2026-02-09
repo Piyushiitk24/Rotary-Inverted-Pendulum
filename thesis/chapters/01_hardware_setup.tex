@@ -1,0 +1,112 @@
+\chapter{System Hardware and Constraints}
+\label{ch:hardware}
+
+\section{Overview}
+The experimental plant is a rotary (Furuta) inverted pendulum: a horizontal arm rotates about a vertical axis (base coordinate $\theta$) and a pendulum link attached at the arm tip swings in a vertical plane (pendulum coordinate $\alpha$). The reference configuration is \emph{upright-only}, i.e., $\alpha=0$ corresponds to the pendulum held upright.
+
+This report is concerned with stabilization about the upright equilibrium and with servo-like base positioning while maintaining upright balance.
+
+\section{Mechanical rig}
+The mechanical assembly consists of:
+\begin{itemize}
+  \item a rotary arm (yaw axis) driven by a stepper motor,
+  \item a pendulum link mounted at the arm tip and free to swing in a vertical plane,
+  \item mechanical hard-stops that bound the base rotation.
+\end{itemize}
+
+\subsection*{Actuation axis and coupling}
+The arm is mounted coaxially to the stepper shaft (direct drive). The actuator is operated in microstepping mode such that one full arm revolution corresponds to approximately $1600$ commanded steps, i.e.,
+\[
+k_s \approx \frac{1600}{360} = 4.444\ \text{steps/degree},
+\]
+which is the conversion used throughout the firmware and analysis.
+
+\subsection*{Pendulum hinge}
+The pendulum hinge is designed to minimize friction and backlash to the extent practical on a benchtop rig, since dissipative hinge dynamics couple directly into the required base acceleration for upright stabilization. The hinge also provides a mounting point for the pendulum angle encoder and its magnet.
+
+\subsection*{Key geometric parameters}
+The main geometric and inertial parameters are derived and numerically identified in Chapter~\ref{ch:modelling}. For reference, the rig uses:
+\begin{itemize}
+  \item Arm length $L_r \approx \SI{0.19}{m}$
+  \item Pendulum vertical length $L_v \approx \SI{0.12}{m}$ with a concentrated mass near the lower end
+\end{itemize}
+
+\section{Electronics and actuation}
+\subsection*{Controller and driver}
+The base actuator is a stepper motor controlled by:
+\begin{itemize}
+  \item an Arduino Mega 2560 microcontroller (real-time control loop),
+  \item a TMC2209 stepper driver (STEP/DIR/EN interface),
+  \item a dedicated motor supply (\SI{24}{V}) separate from the Arduino \SI{5}{V} logic rail.
+\end{itemize}
+Motor power, driver, and microcontroller share a common ground. The driver supply is decoupled using a bulk electrolytic capacitor and a small ceramic capacitor close to the driver.
+
+\subsection*{Acceleration-input actuation model}
+The driver is commanded in continuous-velocity mode (step rate in steps/s). To match this actuation pipeline, all controllers in this project are implemented in an \emph{acceleration-input form}: the controller computes a commanded base acceleration (in steps/s$^2$), which is integrated in firmware to produce the commanded velocity:
+\[
+u \equiv \ddot{\theta} \ \longrightarrow\  \dot{\theta}_{\mathrm{cmd}} \ \longrightarrow\ \text{stepper speed command}.
+\]
+This is a central design choice: it makes the theoretical input used in modelling and control ($u=\ddot{\theta}$) coincide with the practical signal sent to the actuator (after integration to a velocity command).
+
+\section{Sensing}
+\subsection*{Angle sensing}
+Two AS5600 magnetic encoders measure absolute angles. Both devices share the same fixed I\textsuperscript{2}C address, so they are read through an I\textsuperscript{2}C multiplexer (PCA9548A, default address 0x70) at \SI{400}{kHz}:
+\begin{itemize}
+  \item Pendulum encoder (at the pendulum hinge)
+  \item Base encoder (at the motor/base axis)
+\end{itemize}
+Each AS5600 provides a \SI{12}{bit} absolute angle measurement over $[0,360^\circ)$ (nominal resolution $\approx \SI{0.0879}{\degree}$ per count).
+
+\subsection*{Mechanical encoder mounting (CAD / 3D-printed housings)}
+A practical contribution of this work is the mechanical mounting strategy for the magnetic encoders. Both the pendulum and base sensors use:
+\begin{itemize}
+  \item a rigid printed housing to locate the AS5600 PCB relative to the rotating axis,
+  \item a coaxial magnet mount attached to the rotating part,
+  \item a controlled magnet-to-chip air-gap (typically \SIrange{2}{3}{mm}),
+  \item mechanical features to reduce radial offset and wobble.
+\end{itemize}
+This reduces sensitivity to small misalignments that can otherwise cause jitter, dropouts, or inconsistent angle readings (all of which directly degrade derivative estimates and can destabilize the controller). The firmware additionally monitors AS5600 magnet-status diagnostics (detect/high/low) during certain fault conditions to help distinguish true actuator faults from sensor misalignment.
+
+\subsection*{Calibration references}
+Before each experimental trial, a short calibration routine averages multiple sensor samples (default: 25) to reduce single-sample noise and to define reference angles:
+\begin{itemize}
+  \item $\alpha=0$ reference: pendulum held upright
+  \item $\theta=0$ reference: arm centered
+\end{itemize}
+
+\subsection*{Pin assignments (summary)}
+For completeness, the essential microcontroller I/O used by the rig is:
+\begin{table}[htbp]
+  \centering
+  \small
+  \setlength{\tabcolsep}{6pt}
+  \caption{Core I/O connections for the rig (Arduino Mega 2560).}
+  \label{tab:pin_map}
+  \begin{tabular}{lll}
+    \toprule
+    Function & Arduino pins & Notes \\
+    \midrule
+    Stepper driver STEP/DIR/EN & D11 / D6 / D7 & step/direction/enable signals \\
+    I\textsuperscript{2}C bus (SDA/SCL) & D20 / D21 & shared by multiplexer and sensors \\
+    I\textsuperscript{2}C multiplexer channels & ch0 / ch1 & pendulum encoder / base encoder \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Host computer and data acquisition}
+All experiments are run with a host computer connected over USB serial. A Python logger records:
+\begin{itemize}
+  \item a device-time CSV stream (angles, angular rates, command signals), and
+  \item a text event stream (status lines and diagnostic messages).
+\end{itemize}
+These artifacts are later used to compute metrics and generate the figures/tables in the Results chapter.
+
+\section{Safety limits and operating envelope}
+The rig is operated under explicit safety limits for repeatability:
+\begin{itemize}
+  \item Base limit: $|\theta| > \SI{80}{\degree}$ triggers a safety disarm.
+  \item Pendulum limit: $|\alpha| > \SI{30}{\degree}$ triggers a safety disarm.
+  \item Upright-only validity window (nonlinear controllers): an additional hard abort is applied at $|\alpha|>\SI{25}{\degree}$ (and also at extreme $|\dot{\alpha}|$) to enforce ``no swing-up'' operation and to avoid numerically unsafe regions.
+\end{itemize}
+
+Limit checks are debounced across multiple control ticks to avoid false positives from single-sample sensor glitches. When a limit is confirmed, the motor output is disabled and the system returns to an idle state so the trial can be restarted safely.
