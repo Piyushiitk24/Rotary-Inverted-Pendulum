@@ -9,12 +9,19 @@ This project developed a complete upright-only control stack for a custom steppe
   \item Reference tracking while balancing (``nudge mode'') was demonstrated in the linear controller, converting the system from a regulator to a servo without sacrificing upright stability (Chapter~\ref{ch:lin} and Chapter~\ref{ch:results}).
 \end{itemize}
 
-Across the pinned dataset (Chapter~\ref{ch:experiments}), the linear and hybrid SMC controllers achieved stable hold-at-center behavior and provided a strong baseline for comparison. SMC4 demonstrated upright stabilization in undisturbed conditions, but its disturbance behavior highlights an important practical conclusion: on a stepper-actuated platform, aggressive nonlinear control effort can be limited by missed steps and stall phenomena even when the underlying control law is theoretically well-posed.
+Across the pinned dataset (Chapter~\ref{ch:experiments}), the linear and hybrid SMC controllers achieved stable hold-at-center behavior and provided a strong baseline for comparison. The full-surface sliding mode controller demonstrated upright stabilization in undisturbed conditions, but its disturbance behavior highlights an important practical conclusion: on a stepper-actuated platform, aggressive nonlinear control effort can be limited by missed steps and stall phenomena even when the underlying control law is theoretically well-posed.
 
 \section{Future work}
+The following next steps are concrete extensions motivated by the observed experimental limitations:
 \begin{itemize}
-  \item Increase the number of trials per mode for statistical defensibility.
-  \item Add explicit disturbance markers in the logger (so tap timing can be aligned deterministically).
-  \item Increase logging rate for higher-frequency effort/chatter characterization (beyond 25~Hz).
-  \item Investigate actuator upgrades or torque-based actuation to reduce stall/tick events under aggressive SMC4 behavior.
+  \item \textbf{Limited statistical strength $\rightarrow$ repeat trials $\rightarrow$ defensible comparisons.}
+        Increase the number of trials per condition (e.g., $\geq 10$ per controller per experiment type) and report distributions (boxplots/CI) rather than single representative traces.
+  \item \textbf{Unmarked disturbances $\rightarrow$ deterministic tap annotations $\rightarrow$ time-window metrics.}
+        Add explicit ``tap'' markers in the host logger (or an external trigger such as a button/IMU) so the disturbance onset can be aligned in device time and impulse-response metrics (peak, recovery time) can be computed consistently.
+  \item \textbf{Limited bandwidth in logs $\rightarrow$ higher-rate logging $\rightarrow$ clearer effort/latency analysis.}
+        Log at a higher rate (ideally at the control tick, \SI{200}{Hz}) for selected signals (at least $\alpha$, $\dot{\alpha}$, $u$, saturation flags) to better characterize controller effort, timing jitter, and any high-frequency components.
+  \item \textbf{Stepper ``tick''/stall events in aggressive recovery $\rightarrow$ actuator-aware control $\rightarrow$ fewer abrupt falls.}
+        Incorporate actuator constraints into the nonlinear control design, e.g., by tuning reaching parameters to reduce acceleration tails, adding rate-of-change limits on $u$, or explicitly designing with bounded-input robustness. For hardware, a torque-controlled actuator (DC/BLDC with encoder) would reduce missed-step failure modes and make the acceleration-input assumption closer to the true plant input.
+  \item \textbf{Derivative sensitivity under noise/glitches $\rightarrow$ improved estimation $\rightarrow$ fewer false aborts.}
+        Evaluate alternative estimators (e.g., tuned low-pass differentiators, complementary filtering, or Kalman filtering with the identified model) and compare the resulting $\dot{\alpha}$ noise floor and stability margins.
 \end{itemize}

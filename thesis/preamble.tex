@@ -14,7 +14,28 @@
 \usepackage{longtable}
 \usepackage{siunitx}
 
+% Non-SI unit used throughout this project (stepper command units).
+\DeclareSIUnit{\step}{step}
+
+% Optional: provides \FloatBarrier for predictable float placement.
+% BasicTeX (minimal TeX Live) may not include this package.
+\IfFileExists{placeins.sty}{%
+  \usepackage{placeins}%
+}{%
+  \providecommand{\FloatBarrier}{}%
+}
+
 \usepackage{hyperref}
+
+% Float placement tuning: reduce awkward whitespace and keep figures/tables near
+% where they are discussed without overusing rigid [H] placement.
+\setcounter{topnumber}{2}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{4}
+\renewcommand{\topfraction}{0.90}
+\renewcommand{\bottomfraction}{0.80}
+\renewcommand{\textfraction}{0.08}
+\renewcommand{\floatpagefraction}{0.85}
 
 % Bibliography (IEEE numeric style).
 % BasicTeX may not ship biblatex by default; we fall back to a minimal

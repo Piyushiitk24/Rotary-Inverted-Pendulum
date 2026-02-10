@@ -224,7 +224,7 @@ def export_tables(report_dir: Path, thesis_tables_dir: Path) -> list[str]:
             "alpha_max_abs_deg": r"max $|\alpha|$ (\si{\degree})",
             "theta_max_abs_deg": r"max $|\theta|$ (\si{\degree})",
             "theta_drift_slope_deg_s": r"$\theta$ drift (\si{\degree\per\second})",
-            "acc_rms_steps_s2": r"acc RMS (steps/s$^2$)",
+            "acc_rms_steps_s2": r"acc RMS (\si{\step\per\second\squared})",
         }
     )
     trials_tex = df_to_tabular(
@@ -260,8 +260,8 @@ def export_tables(report_dir: Path, thesis_tables_dir: Path) -> list[str]:
         "alpha_max_abs_deg_median": r"max $|\alpha|$ (\si{\degree})",
         "theta_max_abs_deg_median": r"max $|\theta|$ (\si{\degree})",
         "theta_drift_slope_deg_s_median": r"$\theta$ drift (\si{\degree\per\second})",
-        "acc_rms_steps_s2_median": r"acc RMS (steps/s$^2$)",
-        "acc_max_abs_steps_s2_median": r"max $|acc|$ (steps/s$^2$)",
+        "acc_rms_steps_s2_median": r"acc RMS (\si{\step\per\second\squared})",
+        "acc_max_abs_steps_s2_median": r"max $|acc|$ (\si{\step\per\second\squared})",
     }
 
     hold_tex = df_to_tabular(
@@ -300,7 +300,7 @@ def export_tables(report_dir: Path, thesis_tables_dir: Path) -> list[str]:
                 "rise_time_s": "Rise (s)",
                 "overshoot_deg": r"Overshoot (\si{\degree})",
                 "settle_time_s": "Settle (s)",
-                "theta_ss_err_deg": r"$\theta$ ss err (\si{\degree})",
+                "theta_ss_err_deg": r"Steady-state error (\si{\degree})",
                 "alpha_max_abs_deg": r"max $|\alpha|$ (\si{\degree})",
             }
         )

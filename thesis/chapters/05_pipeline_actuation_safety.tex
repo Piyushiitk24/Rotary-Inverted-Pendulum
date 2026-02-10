@@ -4,10 +4,11 @@
 \section{Stepper actuation pipeline}
 The stepper driver is commanded in continuous-velocity mode. All controllers compute a base acceleration command, which is then mapped to the motor direction convention and integrated to produce the commanded step rate:
 \[
-u \equiv \ddot{\theta}\ \xrightarrow{\text{controller}}\ u_{\mathrm{cmd}}\ (\mathrm{steps/s^2})
+u \equiv \ddot{\theta}\ \xrightarrow{\text{controller}}\ u_{\mathrm{cmd}}
 \xrightarrow{\text{sign map}}\ u_{\mathrm{cmd,motor}}
-\xrightarrow{\int}\ \dot{\theta}_{\mathrm{cmd}}\ (\mathrm{steps/s}).
+\xrightarrow{\int}\ \dot{\theta}_{\mathrm{cmd}}.
 \]
+Here $u_{\mathrm{cmd}}$ is expressed as a step-acceleration command (units \si{\step\per\second\squared}), and $\dot{\theta}_{\mathrm{cmd}}$ is the commanded step rate (units \si{\step\per\second}).
 The integration is implemented as:
 \[
 \dot{\theta}_{\mathrm{cmd}} \leftarrow \dot{\theta}_{\mathrm{cmd}} + \bigl(\ddot{\theta}_{\mathrm{cmd}} - \lambda_{\mathrm{leak}}\dot{\theta}_{\mathrm{cmd}}\bigr)\,T,

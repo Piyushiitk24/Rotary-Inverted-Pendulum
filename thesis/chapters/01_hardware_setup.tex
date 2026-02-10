@@ -17,7 +17,7 @@ The mechanical assembly consists of:
 \subsection*{Actuation axis and coupling}
 The arm is mounted coaxially to the stepper shaft (direct drive). The actuator is operated in microstepping mode such that one full arm revolution corresponds to approximately $1600$ commanded steps, i.e.,
 \[
-k_s \approx \frac{1600}{360} = 4.444\ \text{steps/degree},
+k_s \approx \frac{1600}{360} \approx \SI{4.444}{\step\per\degree},
 \]
 which is the conversion used throughout the firmware and analysis.
 
@@ -42,7 +42,7 @@ The base actuator is a stepper motor controlled by:
 Motor power, driver, and microcontroller share a common ground. The driver supply is decoupled using a bulk electrolytic capacitor and a small ceramic capacitor close to the driver.
 
 \subsection*{Acceleration-input actuation model}
-The driver is commanded in continuous-velocity mode (step rate in steps/s). To match this actuation pipeline, all controllers in this project are implemented in an \emph{acceleration-input form}: the controller computes a commanded base acceleration (in steps/s$^2$), which is integrated in firmware to produce the commanded velocity:
+The driver is commanded in continuous-velocity mode (step rate in \si{\step\per\second}). To match this actuation pipeline, all controllers in this project are implemented in an \emph{acceleration-input form}: the controller computes a commanded base acceleration (in \si{\step\per\second\squared}), which is integrated in firmware to produce the commanded velocity:
 \[
 u \equiv \ddot{\theta} \ \longrightarrow\  \dot{\theta}_{\mathrm{cmd}} \ \longrightarrow\ \text{stepper speed command}.
 \]
@@ -82,15 +82,15 @@ For completeness, the essential microcontroller I/O used by the rig is:
   \setlength{\tabcolsep}{6pt}
   \caption{Core I/O connections for the rig (Arduino Mega 2560).}
   \label{tab:pin_map}
-  \begin{tabular}{lll}
+  \begin{tabularx}{\linewidth}{@{}l p{0.28\linewidth} X@{}}
     \toprule
     Function & Arduino pins & Notes \\
     \midrule
-    Stepper driver STEP/DIR/EN & D11 / D6 / D7 & step/direction/enable signals \\
-    I\textsuperscript{2}C bus (SDA/SCL) & D20 / D21 & shared by multiplexer and sensors \\
-    I\textsuperscript{2}C multiplexer channels & ch0 / ch1 & pendulum encoder / base encoder \\
+    Stepper driver signals (STEP, DIR, EN) & D11 (STEP), D6 (DIR), D7 (EN) & digital outputs to the stepper driver \\
+    I\textsuperscript{2}C bus (SDA/SCL) & D20 (SDA), D21 (SCL) & shared by the multiplexer and both encoders \\
+    I\textsuperscript{2}C multiplexer channels & ch0 (pendulum), ch1 (base) & selects which AS5600 encoder is visible on the bus \\
     \bottomrule
-  \end{tabular}
+  \end{tabularx}
 \end{table}
 
 \section{Host computer and data acquisition}

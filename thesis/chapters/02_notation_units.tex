@@ -33,11 +33,11 @@ This avoids discontinuities at $0/360^\circ$. It is used, for example, for the b
 \section{Units policy and stepper conversion}
 The first-principles modelling in Chapter~\ref{ch:modelling} is expressed in SI units (radians, seconds). The embedded implementation and plots in this report use degrees for angles for readability.
 
-The stepper driver is commanded in steps/s. A constant conversion between angle and steps is used:
+The stepper driver is commanded in \si{\step\per\second}. A constant conversion between angle and steps is used:
 \[
 k_s \equiv \frac{\text{steps}}{\text{degree}},
 \]
-so that $\theta$ can be converted to measured steps by $k_s\,\theta$. Likewise, an angular acceleration command (deg/s$^2$) can be converted to a stepper acceleration command (steps/s$^2$) by multiplying by $k_s$.
+so that $\theta$ can be converted to measured steps by $k_s\,\theta$. Likewise, an angular acceleration command (\si{\degree\per\second\squared}) can be converted to a stepper acceleration command (\si{\step\per\second\squared}) by multiplying by $k_s$.
 
 \section{Recorded signals (experiment logs)}
 Each experimental trial records:
@@ -49,8 +49,8 @@ In summary, the principal recorded signals are:
 \begin{itemize}
   \item $\alpha$, $\dot{\alpha}$ (deg, deg/s),
   \item $\theta$, $\dot{\theta}$ (deg, deg/s),
-  \item commanded base acceleration $u$ (steps/s$^2$),
-  \item commanded step rate $\dot{\theta}_{\mathrm{cmd}}$ (steps/s),
+  \item commanded base acceleration $u$ (\si{\step\per\second\squared}),
+  \item commanded step rate $\dot{\theta}_{\mathrm{cmd}}$ (\si{\step\per\second}),
   \item boolean indicators for acceleration saturation and proximity to mechanical limits.
 \end{itemize}
 In addition to the high-rate CSV stream, the firmware also prints low-rate status and diagnostic lines used to segment trials and (when possible) align host-time events to device-time signals (Chapter~\ref{ch:experiments}).

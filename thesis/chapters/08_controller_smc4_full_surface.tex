@@ -56,6 +56,7 @@ so that \eqref{eq:smc4_sdot} becomes
 \dot{s} = f_{\mathrm{full}} + (k-B\cos\alpha)\ddot{\theta}.
 \]
 The control effectiveness depends on the factor $(B\cos\alpha-k)$: if $k$ approaches $B\cos\alpha$, the controller becomes ill-conditioned (large accelerations are required to achieve a given $\dot{s}$). Therefore, the implementation enforces $k$ limits and a denominator margin (Section~\ref{sec:smc4_safeguards}).
+Because upright-only operation enforces $|\alpha|<\SI{25}{\degree}$, $\cos\alpha \ge \cos(25^\circ)\approx 0.91$. With $B\approx 1.95$ and the nominal choice $k=0.50$, the nominal denominator satisfies $B\cos\alpha-k \gtrsim 1.27$, i.e., comfortably away from the singularity even before applying the additional margin enforcement.
 
 \section{Reaching law and complete control law}
 As in Chapter~\ref{ch:smc}, use the boundary-layer reaching law

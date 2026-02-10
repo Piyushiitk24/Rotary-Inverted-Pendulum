@@ -15,6 +15,69 @@ Each experimental run is archived using a timestamp-coded run identifier. Table~
 
 \InputIfExists{tables/tab_dataset_manifest.tex}{\emph{(Run the export script to generate the dataset table.)}}
 
+\section{Controller parameters used in experiments}
+For completeness, Table~\ref{tab:controller_params_overview} summarizes the numeric controller and pipeline parameters used to generate the results in Chapter~\ref{ch:results}. These values correspond to the fixed configurations used during the pinned dataset runs (H1--H3, N1, T1--T3).
+\begingroup
+\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{longtable}{@{}p{0.16\linewidth}p{0.26\linewidth}p{0.12\linewidth}p{0.16\linewidth}p{0.24\linewidth}@{}}
+  \caption{Controller and pipeline parameters used in the pinned experimental dataset.}
+  \label{tab:controller_params_overview}\\
+  \toprule
+  Category & Parameter & Value & Units & Notes \\
+  \midrule
+  \endfirsthead
+  \toprule
+  Category & Parameter & Value & Units & Notes \\
+  \midrule
+  \endhead
+  \midrule
+  \multicolumn{5}{r}{\emph{(Continued on next page)}}\\
+  \midrule
+  \endfoot
+  \bottomrule
+  \endlastfoot
+
+  Shared & Stepper conversion $k_s$ & 4.444 & \si{\step\per\degree} & used to convert degrees to step units \\
+  Shared & Control tick & 200 & Hz & fixed-period loop \\
+  Shared & CSV logging rate & 50 & Hz & decimated from control tick \\
+  Shared & Base angle limit & 80 & \si{\degree} & hard disarm beyond this bound \\
+  Shared & Pendulum angle limit & 30 & \si{\degree} & hard disarm beyond this bound \\
+  Shared (nonlinear) & Upright-only validity $|\alpha|$ & 25 & \si{\degree} & abort to enforce upright-only operation \\
+  Shared (nonlinear) & Extreme-rate abort $|\dot{\alpha}|$ & 250 & \si{\degree\per\second} & debounced, prevents rail commands \\
+
+  \addlinespace
+	  Linear & $K_{\theta}$ & 31.5 & \si{\step\per\second\squared\per\degree} & base/arm position gain \\
+	  Linear & $K_{\alpha}$ & 725.6 & \si{\step\per\second\squared\per\degree} & pendulum angle gain \\
+	  Linear & $K_{\dot{\theta}}$ & 28.3 & \si{\step\per\second\squared}\,per\,(\si{\degree\per\second}) & base/arm rate gain \\
+	  Linear & $K_{\dot{\alpha}}$ & 73.5 & \si{\step\per\second\squared}\,per\,(\si{\degree\per\second}) & pendulum rate gain \\
+	  Linear & Derivative filter cutoff $\omega_c$ & 450 & \si{rad\per\second} & bilinear (Tustin) filtered differentiator \\
+	  Linear & Velocity leak coefficient $\lambda_{\mathrm{leak}}$ & 2.0 & \si{s^{-1}} & enabled only near upright/center \\
+	  Linear & Upright reference trim rate & 0.20 & \si{s^{-1}} & slow bias compensation (auto-trim) \\
+
+  \addlinespace
+  Hybrid SMC & Surface slope $\lambda$ & 15 & \si{s^{-1}} & $s=\dot{\alpha}+\lambda\alpha$ \\
+  Hybrid SMC & Reaching gain $K$ & 800 & \si{\degree\per\second\squared} & boundary-layer reaching law \\
+  Hybrid SMC & Boundary layer $\phi$ & 50 & \si{\degree\per\second} & reduces chattering \\
+  Hybrid SMC & Base assist scale $\gamma$ & 1.0 & -- & gated base-centering assist \\
+
+  \addlinespace
+  Full-surface SMC & Pendulum slope $\lambda_{\alpha}$ & 15 & \si{s^{-1}} & part of four-state surface \\
+  Full-surface SMC & Base slope $\lambda_{\theta}$ & 2.0 & \si{s^{-1}} & shapes base tracking term \\
+  Full-surface SMC & Coupling weight $k$ & 0.50 & -- & couples base term into surface \\
+  Full-surface SMC & Reaching gain $K$ & 800 & \si{\degree\per\second\squared} & boundary-layer reaching law \\
+  Full-surface SMC & Boundary layer $\phi$ & 50 & \si{\degree\per\second} & reduces chattering \\
+  Full-surface SMC & Coupling hard limit $k_{\max}$ & 1.20 & -- & prevents ill-conditioning \\
+  Full-surface SMC & Denominator margin $\mathrm{den}_{\min}$ & 0.60 & -- & enforces $B\cos\alpha-k\ge\mathrm{den}_{\min}$ \\
+  Full-surface SMC & Coupling ramp duration & 200 & ms & ramp-in after engage \\
+
+  \addlinespace
+  Reference tracking & Max reference speed & 12 & \si{\degree\per\second} & trapezoidal profile limit \\
+  Reference tracking & Max reference acceleration & 60 & \si{\degree\per\second\squared} & trapezoidal profile limit \\
+\end{longtable}
+\endgroup
+
 \section{Logging artifacts}
 Each logger session produces:
 \begin{itemize}
@@ -33,7 +96,7 @@ All metrics are defined once here and reused in tables:
 \begin{itemize}
   \item \textbf{RMS and max}: $\mathrm{RMS}(|\alpha|)$, $\max|\alpha|$, $\max|\theta|$, etc., computed over the trial duration.
   \item \textbf{Drift slope}: slope of $\theta(t)$ over the trial (least-squares fit), reported in \si{\degree\per\second}.
-  \item \textbf{Effort}: RMS and max of the commanded base acceleration $u$ (steps/s$^2$).
+  \item \textbf{Effort}: RMS and max of the commanded base acceleration $u$ (\si{\step\per\second\squared}).
   \item \textbf{Saturation/clamp percentages}: fraction of samples where acceleration saturation is active and fraction where the base is near the mechanical limit (clamped flag).
 \end{itemize}
 

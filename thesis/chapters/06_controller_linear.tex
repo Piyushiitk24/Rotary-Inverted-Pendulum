@@ -106,11 +106,11 @@ and the resulting gains from \eqref{eq:lin_gain_formulas} are
 -2.232 & -193.15 & -4.702 & -15.729
 \end{bmatrix}.
 \]
-For implementation with degree states and stepper units, define the constant conversion $k_s$ (steps per degree; Chapter~\ref{ch:notation}). The commanded acceleration in stepper units is
+For implementation with degree states and stepper units, define the constant conversion $k_s$ (units \si{\step\per\degree}; Chapter~\ref{ch:notation}). The commanded acceleration in stepper units is
 \[
 u_{\mathrm{steps}} = k_s\,u_{\deg}.
 \]
-Therefore, the gain vector in \emph{steps/s$^2$} per degree (and per deg/s) is
+Therefore, the gain vector expressed in stepper acceleration units is
 \[
 \mathbf{K}_{\mathrm{steps}} = k_s\,\mathbf{K}.
 \]
@@ -166,10 +166,10 @@ For the dataset analyzed in Chapter~\ref{ch:results}, the linear controller used
     \toprule
     Parameter & Value & Units & Meaning \\
     \midrule
-    $K_{\theta}$ & 31.5 & steps/s$^2$ per \si{\degree} & base/arm position gain \\
-    $K_{\alpha}$ & 725.6 & steps/s$^2$ per \si{\degree} & pendulum angle gain \\
-    $K_{\dot{\theta}}$ & 28.3 & steps/s$^2$ per (\si{\degree\per\second}) & base/arm rate gain \\
-    $K_{\dot{\alpha}}$ & 73.5 & steps/s$^2$ per (\si{\degree\per\second}) & pendulum rate gain \\
+    $K_{\theta}$ & 31.5 & \si{\step\per\second\squared\per\degree} & base/arm position gain \\
+    $K_{\alpha}$ & 725.6 & \si{\step\per\second\squared\per\degree} & pendulum angle gain \\
+    $K_{\dot{\theta}}$ & 28.3 & \si{\step\per\second\per\degree} & base/arm rate gain \\
+    $K_{\dot{\alpha}}$ & 73.5 & \si{\step\per\second\per\degree} & pendulum rate gain \\
     \bottomrule
   \end{tabular}
 \end{table}

@@ -1,89 +1,116 @@
 \chapter{Results and Discussion}
 \label{ch:results}
 
-This chapter is plot-driven. Figures and tables are generated from the recorded experimental dataset using a reproducible analysis pipeline (Chapter~\ref{ch:experiments}).
+This chapter presents quantitative comparisons supported by representative time-series figures and summary tables generated from the recorded experimental dataset using the analysis pipeline described in Chapter~\ref{ch:experiments}.
 
 \section{Upright hold-at-center (H1--H3)}
+\noindent\textbf{Dataset note.} Each condition shown in this section corresponds to one representative trial (H1--H3). Conclusions are therefore qualitative and metric-based (Table~\ref{tab:summary_hold}), not statistical.
+
 \noindent\textbf{What was tested.} Each controller was engaged with $\theta_{\mathrm{ref}} \equiv 0$ (arm centered) and the pendulum held upright. The goal is to maintain upright balance without drifting toward the mechanical base limits.
 
-\noindent\textbf{What to look for.} In the time series plots, compare (i) the magnitude of $\alpha(t)$ and $\dot{\alpha}(t)$ (upright quality), (ii) the drift of $\theta(t)$ (centering), and (iii) the command magnitude $u(t)$ (effort). Table~\ref{tab:summary_hold} summarizes the key metrics.
+\noindent\textbf{What to look for.}
+\begin{enumerate}
+  \item \textbf{Upright quality:} magnitude of $\alpha(t)$ and $\dot{\alpha}(t)$.
+  \item \textbf{Centering:} drift and excursions of $\theta(t)$ relative to the centered reference.
+  \item \textbf{Actuation effort:} magnitude and distribution of $u(t)$ (commanded base acceleration).
+\end{enumerate}
+Table~\ref{tab:summary_hold} summarizes the key metrics used in the comparison.
 \ThesisFigure{figures/hold_LIN_timeseries}{Linear hold-at-center representative trial.}{fig:hold_lin_timeseries}{0.95\linewidth}
 \ThesisFigure{figures/hold_SMC_timeseries}{Hybrid SMC hold-at-center representative trial.}{fig:hold_smc_timeseries}{0.95\linewidth}
 \ThesisFigure{figures/hold_SMC4_timeseries}{Full-surface SMC hold-at-center representative trial.}{fig:hold_smc4_timeseries}{0.95\linewidth}
 
-\noindent\textbf{Key takeaways (hold).} All three controllers stabilize upright in undisturbed conditions. In this dataset, the linear controller achieves the lowest RMS $\alpha$ (best ``quiet'' upright), the hybrid SMC achieves the lowest peak $|\alpha|$ (best peak suppression), and the full-surface controller requires substantially higher RMS acceleration (more aggressive effort) and exhibits measurable base drift. These differences are consistent with the structure of the controllers: SMC variants explicitly invert the nonlinear drift terms, while the full-surface surface couples centering and recovery and can demand larger accelerations when $\theta_{\mathrm{err}}$ is nonzero.
+\noindent\textbf{Key takeaways (hold).} All three controllers stabilize upright in undisturbed conditions. In this dataset:
+\begin{itemize}
+  \item \textbf{Linear} achieves the lowest RMS upright error ($\mathrm{RMS}(\alpha)=\SI{0.51}{\degree}$), i.e., the calmest steady balancing.
+  \item \textbf{Hybrid SMC} achieves the smallest peak deviation (max $|\alpha|=\SI{4.15}{\degree}$), i.e., the best peak suppression in this trial.
+  \item \textbf{Full-surface SMC} stabilizes upright, but requires substantially higher effort (acc RMS \SI{3365}{\step\per\second\squared}, peaks up to \SI{12000}{\step\per\second\squared}) and shows measurable centering drift (Table~\ref{tab:summary_hold}).
+\end{itemize}
+\noindent\textbf{Quantitative comparison.} In the representative hold trials (Table~\ref{tab:summary_hold}), RMS$(\alpha)$ increases from \SI{0.51}{\degree} (linear) to \SI{0.83}{\degree} (hybrid SMC) and \SI{1.61}{\degree} (full-surface SMC). The full-surface controller demands approximately $2.3\times$ higher RMS effort than the linear and hybrid controllers and exhibits nonzero drift slope ($-\SI{0.142}{\degree\per\second}$), which is consistent with its coupled surface structure and the practical stepper actuation limits.
+These differences are consistent with the controller structures: SMC variants explicitly cancel nonlinear drift terms in the pendulum dynamics, while the full-surface design couples centering into the sliding surface and can demand larger accelerations when $\theta_{\mathrm{err}}$ is nonzero.
 
-\subsection{Phase portraits ($\alpha$ vs $\dot{\alpha}$)}
-\noindent The phase portraits summarize the upright behavior in the $(\alpha,\dot{\alpha})$ plane. A tighter cluster around $(0,0)$ indicates smaller oscillations and calmer recovery after disturbances within the trial window.
+\subsection*{Phase portraits ($\alpha$ vs $\dot{\alpha}$)}
+\noindent The phase portraits summarize the upright behavior in the $(\alpha,\dot{\alpha})$ plane. A tighter cluster around $(0,0)$ indicates smaller oscillations and calmer recovery within the trial window. In H1--H3, the hybrid SMC trajectory exhibits the smallest peak excursion (consistent with max $|\alpha|$ in Table~\ref{tab:summary_hold}), while the linear controller exhibits the tightest ``quiet'' cluster near the origin (consistent with lowest RMS $\alpha$).
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}{0.32\linewidth}
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_LIN_phase_alpha}{\linewidth}
     \caption{Linear (H1)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_SMC_phase_alpha}{\linewidth}
     \caption{Hybrid SMC (H2)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \par\medskip
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_SMC4_phase_alpha}{\linewidth}
     \caption{Full-surface SMC (H3)}
   \end{subfigure}
+  \hfill
   \caption{Hold-at-center phase portraits.}
   \label{fig:hold_phase_alpha}
 \end{figure}
 
-\subsection{Control effort distributions}
-\noindent The effort histograms show the distribution of commanded base acceleration $u(t)$ (steps/s$^2$). A narrower distribution and smaller tails indicate smoother actuation demands on the stepper pipeline.
+\subsection*{Control effort distributions}
+\noindent The effort histograms show the distribution of commanded base acceleration $u(t)$ (\si{\step\per\second\squared}). A narrower distribution and smaller tails indicate smoother actuation demands on the stepper pipeline. The full-surface controller places much more probability mass in the tails (larger excursions), which matches the higher acc RMS and max values in Table~\ref{tab:summary_hold}.
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}{0.32\linewidth}
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_LIN_effort_hist}{\linewidth}
     \caption{Linear (H1)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_SMC_effort_hist}{\linewidth}
     \caption{Hybrid SMC (H2)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \par\medskip
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_SMC4_effort_hist}{\linewidth}
     \caption{Full-surface SMC (H3)}
   \end{subfigure}
-  \caption{Hold-at-center control effort histograms (commanded base acceleration in steps/s$^2$).}
+  \hfill
+  \caption{Hold-at-center control effort histograms (commanded base acceleration).}
   \label{fig:hold_effort_hist}
 \end{figure}
 
-\subsection{Low-frequency spectrum of $\alpha$}
-\noindent These spectra are limited to $\leq\SI{25}{Hz}$ by the logging Nyquist rate. They are included only to compare low-frequency oscillations, not to claim high-frequency SMC chattering characteristics.
+\subsection*{Low-frequency spectrum of $\alpha$}
+\noindent These spectra are limited to $\leq\SI{25}{Hz}$ by the logging Nyquist rate. They are included only to compare low-frequency oscillations, not to claim high-frequency SMC chattering characteristics. In this dataset, differences between modes are dominated by low-frequency oscillations associated with upright balancing and (in the full-surface case) centering motion, rather than by high-frequency switching.
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}{0.32\linewidth}
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_LIN_alpha_spectrum}{\linewidth}
     \caption{Linear (H1)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_SMC_alpha_spectrum}{\linewidth}
     \caption{Hybrid SMC (H2)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \par\medskip
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/hold_SMC4_alpha_spectrum}{\linewidth}
     \caption{Full-surface SMC (H3)}
   \end{subfigure}
+  \hfill
   \caption{Hold-at-center low-frequency spectra of $\alpha(t)$ (limited to $\leq\SI{25}{Hz}$ by logging Nyquist).}
   \label{fig:hold_alpha_spectrum}
 \end{figure}
 
-\subsection{Full-surface SMC diagnostics (sparse, 1 Hz)}
-\noindent For the full-surface controller, additional sparse diagnostics are logged at \SI{1}{Hz}. In particular, the denominator margin and coupling ramp are important in explaining stability and failures: if the effective denominator shrinks, the same surface error produces larger acceleration commands.
+\subsection*{Full-surface SMC diagnostics (sparse, 1 Hz)}
+\noindent For the full-surface controller, additional sparse diagnostics are logged at \SI{1}{Hz}. The denominator margin and coupling ramp are important: if the effective denominator shrinks, the same surface error produces larger acceleration commands. In H3, these diagnostics confirm that the coupling ramp reached its configured value and the denominator margin remained bounded away from zero, so the observed higher effort is primarily due to the surface coupling itself and the stepper-friendly clamps, not a divide-by-small pathology.
 \begin{figure}[htbp]
   \centering
   \begin{subfigure}{0.48\linewidth}
@@ -111,33 +138,48 @@ This chapter is plot-driven. Figures and tables are generated from the recorded 
   \label{fig:hold_smc4_sparse}
 \end{figure}
 
-\subsection{Summary table (hold)}
+\subsection*{Summary table (hold)}
 \InputIfExists{tables/tab_summary_hold.tex}{\emph{(Run export script to generate tables.)}}
+\clearpage
 
 \section{Commanded reference tracking / nudge mode (N1)}
+\noindent\textbf{Dataset note.} N1 is one commanded reference-tracking run under the linear controller, used to demonstrate regulator-to-servo behavior while maintaining upright balance.
+
 \noindent\textbf{What was tested.} The linear controller is used as a balance-with-servo controller: while maintaining upright balance, the base reference $\theta_{\mathrm{ref}}(t)$ is commanded through a sequence of angle targets via an acceleration/velocity-limited trapezoidal profile.
 
 \noindent\textbf{What to look for.} The tracking plot overlays $\theta(t)$ and the commanded target sequence. Compare rise time, overshoot, and steady-state error, and observe the induced pendulum deviation $\alpha(t)$ during motion. Table~\ref{tab:nudge_steps} summarizes step metrics for the commanded targets.
 \ThesisFigure{figures/nudge_LIN_nudge}{Linear commanded base reference tracking while balancing (nudge mode).}{fig:nudge_lin_tracking}{0.95\linewidth}
 \ThesisFigure{figures/nudge_LIN_timeseries}{Linear nudge run time series.}{fig:nudge_lin_timeseries}{0.95\linewidth}
 
-\subsection{Phase portrait ($\alpha$ vs $\dot{\alpha}$)}
-\noindent The nudge phase portrait illustrates how much pendulum motion is induced by commanded base motion. A well-behaved servo-like response keeps the trajectory close to upright even while the base transitions between targets.
+\subsection*{Phase portrait ($\alpha$ vs $\dot{\alpha}$)}
+\noindent The nudge phase portrait illustrates how much pendulum motion is induced by commanded base motion. A well-behaved servo-like response keeps the trajectory close to upright even while the base transitions between targets. In this run, max $|\alpha|$ during steps remains a few degrees (Table~\ref{tab:nudge_steps}), indicating that the reference profile is slow enough to be compatible with upright stabilization.
 \ThesisFigure{figures/nudge_LIN_phase_alpha}{Nudge run phase portrait.}{fig:nudge_phase_alpha}{0.75\linewidth}
 
-\subsection{Control effort distribution}
+\subsection*{Control effort distribution}
 \noindent This histogram shows how the commanded base acceleration distribution changes during combined balancing + reference tracking. Compared to the pure hold case, nudge mode naturally increases low-frequency effort to execute the trapezoidal motion profile.
 \ThesisFigure{figures/nudge_LIN_effort_hist}{Nudge run control effort histogram (commanded base acceleration).}{fig:nudge_effort_hist}{0.75\linewidth}
 
-\subsection{Low-frequency spectrum of $\alpha$}
+\subsection*{Low-frequency spectrum of $\alpha$}
 \noindent The low-frequency spectrum highlights whether commanded base motion introduces additional oscillatory content in $\alpha(t)$ within the measurable bandwidth.
 \ThesisFigure{figures/nudge_LIN_alpha_spectrum}{Nudge run low-frequency spectrum of $\alpha(t)$ (limited to $\leq\SI{25}{Hz}$ by logging Nyquist).}{fig:nudge_alpha_spectrum}{0.75\linewidth}
 
-\subsection{Step metrics table (nudge)}
+\subsection*{Step metrics table (nudge)}
 \InputIfExists{tables/tab_nudge_steps.tex}{\emph{(Run export script to generate tables.)}}
-\noindent\emph{Note:} ``Settle time'' uses a fixed $\pm\SI{1}{\degree}$ criterion. A value of ``--'' indicates that the criterion was not met within the available post-step window.
+\noindent\emph{Notes:}
+\begin{itemize}
+  \item \textbf{Settle time} uses a fixed $\pm\SI{1}{\degree}$ band. A value of ``--'' indicates that the criterion was not met within the available post-step window.
+  \item \textbf{Steady-state error} is signed; negative values indicate undershoot relative to the target.
+\end{itemize}
+\noindent In N1, rise times are approximately \SIrange{3.1}{3.3}{s} with overshoot up to \SI{9.6}{\degree}. The absence of a measured settle time in this run suggests:
+\begin{enumerate}
+  \item the $\pm\SI{1}{\degree}$ settle band is too strict for the observed steady motion/noise level under simultaneous balancing, or
+  \item the post-step windows were not long enough to observe full settling before the next command.
+\end{enumerate}
+\clearpage
 
 \section{Finger tap disturbance (T1--T3)}
+\noindent\textbf{Dataset note.} Each condition shown in this section corresponds to one representative trial (T1--T3). The manual tap timing is not explicitly marked, so discussion focuses on overall recovery behavior and outcomes.
+
 \noindent\textbf{What was tested.} While balancing upright, the pendulum is disturbed by brief finger taps. The goal is to recover without falling or hitting base limits. This experiment probes robustness to unmodeled impulses and actuator limits.
 
 \noindent\textbf{What to look for.} Compare peak $|\alpha|$ during recovery, how quickly $|\alpha|$ returns near zero, and whether the base approaches the mechanical limits. Table~\ref{tab:summary_tap} summarizes the outcomes in the pinned dataset.
@@ -145,78 +187,91 @@ This chapter is plot-driven. Figures and tables are generated from the recorded 
 \ThesisFigure{figures/tap_SMC_timeseries}{Hybrid SMC disturbance representative trial.}{fig:tap_smc_timeseries}{0.95\linewidth}
 \ThesisFigure{figures/tap_SMC4_timeseries}{Full-surface SMC disturbance representative trial.}{fig:tap_smc4_timeseries}{0.95\linewidth}
 
-\noindent\textbf{Key takeaways (tap).} In the pinned tap dataset, the linear controller remains upright for the full trial duration, while both sliding-mode variants eventually fall. This does not contradict the theoretical robustness of SMC; instead it highlights a practical limitation of stepper actuation under aggressive disturbance recovery: if the commanded acceleration/speed cannot be realized (missed steps or stall ``ticks''), the effective plant deviates from the assumed acceleration-input channel and recovery can fail even when $\alpha$ remains within the nominal upright window. The full-surface controller additionally couples centering into the surface, which can increase required acceleration during taps.
+\noindent\textbf{Key takeaways (tap).} In the pinned tap dataset, the linear controller remains upright for the full trial duration, while both sliding-mode variants eventually fall. This does not contradict the theoretical robustness of sliding mode control; instead it highlights a practical limitation of stepper actuation under aggressive disturbance recovery. The controller computes a large acceleration command $u$ based on the assumed acceleration-input model, but the stepper is an open-loop actuator: if the motor stalls or misses steps (often audible as ``ticks''), the base does not realize the commanded motion. Because state estimation relies on encoder feedback, the controller then ``sees'' insufficient response and tends to demand even larger acceleration to drive the sliding surface back toward zero, which can lock the actuator into a stall-like regime until a base limit is approached or the pendulum leaves the upright window. The full-surface controller additionally couples centering into the surface, which can increase required acceleration during taps.
+\noindent\textbf{Quantitative comparison.} In Table~\ref{tab:summary_tap}, the two sliding-mode trials show significantly larger RMS$(\alpha)$ than the linear trial (hybrid: \SI{1.85}{\degree}, full-surface: \SI{2.52}{\degree} vs. linear: \SI{0.86}{\degree}) and both terminate with a fall within \SIrange{27.9}{31.5}{s}. The full-surface controller also shows much higher RMS effort (\SI{3843}{\step\per\second\squared}) than the linear controller (\SI{1696}{\step\per\second\squared}), consistent with the heavier effort tails in Figure~\ref{fig:tap_effort_hist}.
 
-\subsection{Phase portraits ($\alpha$ vs $\dot{\alpha}$)}
-\noindent The phase portraits visualize the disturbance excursion and recovery trajectory in the pendulum subspace. Wider loops correspond to larger impulse responses and/or slower return to the upright neighborhood.
+\subsection*{Phase portraits ($\alpha$ vs $\dot{\alpha}$)}
+\noindent The phase portraits visualize the disturbance excursion and recovery trajectory in the pendulum subspace. Wider loops correspond to larger impulse responses and/or slower return to the upright neighborhood. In this dataset, both sliding-mode trials show substantially larger excursions than the linear trial, consistent with the larger $\alpha$ RMS and max values in Table~\ref{tab:summary_tap}.
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}{0.32\linewidth}
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_LIN_phase_alpha}{\linewidth}
     \caption{Linear (T1)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_SMC_phase_alpha}{\linewidth}
     \caption{Hybrid SMC (T2)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \par\medskip
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_SMC4_phase_alpha}{\linewidth}
     \caption{Full-surface SMC (T3)}
   \end{subfigure}
+  \hfill
   \caption{Tap-disturbance phase portraits.}
   \label{fig:tap_phase_alpha}
 \end{figure}
 
-\subsection{Control effort distributions}
+\subsection*{Control effort distributions}
 \noindent The effort histograms provide a compact view of how hard each controller drives the stepper during disturbance recovery. Heavy tails near saturation are an indicator of actuator stress and a higher probability of missed steps.
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}{0.32\linewidth}
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_LIN_effort_hist}{\linewidth}
     \caption{Linear (T1)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_SMC_effort_hist}{\linewidth}
     \caption{Hybrid SMC (T2)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \par\medskip
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_SMC4_effort_hist}{\linewidth}
     \caption{Full-surface SMC (T3)}
   \end{subfigure}
-  \caption{Tap-disturbance control effort histograms (steps/s$^2$).}
+  \hfill
+  \caption{Tap-disturbance control effort histograms.}
   \label{fig:tap_effort_hist}
 \end{figure}
 
-\subsection{Low-frequency spectrum of $\alpha$}
+\subsection*{Low-frequency spectrum of $\alpha$}
 \noindent These spectra compare low-frequency oscillations following disturbance events. As in the hold case, they should not be interpreted as chattering bandwidth measurements.
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}{0.32\linewidth}
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_LIN_alpha_spectrum}{\linewidth}
     \caption{Linear (T1)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_SMC_alpha_spectrum}{\linewidth}
     \caption{Hybrid SMC (T2)}
   \end{subfigure}
-  \begin{subfigure}{0.32\linewidth}
+  \par\medskip
+  \hfill
+  \begin{subfigure}{0.49\linewidth}
     \centering
     \IncludeGraphicAuto{figures/tap_SMC4_alpha_spectrum}{\linewidth}
     \caption{Full-surface SMC (T3)}
   \end{subfigure}
+  \hfill
   \caption{Tap-disturbance low-frequency spectra of $\alpha(t)$ (limited to $\leq\SI{25}{Hz}$).}
   \label{fig:tap_alpha_spectrum}
 \end{figure}
 
-\subsection{Full-surface SMC diagnostics (sparse, 1 Hz)}
+\subsection*{Full-surface SMC diagnostics (sparse, 1 Hz)}
 \noindent The sparse diagnostics help interpret full-surface behavior under taps. In particular, the denominator margin and the effective coupling weight explain when the controller becomes ``stiffer'' (larger acceleration for similar surface errors).
 \begin{figure}[htbp]
   \centering
@@ -245,8 +300,9 @@ This chapter is plot-driven. Figures and tables are generated from the recorded 
   \label{fig:tap_smc4_sparse}
 \end{figure}
 
-\subsection{Summary table (tap)}
+\subsection*{Summary table (tap)}
 \InputIfExists{tables/tab_summary_tap.tex}{\emph{(Run export script to generate tables.)}}
+\clearpage
 
 \section{Trials overview}
 \noindent Table~\ref{tab:trials_overview} lists the seven pinned trials used in this report. The dataset size is intentionally small (one representative run per controller per experiment type) and is sufficient for qualitative comparison and for demonstrating the implemented methods; statistical claims would require additional repeated trials per condition.
