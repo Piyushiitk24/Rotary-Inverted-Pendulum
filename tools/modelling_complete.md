@@ -19,30 +19,128 @@ $\alpha(t)$: pendulum angle, with $\alpha=0$ upright.
 
 Constants:
 
-$L_r$: arm length.
+$L_r$: arm length (motor axis to pendulum pivot axis).
+
+$L_h$: horizontal length of the L-shaped pendulum (pivot shaft segment).
+
+$L_v$: vertical length of the L-shaped pendulum (swinging segment).
 
 $m_p$: swinging mass.
 
-$l_p$: distance from hinge to pendulum COM.
+$l_p$: distance from pivot axis to pendulum COM (of the swinging mass).
 
 $g$: gravity.
 
 $\tau$: actuation torque about $\theta$.
 
+Geometry note (this rig): the pendulum is an \textbf{L-shaped rod}. The horizontal segment is aligned with the arm (radial direction) and forms a bearing-supported pivot shaft (three 688RS bearings). The vertical segment carries most of the swinging mass and swings in the $(\mathbf e_t,\mathbf k)$ plane.
+
+In the reduced model used for control, $m_p$ and $l_p$ refer to the mass distribution that moves with $\alpha$ (vertical segment plus concentrated mass). The horizontal segment lies on the pivot axis and contributes primarily to arm-side inertia.
+
 Define
 
 $$K \equiv m_p L_r l_p,\qquad G \equiv m_p g l_p$$
+
+These grouped constants are introduced for compactness: $G$ appears when collecting gravity potential/torque terms, and $K$ appears when collecting inertial coupling terms between arm rotation and pendulum swing.
 
 Let
 
 $\hat J_1$: yaw inertia about motor axis (arm-side).
 
-$\hat J_2$: pendulum hinge inertia.
+$\hat J_2$: pendulum pivot inertia (about the pivot axis).
 
 $J_p$: pendulum inertia about its center of mass, about an axis perpendicular to the swing plane.
 $$\hat J_0 \triangleq \hat J_1 + m_p L_r^2$$
 
+The definition of $\hat J_0$ follows from collecting the $\dot{\theta}^2$ terms in the kinetic energy: it is the arm-side yaw inertia about the motor axis plus the parallel-axis contribution of the swinging mass at radius $L_r$.
+
 Rigid links; frictionless joints.
+
+A schematic of the coordinates and parameters is shown in Fig.\ \ref{fig:furuta_schematic}.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{\linewidth}
+    \centering
+    \begin{tikzpicture}[x=1cm, y=1cm, line cap=round, line join=round]
+      \def\thetad{35}
+      \def\Rarm{6.0}
+      \coordinate (O) at (0,0);
+      \coordinate (P) at ({\Rarm*cos(\thetad)},{\Rarm*sin(\thetad)});
+
+      % Inertial axes (top view) and yaw angle.
+      \draw[-{Latex[length=3mm]}] (O) -- (7.2,0) node[below] {$\mathbf i$};
+      \draw[-{Latex[length=3mm]}] (O) -- (0,4.6) node[left] {$\mathbf j$};
+      \draw[-{Latex[length=3mm]}] (1.2,0) arc (0:\thetad:1.2) node[pos=0.55, right] {$\theta$};
+
+      % Out-of-plane axis.
+      \fill (O) circle (0.06);
+      \node[above left] at (O) {$\mathbf k$ (out of plane)};
+
+      % Arm and pivot location.
+      \draw[line width=1.1pt] (O) -- (P);
+      \node[above] at ($(O)!0.55!(P)$) {$L_r$};
+      \fill (P) circle (0.06);
+
+      % Local arm basis at the pivot.
+      \draw[-{Latex[length=3mm]}] (P) -- ($(P)+({1.4*cos(\thetad)},{1.4*sin(\thetad)})$) node[above] {$\mathbf e_r$};
+      \draw[-{Latex[length=3mm]}] (P) -- ($(P)+({1.4*cos(\thetad+90)},{1.4*sin(\thetad+90)})$) node[left] {$\mathbf e_t$};
+
+      % Bearing-supported pivot shaft (schematic).
+      \coordinate (B1) at ($(P)+({-0.9*cos(\thetad)},{-0.9*sin(\thetad)})$);
+      \coordinate (B2) at ($(P)+({-0.5*cos(\thetad)},{-0.5*sin(\thetad)})$);
+      \coordinate (B3) at ($(P)+({-0.1*cos(\thetad)},{-0.1*sin(\thetad)})$);
+      \foreach \B in {B1,B2,B3} {
+        \draw[thin] (\B) circle (0.18);
+        \draw[thin] (\B) circle (0.12);
+      }
+      \node[align=left, anchor=west] (btxt) at ($(P)+({-1.9*cos(\thetad+90)},{-1.9*sin(\thetad+90)})$) {3$\times$ 688RS bearings\\(pivot shaft)};
+      \draw[-{Latex[length=3mm]}] (btxt.east) -- (B2);
+
+      % Actuation torque about the base axis (schematic).
+      \draw[-{Latex[length=3mm]}] ($(O)+(1.6,0)$) arc (0:-300:1.6);
+      \node at (2.0,-1.1) {$\tau$};
+    \end{tikzpicture}
+    \caption{Top view (arm plane).}
+  \end{subfigure}
+
+  \vspace{0.5em}
+
+  \begin{subfigure}[t]{\linewidth}
+    \centering
+    \begin{tikzpicture}[x=1cm, y=1cm, line cap=round, line join=round]
+      \def\alphad{25}
+      \def\Lrod{6.0}
+      \def\Lcom{4.4}
+      \coordinate (O) at (0,0);
+      \coordinate (E) at ({\Lrod*sin(\alphad)},{\Lrod*cos(\alphad)});
+      \coordinate (C) at ({\Lcom*sin(\alphad)},{\Lcom*cos(\alphad)});
+
+      % Axes in the swing plane.
+      \draw[-{Latex[length=3mm]}] (O) -- (7.2,0) node[below] {$\mathbf e_t$};
+      \draw[-{Latex[length=3mm]}] (O) -- (0,6.6) node[left] {$\mathbf k$};
+      \node[anchor=west] at (0.2,0.3) {pivot axis $\mathbf e_r$ (out of page)};
+
+      % Upright reference.
+      \draw[dashed] (O) -- (0,6.0);
+
+      % L-shaped pendulum (swinging segment shown in this plane).
+      \draw[line width=1.1pt] (O) -- (E);
+      \fill (C) circle (0.08);
+      \node[right] at (C) {$m_p$ (COM)};
+      \node[pos=0.70, above left] at ($(O)!0.70!(E)$) {$L_v$};
+      \node[pos=0.55, above right] at ($(O)!0.55!(C)$) {$l_p$};
+
+      % Angle and gravity.
+      \draw[-{Latex[length=3mm]}] (0,1.6) arc (90:90-\alphad:1.6) node[pos=0.60, right] {$\alpha$};
+      \draw[-{Latex[length=3mm]}] ($(C)+(0.9,0)$) -- ++(0,-2.0) node[below] {$g$};
+    \end{tikzpicture}
+    \caption{Side view (pendulum swing plane).}
+  \end{subfigure}
+  \caption{Rotary (Furuta) inverted pendulum schematic and generalized coordinates used in this chapter.}
+  \label{fig:furuta_schematic}
+\end{figure}
+\FloatBarrier
 
 ---
 
@@ -75,7 +173,7 @@ $$l_p = \frac{m_{\mathrm{rod}}x_{\mathrm{rod}}+m_s x_s}{m_p}$$
 $$l_p = \frac{(0.004262)(0.06) + (0.0077)(0.103)}{0.011962069}$$
 $$l_p = \frac{2.5572\times 10^{-4} + 7.931\times 10^{-4}}{0.011962069} = 0.087679158\ \mathrm{m}$$
 
-Pendulum hinge inertia (rod about end + sphere point mass):
+Pendulum pivot inertia (rod about end + sphere point mass):
 
 $$I_{\mathrm{rod,piv}} = \frac{1}{3}m_{\mathrm{rod}}L_v^2 = \frac{1}{3}(0.004262)(0.12^2)=2.045793103\times 10^{-5}$$
 $$I_{\mathrm{s,piv}} = m_s x_s^2 = (0.0077)(0.103^2)=8.16893\times 10^{-5}$$
@@ -101,11 +199,11 @@ Let $\{\mathbf i,\mathbf j,\mathbf k\}$ be an inertial orthonormal basis. Define
 
 $$\mathbf e_r \equiv \cos\theta\,\mathbf i + \sin\theta\,\mathbf j,\qquad \mathbf e_t \equiv -\sin\theta\,\mathbf i + \cos\theta\,\mathbf j$$
 
-Arm hinge position:
+Pendulum pivot position:
 
 $$\mathbf r_h = L_r\mathbf e_r$$
 
-Pendulum COM relative to hinge:
+Pendulum COM relative to pivot:
 
 $$\mathbf r_{p/h}=l_p\bigl(\sin\alpha\,\mathbf e_t + \cos\alpha\,\mathbf k\bigr)$$
 
@@ -1224,7 +1322,7 @@ The nonlinear SMC law derived in Sec. 12 uses a sliding surface defined solely b
 The resulting controller is implemented in firmware as `CTRL_SMC_FULL` (command `C 2`, status label `mode=SMC4`). In theory, this full-state surface can unify upright stabilization and base reference tracking in a single SMC law. In practice (on this stepper-driven rig), two additional implementation details are critical for repeatable experiments:
 
 1. **Reference-aware formulation:** all $\theta$ terms use the same reference-tracking coordinates as Sec. 11–12, i.e., $\theta_{\mathrm{err}}=\theta-\theta_{\mathrm{ref}}$ and $\dot\theta_{\mathrm{err}}=\dot\theta-\dot\theta_{\mathrm{ref}}$, where $(\theta_{\mathrm{ref}},\dot\theta_{\mathrm{ref}},\ddot\theta_{\mathrm{ref}})$ come from the trapezoidal profile generator (Sec. 12.10, `tools/base_tracking.md`).
-2. **Stepper-friendly robustness additions:** the firmware retains a **gated base-centering assist term** (PD+FF, scaled by `O`) and applies SMC4-only command shaping (tighter accel/speed caps, plus an $\dot\alpha$ clamp inside the SMC4 math). These additions mitigate slow base “random-walk” drift and reduce missed-step / “tick” failures under finger-tap disturbances.
+2. **Stepper-friendly robustness additions:** the firmware retains a **gated base-centering assist term** (PD+FF, scaled by `O`) and applies SMC4-only command shaping (tighter accel/speed caps, plus an $\dot\alpha$ clamp inside the SMC4 math). These additions mitigate slow base “random-walk” drift and reduce missed-step/stall failures under finger-tap disturbances.
 
 **Design objectives:**
 
@@ -1579,7 +1677,7 @@ This clamp does **not** change the safety abort logic: the separate upright-only
 
 **8. SMC4 actuator shaping (stepper-friendly)**
 
-To reduce “tick”/missed-step events during disturbance recovery, the firmware applies tighter caps in SMC4:
+To reduce stall/missed-step events during disturbance recovery, the firmware applies tighter caps in SMC4:
 
 - acceleration saturation: $|\ddot\theta_{\mathrm{steps}}|\le 12{,}000\ \mathrm{steps/s^2}$ (in addition to the global $20{,}000$ cap)
 - speed saturation: $|\dot\theta_{\mathrm{steps}}|\le 2{,}000\ \mathrm{steps/s}$
@@ -1619,7 +1717,7 @@ The full-state surface SMC has five tunable parameters. This section provides gu
    - **Effect:** Larger $\lambda_\theta$ increases the weight of position error relative to velocity error, providing stronger centering stiffness; smaller $\lambda_\theta$ makes the surface more sensitive to base velocity error.
    - **Range:** $0.5$–$2.0\ \mathrm{s^{-1}}$.
 
-**Practical note (important for this rig):** Although the SMC4 surface couples base errors via $k$, the firmware also retains a **gated base-centering assist term** (PD+FF on $\theta_{\mathrm{err}},\dot\theta_{\mathrm{err}}$, scaled by `O` / `smcBaseScale`). Empirically, this assist prevents slow base “random-walk” drift that can occur from modeling mismatch / unmodeled friction when relying purely on the surface coupling. For thesis runs, treat `O` as a first-line knob for “keep arm near center”, and keep $k$ moderate to preserve denominator margin.
+**Practical note (important for this rig):** Although the SMC4 surface couples base errors via $k$, the firmware also retains a **gated base-centering assist term** (PD+FF on $\theta_{\mathrm{err}},\dot\theta_{\mathrm{err}}$, scaled by `O` / `smcBaseScale`). Empirically, this assist prevents slow base “random-walk” drift that can occur from modeling mismatch / unmodeled friction when relying purely on the surface coupling. For the pinned dataset runs, treat `O` as a first-line knob for “keep arm near center”, and keep $k$ moderate to preserve denominator margin.
 
 **Interaction effects:**
 
@@ -1774,7 +1872,7 @@ The full-state surface SMC (Sec. 13) represents the third nonlinear control mode
 
 - Use **`CTRL_LINEAR`** for typical upright balancing with gentle base centering; easiest to tune and adequate for $|\alpha|<5^\circ$.
 - Use **`CTRL_SMC`** (hybrid) for robust pendulum stabilization with optional aggressive base tracking (tune $s_{\mathrm{scale}}$); best for disturbance rejection experiments where base drift is secondary.
-- Use **`CTRL_SMC_FULL`** (SMC4) for thesis demonstration of a full-state surface SMC with $\theta$ terms. In this implementation it is “full-surface” in the SMC law, but still uses stepper-friendly additions (base-centering assist `O`, actuator shaping); treat it as a proof-of-concept mode and expect more sensitivity to actuator limits under aggressive tap/nudge tests.
+- Use **`CTRL_SMC_FULL`** (SMC4) for demonstration of a full-state surface SMC with $\theta$ terms. In this implementation it is “full-surface” in the SMC law, but still uses stepper-friendly additions (base-centering assist `O`, actuator shaping); treat it as a proof-of-concept mode and expect more sensitivity to actuator limits under aggressive tap/nudge tests.
 
 The command `C <0|1|2>` selects the controller mode (only when disarmed) for direct experimental comparison under identical conditions.
 

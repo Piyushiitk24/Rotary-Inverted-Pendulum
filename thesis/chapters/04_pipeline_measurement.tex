@@ -2,16 +2,17 @@
 \label{ch:measurement}
 
 \section{Control loop timing}
-All controllers are executed in a fixed-period real-time loop on the Arduino Mega 2560. In this project:
+All controllers are executed in a fixed-period real-time loop on the Arduino Mega 2560. A \emph{control tick} refers to one execution of this loop. In this project:
 \begin{itemize}
-  \item the control tick is \SI{200}{Hz} ($T\approx \SI{5}{ms}$),
-  \item the high-rate CSV stream is logged at \SI{50}{Hz} (decimated from the control tick).
+  \item the nominal tick period is set in firmware as \texttt{LOOP\_US}=\SI{5000}{\micro s} (i.e., \SI{200}{Hz}, $T=\SI{5}{ms}$),
+  \item each tick measures its actual duration using \texttt{micros()} and uses $dt=\texttt{dtUs}\cdot10^{-6}$ for all discrete-time updates,
+  \item the CSV time-series stream is logged at \SI{50}{Hz} (decimated from the \SI{200}{Hz} control tick).
 \end{itemize}
 
 Because timing jitter can affect derivative estimation and controller performance, the firmware monitors:
 \begin{itemize}
-  \item minimum and maximum observed tick duration,
-  \item the count of tick overruns beyond the nominal period.
+  \item minimum and maximum observed tick duration ($dt_{\min}$, $dt_{\max}$),
+  \item the count of tick overruns beyond the nominal period (defined as $dt > \SI{6}{ms}$, i.e., \texttt{dtUs} $>$ \texttt{LOOP\_US}+1000).
 \end{itemize}
 These diagnostics are printed at \SI{1}{Hz} and are used as a sanity check when adding computation (e.g., trigonometry in nonlinear control modes).
 

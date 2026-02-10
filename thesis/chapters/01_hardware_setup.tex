@@ -2,7 +2,11 @@
 \label{ch:hardware}
 
 \section{Overview}
-The experimental plant is a rotary (Furuta) inverted pendulum: a horizontal arm rotates about a vertical axis (base coordinate $\theta$) and a pendulum link attached at the arm tip swings in a vertical plane (pendulum coordinate $\alpha$). The reference configuration is \emph{upright-only}, i.e., $\alpha=0$ corresponds to the pendulum held upright.
+The experimental plant is a rotary (Furuta) inverted pendulum. A horizontal arm rotates about a vertical axis (base coordinate $\theta$). The pendulum is implemented as an \emph{L-shaped rod}: its horizontal segment forms a pivot shaft aligned with the arm (radial direction) and passes through three 688RS bearings mounted on the arm, while its vertical segment swings in the tangential--vertical plane (pendulum coordinate $\alpha$). The reference configuration is \emph{upright-only}, i.e., $\alpha=0$ corresponds to the pendulum held upright.
+
+Figure~\ref{fig:rig_photo} shows the custom experimental rig used in this work.
+
+\ThesisFigure{figures/rig_photo}{Photograph of the custom stepper-driven rotary (Furuta) inverted pendulum rig used in this work.}{fig:rig_photo}{0.95\linewidth}
 
 This report is concerned with stabilization about the upright equilibrium and with servo-like base positioning while maintaining upright balance.
 
@@ -10,7 +14,7 @@ This report is concerned with stabilization about the upright equilibrium and wi
 The mechanical assembly consists of:
 \begin{itemize}
   \item a rotary arm (yaw axis) driven by a stepper motor,
-  \item a pendulum link mounted at the arm tip and free to swing in a vertical plane,
+  \item an L-shaped pendulum assembly supported by a bearing-mounted pivot shaft (three 688RS bearings),
   \item mechanical hard-stops that bound the base rotation.
 \end{itemize}
 
@@ -21,8 +25,8 @@ k_s \approx \frac{1600}{360} \approx \SI{4.444}{\step\per\degree},
 \]
 which is the conversion used throughout the firmware and analysis.
 
-\subsection*{Pendulum hinge}
-The pendulum hinge is designed to minimize friction and backlash to the extent practical on a benchtop rig, since dissipative hinge dynamics couple directly into the required base acceleration for upright stabilization. The hinge also provides a mounting point for the pendulum angle encoder and its magnet.
+\subsection*{Pendulum pivot (bearing-supported)}
+The pendulum rotates about a bearing-supported pivot shaft that is aligned with the rotary arm. The shaft passes through three 688RS bearings, which reduce friction and minimize backlash in the pendulum degree of freedom (important because dissipative pivot dynamics couple directly into the required base acceleration for upright stabilization). The pivot assembly also carries the pendulum angle encoder magnet/fixture so the AS5600 measures $\alpha$ directly about this axis.
 
 \subsection*{Key geometric parameters}
 The main geometric and inertial parameters are derived and numerically identified in Chapter~\ref{ch:modelling}. For reference, the rig uses:
@@ -52,7 +56,7 @@ This is a central design choice: it makes the theoretical input used in modellin
 \subsection*{Angle sensing}
 Two AS5600 magnetic encoders measure absolute angles. Both devices share the same fixed I\textsuperscript{2}C address, so they are read through an I\textsuperscript{2}C multiplexer (PCA9548A, default address 0x70) at \SI{400}{kHz}:
 \begin{itemize}
-  \item Pendulum encoder (at the pendulum hinge)
+  \item Pendulum encoder (at the pendulum pivot axis)
   \item Base encoder (at the motor/base axis)
 \end{itemize}
 Each AS5600 provides a \SI{12}{bit} absolute angle measurement over $[0,360^\circ)$ (nominal resolution $\approx \SI{0.0879}{\degree}$ per count).

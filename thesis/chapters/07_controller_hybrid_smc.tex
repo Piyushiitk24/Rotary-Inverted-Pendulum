@@ -51,7 +51,7 @@ so that \eqref{eq:smc_sdot} becomes $\dot{s}=f-B\cos\alpha\,\ddot{\theta}$. The 
 \end{equation}
 
 \section{Reaching law, boundary layer, and complete control law}
-To guarantee reaching from off-surface initial conditions, impose the reaching law with a boundary layer (to reduce chattering) \cite{utkin1992,slotine1991}:
+An ideal reaching law uses a discontinuous sign term, $\dot{s}=-K\,\mathrm{sgn}(s)$, but on real hardware this can induce chattering near $s=0$. Therefore, the implemented controller uses a boundary layer via a saturation function \cite{utkin1992,slotine1991}:
 \begin{equation}
 \dot{s} = -K\,\mathrm{sat}\!\left(\frac{s}{\phi}\right),\qquad K>0,\ \phi>0,
 \label{eq:smc_reaching_law}
@@ -74,29 +74,46 @@ Substituting \eqref{eq:smc_reaching_law} into $\dot{s}=f-B\cos\alpha\,\ddot{\the
 \end{equation}
 Outside the boundary layer ($|s|>\phi$), $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$ and reaching is finite-time. Inside ($|s|\le\phi$), $\dot{s}=-(K/\phi)s$ gives exponential decay of $s$.
 
-\section{Lyapunov reaching argument (sketch)}
-Using the Lyapunov candidate $V(s)=\frac{1}{2}s^2$, the reaching law \eqref{eq:smc_reaching_law} yields
+\section{Lyapunov reaching argument}
+Let the Lyapunov candidate be
 \[
-\dot{V} = s\dot{s} = -K\,s\,\mathrm{sat}\!\left(\frac{s}{\phi}\right)\le 0,
+V(s)=\frac{1}{2}s^2,\qquad V\ge 0.
 \]
-with strict negativity for $|s|>\phi$. For $|s|>\phi$ one obtains $\dot{s}=-K\,\mathrm{sgn}(s)$, hence the boundary layer is reached in
+Using the reaching law \eqref{eq:smc_reaching_law},
 \[
-t_r = \frac{|s_0|-\phi}{K}.
+\dot{V}=s\dot{s}=-K\,s\,\mathrm{sat}\!\left(\frac{s}{\phi}\right).
 \]
-In the sliding phase, $\alpha$ decays exponentially with time constant $1/\lambda$.
+Because $s\,\mathrm{sat}(s/\phi)\ge 0$ for all $s$, it follows that $\dot{V}\le 0$, with strict negativity for $|s|>\phi$.
+
+\paragraph{Finite-time reaching to the boundary layer ($|s|>\phi$).}
+For $|s|>\phi$, $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$ and therefore $\dot{s}=-K\,\mathrm{sgn}(s)$. If $s_0>\phi$ then $s(t)=s_0-Kt$ and the trajectory reaches $s=\phi$ at $t_r=(s_0-\phi)/K$. If $s_0<-\phi$ then $s(t)=s_0+Kt$ and the trajectory reaches $s=-\phi$ at $t_r=(|s_0|-\phi)/K$. Thus the boundary layer is reached in finite time
+\[
+t_r=\frac{|s_0|-\phi}{K},\qquad |s_0|>\phi.
+\]
+
+\paragraph{Convergence within the boundary layer ($|s|\le\phi$).}
+For $|s|\le\phi$, $\mathrm{sat}(s/\phi)=s/\phi$ and $\dot{s}=-(K/\phi)s$, so
+\[
+s(t)=s(t_r)\exp\!\left(-\frac{K}{\phi}(t-t_r)\right),
+\qquad
+\dot{V}=-(2K/\phi)\,V.
+\]
+
+\paragraph{Pendulum decay on the sliding manifold.}
+On $s=0$, \eqref{eq:smc_surface} gives $\dot{\alpha}=-\lambda\alpha$, hence $\alpha(t)=\alpha(t_0)e^{-\lambda(t-t_0)}$ and $\lambda$ sets the sliding-phase time constant.
 
 \section{Stepper-oriented implementation constraints}
 The law \eqref{eq:smc_control_law} contains $\cos\alpha$ in the denominator. This project is explicitly upright-only (no swing-up), and the implementation enforces:
 \begin{itemize}
-  \item \textbf{Validity window}: a hard abort if $|\alpha|$ exceeds a fixed upright window (Chapter~\ref{ch:hardware}).
-  \item \textbf{Cosine guard}: $\cos\alpha$ is clamped away from zero as a numerical glitch guard.
-  \item \textbf{Extreme-rate abort}: a debounced abort on extreme $|\dot{\alpha}|$ to prevent rail commands under violent disturbances.
-  \item \textbf{Acceleration clamp}: the computed $\ddot{\theta}$ is clamped before conversion to stepper units.
+  \item \textbf{Upright-only validity window}: hard abort if $|\alpha|>\texttt{SMC\_ALPHA\_ABORT\_DEG}=\SI{25}{\degree}$.
+  \item \textbf{Cosine guard (``cosine floor'')}: use $\cos_{\mathrm{safe}}=\mathrm{sgn}(\cos\alpha)\max(|\cos\alpha|,\texttt{SMC\_COS\_MIN})$ with \texttt{SMC\_COS\_MIN}=0.2.
+  \item \textbf{Extreme-rate abort}: hard abort if $|\dot{\alpha}|>\texttt{SMC\_ALPHADOT\_ABORT\_DEG\_S}=\SI{250}{\degree\per\second}$ for \texttt{SMC\_ALPHADOT\_ABORT\_TICKS\_REQ}=3 consecutive control ticks (after \texttt{SMC\_ABORT\_GRACE\_MS}=\SI{200}{ms} post-engage grace, and only when $|\alpha|>\texttt{SMC\_ALPHADOT\_ABORT\_MIN\_ALPHA\_DEG}=\SI{5}{\degree}$).
+  \item \textbf{Acceleration clamp}: the computed $\ddot{\theta}$ is clamped before conversion using \texttt{MAX\_ACC\_STEPS}=\SI{20000}{\step\per\second\squared} and \texttt{STEPS\_PER\_DEG}=4.444 (equivalently, $|\ddot{\theta}|\le \texttt{MAX\_ACC\_STEPS}/\texttt{STEPS\_PER\_DEG}\approx \SI{4500}{\degree\per\second\squared}$ before conversion).
 \end{itemize}
 The nonlinear computations use $\sin(\alpha)$ and $\cos(\alpha)$ with $\alpha$ interpreted in radians; angles are recorded and plotted in degrees for readability (Chapter~\ref{ch:notation}).
 
 \section{Base-centering assist term (why this controller is ``hybrid'')}
-The surface \eqref{eq:smc_surface} stabilizes the pendulum but does not directly regulate the base angle. On a stepper-driven actuator, small unmodeled biases can cause a slow base random-walk even while balancing upright. Therefore, the hybrid controller adds a gated secondary objective: a small base reference-tracking acceleration
+The surface \eqref{eq:smc_surface} stabilizes the pendulum but does not directly regulate the base angle. On a stepper-driven actuator, small unmodeled biases can cause a slow base random-walk even while balancing upright. Therefore, the hybrid controller adds a gated secondary objective: a base reference-tracking acceleration
 \begin{equation}
 \ddot{\theta}_{\mathrm{base}}
 =
@@ -110,6 +127,8 @@ scaled by a factor $\gamma$ and enabled only when the pendulum is near upright. 
 u_{\mathrm{cmd}} \;=\; u_{\mathrm{smc}} + \gamma\,u_{\mathrm{base}},
 \]
 where $u_{\mathrm{smc}}$ is \eqref{eq:smc_control_law} and $u_{\mathrm{base}}$ corresponds to \eqref{eq:smc_base_assist} expressed in the same units. This structure preserves nonlinear robustness during recovery while providing a practical centering mechanism when conditions are safe.
+
+In firmware, the centering assist is scaled by \texttt{smcBaseScale} (default $\gamma=1.0$, range $0\ldots 2$) and gated by an upright/still window: it is enabled only after a post-engage grace of \SI{200}{ms} and when $|\alpha|<\texttt{SMC\_BASE\_GATE\_ALPHA\_WINDOW\_DEG}=\SI{5}{\degree}$ and $|\dot{\alpha}|<\texttt{SMC\_BASE\_GATE\_ALPHADOT\_WINDOW\_DEG\_S}=\SI{150}{\degree\per\second}$.
 
 \section{Parameters used in experiments}
 For the dataset analyzed in Chapter~\ref{ch:results}, the hybrid SMC used:

@@ -6,7 +6,7 @@ This project studies upright-only stabilization of a rotary (Furuta) inverted pe
 
 \section{Key contributions (summary)}
 \begin{itemize}
-  \item \textbf{Acceleration-input control matched to stepper actuation.} We model and control the system using commanded base/arm acceleration $u=\ddot{\theta}$ (not torque), matching the implemented actuation pipeline (acceleration integrated to velocity and commanded to the stepper).
+  \item \textbf{Acceleration-input control matched to stepper actuation.} Most Furuta pendulum treatments model motor torque as the input; here we derive and implement an acceleration-input formulation $u=\ddot{\theta}$ to match stepper velocity-mode actuation (acceleration integrated to a commanded step rate).
   \item \textbf{First-principles modelling} of the custom rig (geometry, inertia, identified constants), with the full derivation included in the main body (Chapter~\ref{ch:modelling}).
   \item \textbf{Three upright controllers} implemented and experimentally compared:
     \begin{itemize}
