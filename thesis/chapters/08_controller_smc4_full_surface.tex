@@ -84,45 +84,37 @@ and therefore the full-surface sliding mode control law is
 \end{equation}
 with $s$ given by \eqref{eq:smc4_surface}. Setting $k=0$ reduces \eqref{eq:smc4_control_law} to the pendulum-only SMC law \eqref{eq:smc_control_law}.
 
-\section{Lyapunov reaching argument}
-Let $V(s)=\frac{1}{2}s^2$. With the reaching law $\dot{s}=-K\,\mathrm{sat}(s/\phi)$,
+\section{Lyapunov stability analysis (reaching)}
+As in the hybrid controller, the reaching law is designed to drive the sliding variable $s$ in \eqref{eq:smc4_surface} toward zero. Choose the Lyapunov candidate
 \[
-\dot{V}=s\dot{s}=-K\,s\,\mathrm{sat}\!\left(\frac{s}{\phi}\right)\le 0,
+V(s)=\frac{1}{2}s^2,\qquad V\ge 0.
 \]
-with strict negativity for $|s|>\phi$.
-
-\paragraph{Finite-time reaching to the boundary layer ($|s|>\phi$).}
-For $|s|>\phi$, $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$ and $\dot{s}=-K\,\mathrm{sgn}(s)$. Therefore $|s(t)|$ decreases linearly until it reaches $\phi$, and the reaching time satisfies
+With the boundary-layer reaching law $\dot{s}=-K\,\mathrm{sat}(s/\phi)$ \cite{utkin1992,slotine1991,Young1999},
 \[
-t_r=\frac{|s_0|-\phi}{K},\qquad |s_0|>\phi.
+\dot{V}=s\dot{s}=-K\,s\,\mathrm{sat}\!\left(\frac{s}{\phi}\right)\le 0.
 \]
-
-\paragraph{Convergence within the boundary layer ($|s|\le\phi$).}
-For $|s|\le\phi$, $\mathrm{sat}(s/\phi)=s/\phi$ and $\dot{s}=-(K/\phi)s$, so
-\[
-s(t)=s(t_r)\exp\!\left(-\frac{K}{\phi}(t-t_r)\right),
-\qquad
-\dot{V}=-(2K/\phi)\,V.
-\]
-Thus $s(t)\to 0$ exponentially once within the boundary layer, providing practical stability with reduced chattering \cite{utkin1992,slotine1991}.
+Therefore $V$ never increases and $s$ is driven toward the sliding surface.
+\begin{itemize}
+  \item If $|s|>\phi$, then $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$ and $\dot{V}=-K|s|<0$ (strong pull toward the boundary layer).
+  \item If $|s|\le\phi$, then $\mathrm{sat}(s/\phi)=s/\phi$ and $\dot{V}=-(K/\phi)s^2\le 0$ (smooth convergence with reduced chattering near $s=0$).
+\end{itemize}
+When $s\approx 0$, the surface \eqref{eq:smc4_surface} enforces a coupled first-order relation between pendulum motion and the base tracking errors. The tuning parameters $(\lambda_{\alpha},\lambda_{\theta},k)$ set how strongly these errors are driven back toward zero in the sliding phase.
 
 \section{Implementation safeguards and stepper-friendly shaping}
 \label{sec:smc4_safeguards}
-Compared to the hybrid controller, the full-surface controller is more sensitive to coupling because the term $k$ appears both in the surface and in the denominator $(B\cos\alpha-k)$. To obtain repeatable experiments on a stepper actuator, the implementation enforces:
+Compared to the hybrid controller, SMC4 is more sensitive to coupling because the term $k$ appears both in the surface and in the denominator $(B\cos\alpha-k)$. The implementation therefore applies a small set of safeguards to keep the denominator away from zero and to keep the stepper actuation within safe limits:
 \begin{itemize}
-  \item \textbf{Upright-only validity and cosine guard}: enforce $|\alpha|<\SI{25}{\degree}$ (upright-only) and use a cosine floor \texttt{SMC\_COS\_MIN}=0.2 via $\cos_{\mathrm{safe}}=\mathrm{sgn}(\cos\alpha)\max(|\cos\alpha|,\texttt{SMC\_COS\_MIN})$.
-  \item \textbf{Hard coupling limit}: clamp the requested coupling to $k\le \texttt{SMC\_FULL\_K\_MAX}=1.20$.
-  \item \textbf{Denominator margin}: enforce $|B\cos_{\mathrm{safe}}-k_{\mathrm{eff}}|\ge \texttt{SMC\_FULL\_DENOM\_MIN}=0.60$ by clamping an effective $k_{\mathrm{eff}}$ used in \eqref{eq:smc4_control_law}.
-  \item \textbf{Ramp-in of coupling}: ramp $k_{\mathrm{eff}}$ from 0 to its configured value over \texttt{SMC\_FULL\_K\_RAMP\_MS}=\SI{200}{ms} after engage.
-  \item \textbf{Explicit clamps on base error signals}: clamp $\theta_{\mathrm{err}}$ to $\pm\texttt{SMC\_FULL\_THETA\_ERR\_CLAMP\_DEG}=\pm\SI{78}{\degree}$ and $\dot{\theta}_{\mathrm{err}}$ to $\pm\texttt{SMC\_FULL\_THETADOT\_ERR\_CLAMP\_DEG\_S}=\pm\SI{200}{\degree\per\second}$, and clamp the combined base term to \texttt{SMC\_FULL\_THETA\_TERM\_CLAMP\_DEG\_S}=\SI{300}{\degree\per\second}.
-  \item \textbf{Internal $\dot{\alpha}$ clamp}: clamp $\dot{\alpha}$ \emph{inside} the SMC4 computation to $\pm\texttt{SMC4\_ALPHA\_DOT\_CTRL\_CLAMP\_DEG\_S}=\pm\SI{200}{\degree\per\second}$ to limit $\lambda_{\alpha}\dot{\alpha}$-driven spikes (while keeping the separate extreme-rate abort unchanged).
-  \item \textbf{Tighter actuator shaping}: apply additional caps \texttt{SMC4\_MAX\_ACC\_STEPS}=\SI{12000}{\step\per\second\squared} and \texttt{SMC4\_MAX\_SPEED\_HZ}=\SI{2000}{\step\per\second} (on top of global limits) to reduce stall/missed-step events under disturbances.
+  \item \textbf{Upright-only and cosine floor}: enforce $|\alpha|<\SI{25}{\degree}$ (upright-only operation) and use a protected $\cos_{\mathrm{safe}}=\mathrm{sgn}(\cos\alpha)\max(|\cos\alpha|,\cos_{\min})$ with $\cos_{\min}=0.2$ (keeps the denominator well-behaved).
+  \item \textbf{Limit coupling}: enforce $k\le k_{\max}$ with $k_{\max}=1.20$ (prevents overly aggressive coupling).
+  \item \textbf{Denominator margin}: enforce a minimum separation from the singularity,
+    $|B\cos_{\mathrm{safe}}-k|\ge \mathrm{den}_{\min}$ with $\mathrm{den}_{\min}=0.60$
+    (prevents ill-conditioning and large acceleration demands).
+  \item \textbf{Smooth engage}: ramp $k$ from 0 to its configured value over $T_k=\SI{200}{ms}$ after engage (avoids sudden transients).
+  \item \textbf{Practical clamps and shaping}: clamp $|\theta_{\mathrm{err}}|\le\theta_{\mathrm{err},\max}=\SI{78}{\degree}$ and $|\dot{\theta}_{\mathrm{err}}|\le\dot{\theta}_{\mathrm{err},\max}=\SI{200}{\degree\per\second}$, clamp the internal $\dot{\alpha}$ used in the computation to $|\dot{\alpha}|\le\dot{\alpha}_{\mathrm{ctrl},\max}=\SI{200}{\degree\per\second}$, and apply tighter caps $u_{\max,\mathrm{SMC4}}=\SI{12000}{\step\per\second\squared}$ and $\dot{\theta}_{\max,\mathrm{SMC4}}=\SI{2000}{\step\per\second}$ (reduces spikes and stall/missed-step events).
 \end{itemize}
 
 \subsection{Gated base-centering assist (implemented)}
-Although the surface \eqref{eq:smc4_surface} includes base error terms, the firmware additionally applies the same gated base-centering assist mechanism used in the hybrid controller: the total commanded acceleration is the sum of the SMC4 command and a gated PD+FF base term of the form \eqref{eq:smc_base_assist}. This is a practical contribution for stepper actuation because it prevents slow base random-walk drift while keeping the assist inactive during large recovery transients.
-
-In firmware, the assist is scaled by \texttt{smcBaseScale} (default $\gamma=1.0$, range $0\ldots 2$) and gated only after a post-engage grace of \texttt{MOVE\_ENGAGE\_GRACE\_MS}=\SI{200}{ms}. The gate requires $|\alpha|<\texttt{SMC\_BASE\_GATE\_ALPHA\_WINDOW\_DEG}=\SI{5}{\degree}$ and $|\dot{\alpha}|<\texttt{SMC4\_BASE\_GATE\_ALPHADOT\_WINDOW\_DEG\_S}=\SI{250}{\degree\per\second}$.
+Although the surface \eqref{eq:smc4_surface} includes base error terms, a small gated base-centering assist (of the form \eqref{eq:smc_base_assist}) is also applied to prevent slow base drift once the pendulum is already near upright. The assist is scaled by $\gamma$ (default $\gamma=1.0$, range $0\ldots 2$) and enabled only after a grace period $T_g=\SI{200}{ms}$ and when $|\alpha|<\alpha_{\gamma}=\SI{5}{\degree}$ and $|\dot{\alpha}|<\dot{\alpha}_{\gamma,\mathrm{SMC4}}=\SI{250}{\degree\per\second}$. During large recovery transients it remains inactive.
 
 \section{Parameters used in experiments}
 For the dataset analyzed in Chapter~\ref{ch:results}, the full-surface controller used:

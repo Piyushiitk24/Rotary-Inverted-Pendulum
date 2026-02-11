@@ -6,12 +6,40 @@ import numpy as np
 import pandas as pd
 
 
+def auto_symmetric_ylim(
+    signal: np.ndarray,
+    *,
+    headroom: float = 1.15,
+    step: float = 5.0,
+    min_lim: float = 5.0,
+) -> float:
+    """
+    Compute a "nice" symmetric y-limit (±ylim) around 0 from a 1D signal.
+
+    Rule:
+      abs_max = nanmax(|signal|)
+      raw = abs_max * headroom
+      ylim = max(min_lim, step * ceil(raw / step))
+    """
+    y = np.asarray(signal, dtype=float)
+    if y.size == 0:
+        return float(min_lim)
+    abs_max = float(np.nanmax(np.abs(y)))
+    if not np.isfinite(abs_max):
+        return float(min_lim)
+    raw = abs_max * float(headroom)
+    ylim = max(float(min_lim), float(step) * float(np.ceil(raw / float(step))))
+    return float(ylim)
+
+
 def plot_timeseries(
     df: pd.DataFrame,
     title: str,
     lim_pend_deg: float = 30.0,
     lim_motor_deg: float = 80.0,
     max_acc_steps: float = 20000.0,
+    ylim_pend_deg: Optional[float] = None,
+    ylim_motor_deg: Optional[float] = None,
 ):
     import matplotlib.pyplot as plt
 
@@ -23,7 +51,8 @@ def plot_timeseries(
     axes[0].plot(t, df["alpha_deg"], linewidth=0.9)
     axes[0].axhline(0, color="k", linewidth=0.7, alpha=0.4)
     axes[0].set_ylabel("α (deg)")
-    axes[0].set_ylim(-(lim_pend_deg + 5.0), +(lim_pend_deg + 5.0))
+    alpha_ylim = float(ylim_pend_deg) if ylim_pend_deg is not None else float(lim_pend_deg + 5.0)
+    axes[0].set_ylim(-alpha_ylim, +alpha_ylim)
     axes[0].grid(True, alpha=0.25)
 
     # Theta
@@ -32,7 +61,8 @@ def plot_timeseries(
     axes[1].axhline(+lim_motor_deg, color="r", linestyle=":", linewidth=0.9, alpha=0.6)
     axes[1].axhline(-lim_motor_deg, color="r", linestyle=":", linewidth=0.9, alpha=0.6)
     axes[1].set_ylabel("θ (deg)")
-    axes[1].set_ylim(-(lim_motor_deg + 5.0), +(lim_motor_deg + 5.0))
+    theta_ylim = float(ylim_motor_deg) if ylim_motor_deg is not None else float(lim_motor_deg + 5.0)
+    axes[1].set_ylim(-theta_ylim, +theta_ylim)
     axes[1].grid(True, alpha=0.25)
 
     # Control effort
@@ -102,6 +132,10 @@ def plot_nudge_tracking(
     steps: list[dict[str, Any]],
     lim_pend_deg: float = 30.0,
     lim_motor_deg: float = 80.0,
+    max_acc_steps: float = 20000.0,
+    include_effort: bool = False,
+    ylim_pend_deg: Optional[float] = None,
+    ylim_motor_deg: Optional[float] = None,
 ):
     import matplotlib.pyplot as plt
 
@@ -109,7 +143,9 @@ def plot_nudge_tracking(
     theta = df["theta_deg"].to_numpy(dtype=float)
     alpha = df["alpha_deg"].to_numpy(dtype=float)
 
-    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+    nrows = 3 if include_effort else 2
+    fig_h = 8.5 if include_effort else 7.0
+    fig, axes = plt.subplots(nrows, 1, figsize=(12, fig_h), sharex=True)
 
     axes[0].plot(t, theta, linewidth=0.9, label="θ")
     axes[0].axhline(+lim_motor_deg, color="r", linestyle=":", linewidth=0.9, alpha=0.6)
@@ -128,16 +164,29 @@ def plot_nudge_tracking(
         axes[0].step(xs2, ys2, where="post", linewidth=1.2, color="k", alpha=0.75, label="θ_target")
 
     axes[0].set_ylabel("θ (deg)")
-    axes[0].set_ylim(-(lim_motor_deg + 5.0), +(lim_motor_deg + 5.0))
+    theta_ylim = float(ylim_motor_deg) if ylim_motor_deg is not None else float(lim_motor_deg + 5.0)
+    axes[0].set_ylim(-theta_ylim, +theta_ylim)
     axes[0].grid(True, alpha=0.25)
     axes[0].legend(loc="best")
 
     axes[1].plot(t, alpha, linewidth=0.9, color="tab:blue")
     axes[1].axhline(0, color="k", linewidth=0.7, alpha=0.4)
     axes[1].set_ylabel("α (deg)")
-    axes[1].set_ylim(-(lim_pend_deg + 5.0), +(lim_pend_deg + 5.0))
-    axes[1].set_xlabel("time (s)")
+    alpha_ylim = float(ylim_pend_deg) if ylim_pend_deg is not None else float(lim_pend_deg + 5.0)
+    axes[1].set_ylim(-alpha_ylim, +alpha_ylim)
     axes[1].grid(True, alpha=0.25)
+
+    if include_effort:
+        axes[2].plot(t, df["acc_cmd_steps_s2"], linewidth=0.9, color="purple")
+        axes[2].axhline(0, color="k", linewidth=0.7, alpha=0.4)
+        axes[2].axhline(+max_acc_steps, color="r", linestyle=":", linewidth=0.9, alpha=0.6)
+        axes[2].axhline(-max_acc_steps, color="r", linestyle=":", linewidth=0.9, alpha=0.6)
+        axes[2].set_ylabel("acc (steps/s²)")
+        axes[2].set_ylim(-max_acc_steps, +max_acc_steps)
+        axes[2].grid(True, alpha=0.25)
+        axes[2].set_xlabel("time (s)")
+    else:
+        axes[1].set_xlabel("time (s)")
 
     fig.suptitle(title)
     fig.tight_layout()

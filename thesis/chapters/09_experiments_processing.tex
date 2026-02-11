@@ -42,24 +42,24 @@ For completeness, Table~\ref{tab:controller_params_overview} summarizes the nume
   Shared & Stepper conversion $k_s$ & 4.444 & \si{\step\per\degree} & used to convert degrees to step units \\
   Shared & Control tick & 200 & Hz & fixed-period loop \\
   Shared & CSV logging rate & 50 & Hz & decimated from control tick \\
-  Shared & Nominal tick period & 5000 & \si{\micro s} & \texttt{LOOP\_US} (target loop period) \\
-  Shared & Tick overrun threshold & 6000 & \si{\micro s} & counted if $dt>\texttt{LOOP\_US}+1000$ \\
+  Shared & Nominal tick period $T_s$ & 5 & ms & target loop period \\
+  Shared & Overrun threshold $T_{\mathrm{ov}}$ & 6 & ms & counted if $dt>T_{\mathrm{ov}}$ \\
   Shared & Base angle limit & 80 & \si{\degree} & hard disarm beyond this bound \\
   Shared & Pendulum angle limit & 30 & \si{\degree} & hard disarm beyond this bound \\
-  Shared & Hard limit debounce & 3 & ticks & \texttt{FALL\_COUNT\_REQ} (= \SI{15}{ms} at \SI{200}{Hz}) \\
-  Shared & Soft limit margin & 2 & \si{\degree} & \texttt{LIM\_MARGIN\_DEG} (clamps outward motion for $|\theta|>\SI{78}{\degree}$) \\
-  Shared & Engage ramp duration & 100 & ms & linear ramp applied after \texttt{ENGAGED} \\
-  Shared & Global acceleration cap & 20000 & \si{\step\per\second\squared} & \texttt{MAX\_ACC\_STEPS} \\
-  Shared & Global speed cap & 15000 & \si{\step\per\second} & \texttt{MAX\_SPEED\_HZ} \\
-  Shared & Stall detect min cmd speed & 500 & \si{\step\per\second} & \texttt{BASE\_STALL\_CMD\_HZ} (expect-motion threshold) \\
-  Shared & Stall detect min motion & 0.10 & \si{\degree} & \texttt{BASE\_STALL\_MIN\_DTHETA\_DEG} per control tick \\
-  Shared & Stall detect persistence & 30 & ticks & \texttt{BASE\_STALL\_WARN\_TICKS} (= \SI{150}{ms}) \\
+  Shared & Hard limit debounce $N_{\mathrm{fall}}$ & 3 & ticks & \SI{15}{ms} at \SI{200}{Hz} \\
+  Shared & Soft limit margin $\Delta_\theta$ & 2 & \si{\degree} & clamps outward motion for $|\theta|>\SI{80}{\degree}-\Delta_\theta=\SI{78}{\degree}$ \\
+  Shared & Engage ramp duration $T_{\mathrm{ramp}}$ & 100 & ms & linear ramp applied after controller engagement \\
+  Shared & Acceleration cap $u_{\max}$ & 20000 & \si{\step\per\second\squared} & actuator shaping \\
+  Shared & Speed cap $\dot{\theta}_{\max}$ & 15000 & \si{\step\per\second} & actuator shaping \\
+  Shared & Stall detect min cmd speed $\dot{\theta}_{\mathrm{cmd},\min}$ & 500 & \si{\step\per\second} & expect-motion threshold \\
+  Shared & Stall detect min motion $\Delta\theta_{\min}$ & 0.10 & \si{\degree} & per control tick \\
+  Shared & Stall detect persistence $N_{\mathrm{stall}}$ & 30 & ticks & \SI{150}{ms} at \SI{200}{Hz} \\
   Shared (nonlinear) & Upright-only validity $|\alpha|$ & 25 & \si{\degree} & abort to enforce upright-only operation \\
   Shared (nonlinear) & Extreme-rate abort $|\dot{\alpha}|$ & 250 & \si{\degree\per\second} & debounced, prevents rail commands \\
-  Shared (nonlinear) & Extreme-rate abort debounce & 3 & ticks & \texttt{SMC\_ALPHADOT\_ABORT\_TICKS\_REQ} \\
-  Shared (nonlinear) & Extreme-rate abort grace & 200 & ms & \texttt{SMC\_ABORT\_GRACE\_MS} post-engage \\
-  Shared (nonlinear) & Extreme-rate abort min $|\alpha|$ & 5 & \si{\degree} & \texttt{SMC\_ALPHADOT\_ABORT\_MIN\_ALPHA\_DEG} \\
-  Shared (nonlinear) & Cosine floor $\cos_{\min}$ & 0.2 & -- & \texttt{SMC\_COS\_MIN} in $\cos_{\mathrm{safe}}$ \\
+  Shared (nonlinear) & Extreme-rate abort debounce $N_{\dot{\alpha}}$ & 3 & ticks & consecutive ticks above threshold \\
+  Shared (nonlinear) & Extreme-rate abort grace $T_g$ & 200 & ms & post-engage grace \\
+  Shared (nonlinear) & Extreme-rate abort min $|\alpha|$ $\alpha_{\min}$ & 5 & \si{\degree} & min-angle gate to avoid noise trips \\
+  Shared (nonlinear) & Cosine floor $\cos_{\min}$ & 0.2 & -- & used in $\cos_{\mathrm{safe}}$ \\
 
   \addlinespace
 	  Linear & $K_{\theta}$ & 31.5 & \si{\step\per\second\squared\per\degree} & base/arm position gain \\
@@ -67,22 +67,22 @@ For completeness, Table~\ref{tab:controller_params_overview} summarizes the nume
 	  Linear & $K_{\dot{\theta}}$ & 28.3 & \si{\step\per\second\squared}\,per\,(\si{\degree\per\second}) & base/arm rate gain \\
 	  Linear & $K_{\dot{\alpha}}$ & 73.5 & \si{\step\per\second\squared}\,per\,(\si{\degree\per\second}) & pendulum rate gain \\
 	  Linear & Derivative filter cutoff $\omega_c$ & 450 & \si{rad\per\second} & bilinear (Tustin) filtered differentiator \\
-	  Linear & $\alpha$ deadband & 0.5 & \si{\degree} & \texttt{ALPHA\_DEADBAND\_DEG} \\
+	  Linear & $\alpha$ deadband $\alpha_{\mathrm{db}}$ & 0.5 & \si{\degree} & reduces noise-chasing near upright \\
 	  Linear & Velocity leak coefficient $\lambda_{\mathrm{leak}}$ & 2.0 & \si{s^{-1}} & enabled only near upright/center \\
-	  Linear & Velocity leak window $|\alpha|$ & 5 & \si{\degree} & \texttt{VEL\_LEAK\_ALPHA\_WINDOW\_DEG} \\
-	  Linear & Velocity leak window $|\theta_{\mathrm{err}}|$ & 20 & \si{\degree} & \texttt{VEL\_LEAK\_THETA\_WINDOW\_DEG} \\
+	  Linear & Velocity leak window $|\alpha|$ $\alpha_{\mathrm{leak,win}}$ & 5 & \si{\degree} & enables leak only near upright \\
+	  Linear & Velocity leak window $|\theta_{\mathrm{err}}|$ $\theta_{\mathrm{leak,win}}$ & 20 & \si{\degree} & enables leak only near center \\
 	  Linear & Upright reference trim rate & 0.20 & \si{s^{-1}} & slow bias compensation (auto-trim) \\
-	  Linear & Auto-trim clamp & 1.5 & \si{\degree} & \texttt{ALPHA\_TRIM\_MAX\_DEG} from calibration \\
-	  Linear & Auto-trim window $|\alpha|$ & 3 & \si{\degree} & \texttt{ALPHA\_TRIM\_ALPHA\_WINDOW\_DEG} \\
-	  Linear & Auto-trim window $|\dot{\alpha}|$ & 50 & \si{\degree\per\second} & \texttt{ALPHA\_TRIM\_ALPHADOT\_WINDOW\_DEG\_S} \\
+	  Linear & Auto-trim clamp $\alpha_{\mathrm{trim,max}}$ & 1.5 & \si{\degree} & relative to calibration reference \\
+	  Linear & Auto-trim window $|\alpha|$ $\alpha_{\mathrm{trim,win}}$ & 3 & \si{\degree} & enables trim only near upright \\
+	  Linear & Auto-trim window $|\dot{\alpha}|$ $\dot{\alpha}_{\mathrm{trim,win}}$ & 50 & \si{\degree\per\second} & enables trim only when still \\
 
   \addlinespace
   Hybrid SMC & Surface slope $\lambda$ & 15 & \si{s^{-1}} & $s=\dot{\alpha}+\lambda\alpha$ \\
   Hybrid SMC & Reaching gain $K$ & 800 & \si{\degree\per\second\squared} & boundary-layer reaching law \\
   Hybrid SMC & Boundary layer $\phi$ & 50 & \si{\degree\per\second} & reduces chattering \\
   Hybrid SMC & Base assist scale $\gamma$ & 1.0 & -- & gated base-centering assist \\
-  Hybrid SMC & Base assist gate $|\alpha|$ & 5 & \si{\degree} & \texttt{SMC\_BASE\_GATE\_ALPHA\_WINDOW\_DEG} \\
-  Hybrid SMC & Base assist gate $|\dot{\alpha}|$ & 150 & \si{\degree\per\second} & \texttt{SMC\_BASE\_GATE\_ALPHADOT\_WINDOW\_DEG\_S} \\
+  Hybrid SMC & Base assist gate $|\alpha|$ $\alpha_{\gamma}$ & 5 & \si{\degree} & enables centering assist only near upright \\
+  Hybrid SMC & Base assist gate $|\dot{\alpha}|$ $\dot{\alpha}_{\gamma}$ & 150 & \si{\degree\per\second} & enables centering assist only when still \\
 
   \addlinespace
   Full-surface SMC & Pendulum slope $\lambda_{\alpha}$ & 15 & \si{s^{-1}} & part of four-state surface \\
@@ -93,22 +93,22 @@ For completeness, Table~\ref{tab:controller_params_overview} summarizes the nume
   Full-surface SMC & Coupling hard limit $k_{\max}$ & 1.20 & -- & prevents ill-conditioning \\
   Full-surface SMC & Denominator margin $\mathrm{den}_{\min}$ & 0.60 & -- & enforces $B\cos\alpha-k\ge\mathrm{den}_{\min}$ \\
   Full-surface SMC & Coupling ramp duration & 200 & ms & ramp-in after engage \\
-  Full-surface SMC & Internal $\dot{\alpha}$ clamp & 200 & \si{\degree\per\second} & \texttt{SMC4\_ALPHA\_DOT\_CTRL\_CLAMP\_DEG\_S} \\
-  Full-surface SMC & Error clamp $|\theta_{\mathrm{err}}|$ & 78 & \si{\degree} & \texttt{SMC\_FULL\_THETA\_ERR\_CLAMP\_DEG} \\
-  Full-surface SMC & Error clamp $|\dot{\theta}_{\mathrm{err}}|$ & 200 & \si{\degree\per\second} & \texttt{SMC\_FULL\_THETADOT\_ERR\_CLAMP\_DEG\_S} \\
-  Full-surface SMC & Base term clamp & 300 & \si{\degree\per\second} & \texttt{SMC\_FULL\_THETA\_TERM\_CLAMP\_DEG\_S} \\
-  Full-surface SMC & Extra accel cap & 12000 & \si{\step\per\second\squared} & \texttt{SMC4\_MAX\_ACC\_STEPS} \\
-  Full-surface SMC & Extra speed cap & 2000 & \si{\step\per\second} & \texttt{SMC4\_MAX\_SPEED\_HZ} \\
-  Full-surface SMC & Base assist gate $|\dot{\alpha}|$ & 250 & \si{\degree\per\second} & \texttt{SMC4\_BASE\_GATE\_ALPHADOT\_WINDOW\_DEG\_S} \\
+  Full-surface SMC & Internal $\dot{\alpha}$ clamp $\dot{\alpha}_{\mathrm{ctrl},\max}$ & 200 & \si{\degree\per\second} & limits spikes in $\lambda_{\alpha}\dot{\alpha}$ term \\
+  Full-surface SMC & Error clamp $|\theta_{\mathrm{err}}|$ $\theta_{\mathrm{err},\max}$ & 78 & \si{\degree} & explicit base error clamping \\
+  Full-surface SMC & Error clamp $|\dot{\theta}_{\mathrm{err}}|$ $\dot{\theta}_{\mathrm{err},\max}$ & 200 & \si{\degree\per\second} & explicit base error clamping \\
+  Full-surface SMC & Base term clamp $\theta_{\mathrm{term},\max}$ & 300 & \si{\degree\per\second} & clamps combined base term \\
+  Full-surface SMC & Extra accel cap $u_{\max,\mathrm{SMC4}}$ & 12000 & \si{\step\per\second\squared} & tighter shaping than global cap \\
+  Full-surface SMC & Extra speed cap $\dot{\theta}_{\max,\mathrm{SMC4}}$ & 2000 & \si{\step\per\second} & tighter shaping than global cap \\
+  Full-surface SMC & Base assist gate $|\dot{\alpha}|$ $\dot{\alpha}_{\gamma,\mathrm{SMC4}}$ & 250 & \si{\degree\per\second} & enables assist when still \\
 
   \addlinespace
-  Reference tracking & Target limit $|\theta_{\mathrm{target}}|$ & 35 & \si{\degree} & \texttt{THETA\_TARGET\_LIMIT\_DEG} \\
+  Reference tracking & Target limit $|\theta_{\mathrm{target}}|$ $\theta_{\mathrm{target,max}}$ & 35 & \si{\degree} & bounds user-specified targets \\
   Reference tracking & Max reference speed & 12 & \si{\degree\per\second} & trapezoidal profile limit \\
   Reference tracking & Max reference acceleration & 60 & \si{\degree\per\second\squared} & trapezoidal profile limit \\
-  Reference tracking & Stability gate $|\alpha|$ & 5 & \si{\degree} & \texttt{MOVE\_ALPHA\_WINDOW\_DEG} \\
-  Reference tracking & Stability gate $|\dot{\alpha}|$ & 80 & \si{\degree\per\second} & \texttt{MOVE\_ALPHADOT\_WINDOW\_DEG\_S} \\
-  Reference tracking & Engage grace & 200 & ms & \texttt{MOVE\_ENGAGE\_GRACE\_MS} before gating \\
-  Reference tracking & Pause/resume debounce & 10 & ticks & \texttt{MOVE\_STABLE\_TICKS\_REQ} and \texttt{MOVE\_UNSTABLE\_TICKS\_REQ} \\
+  Reference tracking & Stability gate $|\alpha|$ $\alpha_{\mathrm{move,win}}$ & 5 & \si{\degree} & required to keep moving profile active \\
+  Reference tracking & Stability gate $|\dot{\alpha}|$ $\dot{\alpha}_{\mathrm{move,win}}$ & 80 & \si{\degree\per\second} & required to keep moving profile active \\
+  Reference tracking & Engage grace $T_g$ & 200 & ms & before enabling pause/resume gating \\
+  Reference tracking & Pause/resume debounce $N_{\mathrm{stable}}=N_{\mathrm{unstable}}$ & 10 & ticks & consecutive ticks required \\
 \end{longtable}
 \endgroup
 
@@ -133,6 +133,3 @@ All metrics are defined once here and reused in tables:
   \item \textbf{Effort}: RMS and max of the commanded base acceleration $u$ (\si{\step\per\second\squared}).
   \item \textbf{Saturation/clamp percentages}: fraction of samples where acceleration saturation is active and fraction where the base is near the mechanical limit (clamped flag).
 \end{itemize}
-
-\paragraph{Spectral plots.}
-Because CSV logging is approximately \SI{50}{Hz}, any spectrum is limited to low-frequency content ($\leq\SI{25}{Hz}$). These plots are included only as low-frequency indicators and are \emph{not} used to claim high-frequency SMC chattering characteristics.

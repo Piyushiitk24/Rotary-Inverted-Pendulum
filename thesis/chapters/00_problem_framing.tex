@@ -2,11 +2,11 @@
 \label{ch:framing}
 
 \section{Problem}
-This project studies upright-only stabilization of a rotary (Furuta) inverted pendulum under real hardware constraints (stepper actuation, sensor noise, limits, and real-time timing).
+This project studies upright-only stabilization of a rotary (Furuta) inverted pendulum under real hardware constraints (stepper actuation, sensor noise, limits, and real-time timing) \cite{Furuta1991,Hamza2019,Ju2025}.
 
 \section{Key contributions (summary)}
 \begin{itemize}
-  \item \textbf{Acceleration-input control matched to stepper actuation.} Most Furuta pendulum treatments model motor torque as the input; here we derive and implement an acceleration-input formulation $u=\ddot{\theta}$ to match stepper velocity-mode actuation (acceleration integrated to a commanded step rate).
+  \item \textbf{Acceleration-input control matched to stepper actuation.} Most Furuta pendulum treatments model motor torque as the input \cite{Cazzolato2011,Hamza2019}; here we derive and implement an acceleration-input formulation $u=\ddot{\theta}$ to match stepper velocity-mode actuation (acceleration integrated to a commanded step rate).
   \item \textbf{First-principles modelling} of the custom rig (geometry, inertia, identified constants), with the full derivation included in the main body (Chapter~\ref{ch:modelling}).
   \item \textbf{Three upright controllers} implemented and experimentally compared:
     \begin{itemize}

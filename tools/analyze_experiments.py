@@ -25,6 +25,7 @@ from balance_analysis import (
 )
 from balance_analysis.types import Alignment, Events, Trial
 from balance_analysis.plots import (
+    auto_symmetric_ylim,
     plot_effort_hist,
     plot_lowfreq_spectrum,
     plot_nudge_tracking,
@@ -264,6 +265,11 @@ def main() -> int:
     ap.add_argument("--out", help="Output directory. Default: reports/thesis/<timestamp>/")
     ap.add_argument("--gap-ms", type=int, default=500, help="CSV timestamp gap (ms) used only in fallback segmentation.")
     ap.add_argument("--no-spectrum", action="store_true", help="Disable low-frequency spectrum plots.")
+    ap.add_argument(
+        "--auto-angle-ylims",
+        action="store_true",
+        help="Auto-scale α/θ y-limits for representative time-series and nudge plots (keeps physical limit markers).",
+    )
     args = ap.parse_args()
 
     session_dirs, manifest_data, manifest_meta = _collect_sessions(args)
@@ -521,91 +527,158 @@ def main() -> int:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
+        reps_by_exp: dict[str, list[tuple[str, pd.Series]]] = {}
+        exp_order: list[str] = []
         for exp, mode, best in reps:
-            session_dir = Path(best["session"])
-            trial_index = int(best["trial_index"])
-            df = load_balance_csv(session_dir)
-            ev = parse_events(session_dir)
-            matches = match_status_to_csv(ev.status, df)
-            alignment = fit_host_to_device_time(matches)
-            trials = extract_trials(df, ev, alignment=alignment if alignment.reliable else None, gap_ms=args.gap_ms)
-            trial = next((t for t in trials if int(t.trial_index) == trial_index), None)
-            if trial is None or trial.df is None or len(trial.df) == 0:
-                continue
+            reps_by_exp.setdefault(exp, []).append((mode, best))
+            if exp not in exp_order:
+                exp_order.append(exp)
 
-            prefix = f"{exp}_" if exp else ""
-            base_name = f"{prefix}{mode}_rep_{session_dir.name}_trial{trial_index}"
-            title_prefix = f"{exp} / " if exp else ""
-            fig1 = plot_timeseries(
-                trial.df,
-                title=f"{title_prefix}{mode} representative: {session_dir.name} (trial {trial_index})",
-            )
-            fig1.savefig(figs_dir / f"{base_name}_timeseries.png", dpi=160)
-            fig1.savefig(figs_dir / f"{base_name}_timeseries.pdf")
-            plt.close(fig1)
+        for exp in exp_order:
+            group = reps_by_exp.get(exp, [])
+            loaded: list[dict[str, Any]] = []
+            alpha_abs_max = 0.0
+            theta_abs_max = 0.0
 
-            fig2 = plot_phase_portrait(trial.df, title=f"{title_prefix}{mode} α vs α̇")
-            fig2.savefig(figs_dir / f"{base_name}_phase_alpha.png", dpi=160)
-            fig2.savefig(figs_dir / f"{base_name}_phase_alpha.pdf")
-            plt.close(fig2)
+            for mode, best in group:
+                session_dir = Path(best["session"])
+                trial_index = int(best["trial_index"])
+                df = load_balance_csv(session_dir)
+                ev = parse_events(session_dir)
+                matches = match_status_to_csv(ev.status, df)
+                alignment = fit_host_to_device_time(matches)
+                trials = extract_trials(df, ev, alignment=alignment if alignment.reliable else None, gap_ms=args.gap_ms)
+                trial = next((t for t in trials if int(t.trial_index) == trial_index), None)
+                if trial is None or trial.df is None or len(trial.df) == 0:
+                    continue
 
-            fig3 = plot_effort_hist(trial.df, title=f"{title_prefix}{mode} effort histogram")
-            fig3.savefig(figs_dir / f"{base_name}_effort_hist.png", dpi=160)
-            fig3.savefig(figs_dir / f"{base_name}_effort_hist.pdf")
-            plt.close(fig3)
-
-            # Sparse SMC diagnostics from printed [STATUS] fields (safe; no reconstruction).
-            # Only plot when the firmware printed the field (e.g., s=...).
-            pts = [m for m in matches if trial.start_ms <= m.csv_timestamp_ms <= trial.end_ms]
-            if pts:
-                def _plot_sparse_key(key: str, ylabel: str):
-                    xs = []
-                    ys = []
-                    for m in pts:
-                        if key not in m.status.extra:
-                            continue
-                        try:
-                            yv = float(m.status.extra[key])
-                        except Exception:
-                            continue
-                        xs.append((m.csv_timestamp_ms - trial.start_ms) / 1000.0)
-                        ys.append(yv)
-                    if len(xs) >= 3:
-                        fig = plot_sparse_series(
-                            np.asarray(xs, dtype=float),
-                            np.asarray(ys, dtype=float),
-                            title=f"{title_prefix}{mode} sparse {key}(t) from [STATUS]",
-                            ylabel=ylabel,
+                if args.auto_angle_ylims:
+                    try:
+                        alpha_abs_max = max(
+                            alpha_abs_max,
+                            float(np.nanmax(np.abs(trial.df["alpha_deg"].to_numpy(dtype=float)))),
                         )
-                        fig.savefig(figs_dir / f"{base_name}_sparse_{key}.png", dpi=160)
-                        fig.savefig(figs_dir / f"{base_name}_sparse_{key}.pdf")
-                        plt.close(fig)
+                        theta_abs_max = max(
+                            theta_abs_max,
+                            float(np.nanmax(np.abs(trial.df["theta_deg"].to_numpy(dtype=float)))),
+                        )
+                    except Exception:
+                        pass
 
-                _plot_sparse_key("s", "s (deg/s)")
-                _plot_sparse_key("den", "den (a.u.)")
-                _plot_sparse_key("kEff", "kEff")
-                _plot_sparse_key("kRamp", "kRamp")
+                loaded.append(
+                    {
+                        "mode": mode,
+                        "session_dir": session_dir,
+                        "trial_index": trial_index,
+                        "trial": trial,
+                        "matches": matches,
+                    }
+                )
 
-            if not args.no_spectrum:
-                try:
-                    fig4 = plot_lowfreq_spectrum(trial.df, title=f"{title_prefix}{mode} α spectrum", col="alpha_deg")
-                    fig4.savefig(figs_dir / f"{base_name}_alpha_spectrum.png", dpi=160)
-                    fig4.savefig(figs_dir / f"{base_name}_alpha_spectrum.pdf")
-                    plt.close(fig4)
-                except Exception:
-                    pass
+            ts_kwargs: dict[str, Any] = {}
+            if args.auto_angle_ylims and loaded:
+                ylim_pend_deg = auto_symmetric_ylim(np.asarray([alpha_abs_max], dtype=float))
+                ylim_motor_deg = auto_symmetric_ylim(np.asarray([theta_abs_max], dtype=float))
+                ts_kwargs = {"ylim_pend_deg": ylim_pend_deg, "ylim_motor_deg": ylim_motor_deg}
+                tag = exp if exp else "representatives"
+                print(f"[INFO] Auto angle y-lims ({tag}): alpha ±{ylim_pend_deg:.0f} deg, theta ±{ylim_motor_deg:.0f} deg")
 
-            # Nudge plot (if step metrics exist for this trial)
-            if nudge_rows:
-                steps = [r for r in nudge_rows if r["session"] == str(session_dir) and int(r["trial_index"]) == trial_index]
-                # Rebuild step list for plotting (command schedule)
-                if steps:
-                    # Use t_cmd_s / target_deg from the step table (already in trial time).
-                    plot_steps = [{"t_cmd_s": float(s["t_cmd_s"]), "target_deg": float(s["target_deg"]), "t_next_cmd_s": float(s.get("t_end_s", trial.df["time_s"].iloc[-1]))} for s in steps]
-                    fig5 = plot_nudge_tracking(trial.df, title=f"{title_prefix}{mode} nudge tracking", steps=plot_steps)
-                    fig5.savefig(figs_dir / f"{base_name}_nudge.png", dpi=160)
-                    fig5.savefig(figs_dir / f"{base_name}_nudge.pdf")
-                    plt.close(fig5)
+            for item in loaded:
+                mode = str(item["mode"])
+                session_dir = Path(item["session_dir"])
+                trial_index = int(item["trial_index"])
+                trial = item["trial"]
+                matches = item["matches"]
+
+                prefix = f"{exp}_" if exp else ""
+                base_name = f"{prefix}{mode}_rep_{session_dir.name}_trial{trial_index}"
+                title_prefix = f"{exp} / " if exp else ""
+
+                fig1 = plot_timeseries(
+                    trial.df,
+                    title=f"{title_prefix}{mode} representative: {session_dir.name} (trial {trial_index})",
+                    **ts_kwargs,
+                )
+                fig1.savefig(figs_dir / f"{base_name}_timeseries.png", dpi=160)
+                fig1.savefig(figs_dir / f"{base_name}_timeseries.pdf")
+                plt.close(fig1)
+
+                fig2 = plot_phase_portrait(trial.df, title=f"{title_prefix}{mode} α vs α̇")
+                fig2.savefig(figs_dir / f"{base_name}_phase_alpha.png", dpi=160)
+                fig2.savefig(figs_dir / f"{base_name}_phase_alpha.pdf")
+                plt.close(fig2)
+
+                fig3 = plot_effort_hist(trial.df, title=f"{title_prefix}{mode} effort histogram")
+                fig3.savefig(figs_dir / f"{base_name}_effort_hist.png", dpi=160)
+                fig3.savefig(figs_dir / f"{base_name}_effort_hist.pdf")
+                plt.close(fig3)
+
+                # Sparse SMC diagnostics from printed [STATUS] fields (safe; no reconstruction).
+                # Only plot when the firmware printed the field (e.g., s=...).
+                pts = [m for m in matches if trial.start_ms <= m.csv_timestamp_ms <= trial.end_ms]
+                if pts:
+
+                    def _plot_sparse_key(key: str, ylabel: str):
+                        xs = []
+                        ys = []
+                        for m in pts:
+                            if key not in m.status.extra:
+                                continue
+                            try:
+                                yv = float(m.status.extra[key])
+                            except Exception:
+                                continue
+                            xs.append((m.csv_timestamp_ms - trial.start_ms) / 1000.0)
+                            ys.append(yv)
+                        if len(xs) >= 3:
+                            fig = plot_sparse_series(
+                                np.asarray(xs, dtype=float),
+                                np.asarray(ys, dtype=float),
+                                title=f"{title_prefix}{mode} sparse {key}(t) from [STATUS]",
+                                ylabel=ylabel,
+                            )
+                            fig.savefig(figs_dir / f"{base_name}_sparse_{key}.png", dpi=160)
+                            fig.savefig(figs_dir / f"{base_name}_sparse_{key}.pdf")
+                            plt.close(fig)
+
+                    _plot_sparse_key("s", "s (deg/s)")
+                    _plot_sparse_key("den", "den (a.u.)")
+                    _plot_sparse_key("kEff", "kEff")
+                    _plot_sparse_key("kRamp", "kRamp")
+
+                if not args.no_spectrum:
+                    try:
+                        fig4 = plot_lowfreq_spectrum(trial.df, title=f"{title_prefix}{mode} α spectrum", col="alpha_deg")
+                        fig4.savefig(figs_dir / f"{base_name}_alpha_spectrum.png", dpi=160)
+                        fig4.savefig(figs_dir / f"{base_name}_alpha_spectrum.pdf")
+                        plt.close(fig4)
+                    except Exception:
+                        pass
+
+                # Nudge plot (if step metrics exist for this trial)
+                if nudge_rows:
+                    steps = [r for r in nudge_rows if r["session"] == str(session_dir) and int(r["trial_index"]) == trial_index]
+                    # Rebuild step list for plotting (command schedule)
+                    if steps:
+                        # Use t_cmd_s / target_deg from the step table (already in trial time).
+                        plot_steps = [
+                            {
+                                "t_cmd_s": float(s["t_cmd_s"]),
+                                "target_deg": float(s["target_deg"]),
+                                "t_next_cmd_s": float(s.get("t_end_s", trial.df["time_s"].iloc[-1])),
+                            }
+                            for s in steps
+                        ]
+                        fig5 = plot_nudge_tracking(
+                            trial.df,
+                            title=f"{title_prefix}{mode} nudge tracking",
+                            steps=plot_steps,
+                            include_effort=True,
+                            **ts_kwargs,
+                        )
+                        fig5.savefig(figs_dir / f"{base_name}_nudge.png", dpi=160)
+                        fig5.savefig(figs_dir / f"{base_name}_nudge.pdf")
+                        plt.close(fig5)
 
     # README
     readme = out_dir / "README.md"

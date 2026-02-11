@@ -18,6 +18,7 @@ The constants $A$ and $B$ are identified for this rig (Chapter~\ref{ch:modelling
 A=100.8\ \text{rad/s}^2,\qquad B=1.952.
 \]
 This model explicitly captures the gravity term $A\sin\alpha$ and the centrifugal coupling term $\sin\alpha\cos\alpha\,\dot{\theta}^2$.
+Sliding-mode variants (including higher-order formulations) have been widely applied to rotary inverted pendulum stabilization \cite{Yigit2017,Nguyen2020,Pham2024}.
 
 \section{Sliding surface and desired motion on the surface}
 Define the (pendulum-only) sliding surface
@@ -51,7 +52,7 @@ so that \eqref{eq:smc_sdot} becomes $\dot{s}=f-B\cos\alpha\,\ddot{\theta}$. The 
 \end{equation}
 
 \section{Reaching law, boundary layer, and complete control law}
-An ideal reaching law uses a discontinuous sign term, $\dot{s}=-K\,\mathrm{sgn}(s)$, but on real hardware this can induce chattering near $s=0$. Therefore, the implemented controller uses a boundary layer via a saturation function \cite{utkin1992,slotine1991}:
+An ideal reaching law uses a discontinuous sign term, $\dot{s}=-K\,\mathrm{sgn}(s)$, but on real hardware this can induce chattering near $s=0$. Therefore, the implemented controller uses a boundary layer via a saturation function \cite{utkin1992,slotine1991,Young1999}:
 \begin{equation}
 \dot{s} = -K\,\mathrm{sat}\!\left(\frac{s}{\phi}\right),\qquad K>0,\ \phi>0,
 \label{eq:smc_reaching_law}
@@ -74,41 +75,29 @@ Substituting \eqref{eq:smc_reaching_law} into $\dot{s}=f-B\cos\alpha\,\ddot{\the
 \end{equation}
 Outside the boundary layer ($|s|>\phi$), $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$ and reaching is finite-time. Inside ($|s|\le\phi$), $\dot{s}=-(K/\phi)s$ gives exponential decay of $s$.
 
-\section{Lyapunov reaching argument}
-Let the Lyapunov candidate be
+\section{Lyapunov stability analysis (reaching)}
+The goal of the reaching law is to drive the sliding variable $s$ in \eqref{eq:smc_surface} to zero and keep it near the sliding surface. A standard Lyapunov choice for this purpose is
 \[
 V(s)=\frac{1}{2}s^2,\qquad V\ge 0.
 \]
-Using the reaching law \eqref{eq:smc_reaching_law},
+Using the boundary-layer reaching law \eqref{eq:smc_reaching_law} \cite{utkin1992,slotine1991,Young1999},
 \[
-\dot{V}=s\dot{s}=-K\,s\,\mathrm{sat}\!\left(\frac{s}{\phi}\right).
+\dot{V}=s\dot{s}=-K\,s\,\mathrm{sat}\!\left(\frac{s}{\phi}\right)\le 0.
 \]
-Because $s\,\mathrm{sat}(s/\phi)\ge 0$ for all $s$, it follows that $\dot{V}\le 0$, with strict negativity for $|s|>\phi$.
-
-\paragraph{Finite-time reaching to the boundary layer ($|s|>\phi$).}
-For $|s|>\phi$, $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$ and therefore $\dot{s}=-K\,\mathrm{sgn}(s)$. If $s_0>\phi$ then $s(t)=s_0-Kt$ and the trajectory reaches $s=\phi$ at $t_r=(s_0-\phi)/K$. If $s_0<-\phi$ then $s(t)=s_0+Kt$ and the trajectory reaches $s=-\phi$ at $t_r=(|s_0|-\phi)/K$. Thus the boundary layer is reached in finite time
-\[
-t_r=\frac{|s_0|-\phi}{K},\qquad |s_0|>\phi.
-\]
-
-\paragraph{Convergence within the boundary layer ($|s|\le\phi$).}
-For $|s|\le\phi$, $\mathrm{sat}(s/\phi)=s/\phi$ and $\dot{s}=-(K/\phi)s$, so
-\[
-s(t)=s(t_r)\exp\!\left(-\frac{K}{\phi}(t-t_r)\right),
-\qquad
-\dot{V}=-(2K/\phi)\,V.
-\]
-
-\paragraph{Pendulum decay on the sliding manifold.}
-On $s=0$, \eqref{eq:smc_surface} gives $\dot{\alpha}=-\lambda\alpha$, hence $\alpha(t)=\alpha(t_0)e^{-\lambda(t-t_0)}$ and $\lambda$ sets the sliding-phase time constant.
+This shows that $V$ never increases, so $s$ is driven toward the sliding surface.
+\begin{itemize}
+  \item If $|s|>\phi$, then $\mathrm{sat}(s/\phi)=\mathrm{sgn}(s)$ and $\dot{V}=-K|s|<0$ (strong pull toward the boundary layer).
+  \item If $|s|\le\phi$, then $\mathrm{sat}(s/\phi)=s/\phi$ and $\dot{V}=-(K/\phi)s^2\le 0$ (smooth convergence with reduced chattering near $s=0$).
+\end{itemize}
+Once the reaching phase brings $s$ close to zero, the motion is close to the sliding manifold $s=0$, where \eqref{eq:smc_surface} gives $\dot{\alpha}=-\lambda\alpha$. Therefore $\alpha$ decays approximately exponentially with time constant $1/\lambda$ in the sliding phase.
 
 \section{Stepper-oriented implementation constraints}
-The law \eqref{eq:smc_control_law} contains $\cos\alpha$ in the denominator. This project is explicitly upright-only (no swing-up), and the implementation enforces:
+The control law \eqref{eq:smc_control_law} is intended for upright stabilization. In practice, two issues matter: $\cos\alpha$ appears in the denominator, and a stepper-driven actuator can only deliver bounded acceleration. The implementation therefore applies simple guards:
 \begin{itemize}
-  \item \textbf{Upright-only validity window}: hard abort if $|\alpha|>\texttt{SMC\_ALPHA\_ABORT\_DEG}=\SI{25}{\degree}$.
-  \item \textbf{Cosine guard (``cosine floor'')}: use $\cos_{\mathrm{safe}}=\mathrm{sgn}(\cos\alpha)\max(|\cos\alpha|,\texttt{SMC\_COS\_MIN})$ with \texttt{SMC\_COS\_MIN}=0.2.
-  \item \textbf{Extreme-rate abort}: hard abort if $|\dot{\alpha}|>\texttt{SMC\_ALPHADOT\_ABORT\_DEG\_S}=\SI{250}{\degree\per\second}$ for \texttt{SMC\_ALPHADOT\_ABORT\_TICKS\_REQ}=3 consecutive control ticks (after \texttt{SMC\_ABORT\_GRACE\_MS}=\SI{200}{ms} post-engage grace, and only when $|\alpha|>\texttt{SMC\_ALPHADOT\_ABORT\_MIN\_ALPHA\_DEG}=\SI{5}{\degree}$).
-  \item \textbf{Acceleration clamp}: the computed $\ddot{\theta}$ is clamped before conversion using \texttt{MAX\_ACC\_STEPS}=\SI{20000}{\step\per\second\squared} and \texttt{STEPS\_PER\_DEG}=4.444 (equivalently, $|\ddot{\theta}|\le \texttt{MAX\_ACC\_STEPS}/\texttt{STEPS\_PER\_DEG}\approx \SI{4500}{\degree\per\second\squared}$ before conversion).
+  \item \textbf{Upright-only window}: abort if $|\alpha|>\alpha_{\max}$ with $\alpha_{\max}=\SI{25}{\degree}$ (the nonlinear upright model is not intended beyond this region).
+  \item \textbf{Cosine floor}: replace $\cos\alpha$ by a protected $\cos_{\mathrm{safe}}=\mathrm{sgn}(\cos\alpha)\max(|\cos\alpha|,\cos_{\min})$ with $\cos_{\min}=0.2$ (prevents numerical blow-up when dividing by $\cos\alpha$).
+  \item \textbf{Rate protection}: abort if $|\dot{\alpha}|>\dot{\alpha}_{\max}$ with $\dot{\alpha}_{\max}=\SI{250}{\degree\per\second}$ (protects against extreme transients and missed-steps).
+  \item \textbf{Acceleration cap}: clamp the base acceleration command to $u_{\max}=\SI{20000}{\step\per\second\squared}$. Using $k_s=\SI{4.444}{\step\per\degree}$, this corresponds to $|\ddot{\theta}|\lesssim u_{\max}/k_s\approx \SI{4500}{\degree\per\second\squared}$ before conversion.
 \end{itemize}
 The nonlinear computations use $\sin(\alpha)$ and $\cos(\alpha)$ with $\alpha$ interpreted in radians; angles are recorded and plotted in degrees for readability (Chapter~\ref{ch:notation}).
 
@@ -128,7 +117,7 @@ u_{\mathrm{cmd}} \;=\; u_{\mathrm{smc}} + \gamma\,u_{\mathrm{base}},
 \]
 where $u_{\mathrm{smc}}$ is \eqref{eq:smc_control_law} and $u_{\mathrm{base}}$ corresponds to \eqref{eq:smc_base_assist} expressed in the same units. This structure preserves nonlinear robustness during recovery while providing a practical centering mechanism when conditions are safe.
 
-In firmware, the centering assist is scaled by \texttt{smcBaseScale} (default $\gamma=1.0$, range $0\ldots 2$) and gated by an upright/still window: it is enabled only after a post-engage grace of \SI{200}{ms} and when $|\alpha|<\texttt{SMC\_BASE\_GATE\_ALPHA\_WINDOW\_DEG}=\SI{5}{\degree}$ and $|\dot{\alpha}|<\texttt{SMC\_BASE\_GATE\_ALPHADOT\_WINDOW\_DEG\_S}=\SI{150}{\degree\per\second}$.
+In implementation, the centering assist is scaled by $\gamma$ (default $\gamma=1.0$, range $0\ldots 2$) and gated by an upright/still window: it is enabled only after a post-engage grace $T_g=\SI{200}{ms}$ and when $|\alpha|<\alpha_{\gamma}=\SI{5}{\degree}$ and $|\dot{\alpha}|<\dot{\alpha}_{\gamma}=\SI{150}{\degree\per\second}$.
 
 \section{Parameters used in experiments}
 For the dataset analyzed in Chapter~\ref{ch:results}, the hybrid SMC used:

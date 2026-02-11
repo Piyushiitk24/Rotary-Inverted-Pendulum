@@ -60,83 +60,58 @@ A schematic of the coordinates and parameters is shown in Fig.\ \ref{fig:furuta_
 
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}[t]{\linewidth}
-    \centering
-    \begin{tikzpicture}[x=1cm, y=1cm, line cap=round, line join=round]
-      \def\thetad{35}
-      \def\Rarm{6.0}
-      \coordinate (O) at (0,0);
-      \coordinate (P) at ({\Rarm*cos(\thetad)},{\Rarm*sin(\thetad)});
+  \begin{tikzpicture}[
+    x={(0.78cm,-0.45cm)},
+    y={(1.00cm,0.00cm)},
+    z={(0.00cm,1.00cm)},
+    line cap=round,
+    line join=round,
+  ]
+    \pgfmathsetmacro{\thetad}{35}
+    \pgfmathsetmacro{\alphad}{25}
+    \def\Lr{4.2}
+    \def\lp{3.0}
+    \def\Rtheta{1.2}
+    \def\Ralpha{1.1}
 
-      % Inertial axes (top view) and yaw angle.
-      \draw[-{Latex[length=3mm]}] (O) -- (7.2,0) node[below] {$\mathbf i$};
-      \draw[-{Latex[length=3mm]}] (O) -- (0,4.6) node[left] {$\mathbf j$};
-      \draw[-{Latex[length=3mm]}] (1.2,0) arc (0:\thetad:1.2) node[pos=0.55, right] {$\theta$};
+    \coordinate (O) at (0,0,0);
+    \coordinate (P) at ({\Lr*cos(\thetad)},{\Lr*sin(\thetad)},0);
+    \coordinate (B) at ({\Lr*cos(\thetad) - \lp*sin(\alphad)*sin(\thetad)},
+                        {\Lr*sin(\thetad) + \lp*sin(\alphad)*cos(\thetad)},
+                        {\lp*cos(\alphad)});
 
-      % Out-of-plane axis.
-      \fill (O) circle (0.06);
-      \node[above left] at (O) {$\mathbf k$ (out of plane)};
+    % Axes.
+    \draw[-{Latex[length=3mm]}] (O) -- (3.2,0,0) node[below left] {$x$};
+    \draw[-{Latex[length=3mm]}] (O) -- (0,3.4,0) node[below] {$y$};
+    \draw[-{Latex[length=3mm]}] (O) -- (0,0,3.4) node[left] {$z$};
 
-      % Arm and pivot location.
-      \draw[line width=1.1pt] (O) -- (P);
-      \node[above] at ($(O)!0.55!(P)$) {$L_r$};
-      \fill (P) circle (0.06);
+    % Base yaw angle theta (in xy plane).
+    \draw[-{Latex[length=3mm]}]
+      plot[domain=0:\thetad, samples=30]
+        ({\Rtheta*cos(\x)},{\Rtheta*sin(\x)},0)
+      node[pos=0.65, right] {$\theta$};
 
-      % Local arm basis at the pivot.
-      \draw[-{Latex[length=3mm]}] (P) -- ($(P)+({1.4*cos(\thetad)},{1.4*sin(\thetad)})$) node[above] {$\mathbf e_r$};
-      \draw[-{Latex[length=3mm]}] (P) -- ($(P)+({1.4*cos(\thetad+90)},{1.4*sin(\thetad+90)})$) node[left] {$\mathbf e_t$};
+    % Arm.
+    \draw[line width=1.2pt] (O) -- (P) node[pos=0.55, above] {$L_r$};
+    \fill (O) circle (0.06);
+    \fill (P) circle (0.06);
 
-      % Bearing-supported pivot shaft (schematic).
-      \coordinate (B1) at ($(P)+({-0.9*cos(\thetad)},{-0.9*sin(\thetad)})$);
-      \coordinate (B2) at ($(P)+({-0.5*cos(\thetad)},{-0.5*sin(\thetad)})$);
-      \coordinate (B3) at ($(P)+({-0.1*cos(\thetad)},{-0.1*sin(\thetad)})$);
-      \foreach \B in {B1,B2,B3} {
-        \draw[thin] (\B) circle (0.18);
-        \draw[thin] (\B) circle (0.12);
-      }
-      \node[align=left, anchor=west] (btxt) at ($(P)+({-1.9*cos(\thetad+90)},{-1.9*sin(\thetad+90)})$) {3$\times$ 688RS bearings\\(pivot shaft)};
-      \draw[-{Latex[length=3mm]}] (btxt.east) -- (B2);
+    % Upright reference at the pendulum pivot.
+    \draw[dashed] (P) -- ++(0,0,3.2);
 
-      % Actuation torque about the base axis (schematic).
-      \draw[-{Latex[length=3mm]}] ($(O)+(1.6,0)$) arc (0:-300:1.6);
-      \node at (2.0,-1.1) {$\tau$};
-    \end{tikzpicture}
-    \caption{Top view (arm plane).}
-  \end{subfigure}
+    % Pendulum.
+    \draw[line width=1.2pt] (P) -- (B) node[pos=0.55, right] {$l_p$};
+    \fill (B) circle (0.14);
+    \node[above] at (B) {$m_p$};
 
-  \vspace{0.5em}
-
-  \begin{subfigure}[t]{\linewidth}
-    \centering
-    \begin{tikzpicture}[x=1cm, y=1cm, line cap=round, line join=round]
-      \def\alphad{25}
-      \def\Lrod{6.0}
-      \def\Lcom{4.4}
-      \coordinate (O) at (0,0);
-      \coordinate (E) at ({\Lrod*sin(\alphad)},{\Lrod*cos(\alphad)});
-      \coordinate (C) at ({\Lcom*sin(\alphad)},{\Lcom*cos(\alphad)});
-
-      % Axes in the swing plane.
-      \draw[-{Latex[length=3mm]}] (O) -- (7.2,0) node[below] {$\mathbf e_t$};
-      \draw[-{Latex[length=3mm]}] (O) -- (0,6.6) node[left] {$\mathbf k$};
-      \node[anchor=west] at (0.2,0.3) {pivot axis $\mathbf e_r$ (out of page)};
-
-      % Upright reference.
-      \draw[dashed] (O) -- (0,6.0);
-
-      % L-shaped pendulum (swinging segment shown in this plane).
-      \draw[line width=1.1pt] (O) -- (E);
-      \fill (C) circle (0.08);
-      \node[right] at (C) {$m_p$ (COM)};
-      \node[pos=0.70, above left] at ($(O)!0.70!(E)$) {$L_v$};
-      \node[pos=0.55, above right] at ($(O)!0.55!(C)$) {$l_p$};
-
-      % Angle and gravity.
-      \draw[-{Latex[length=3mm]}] (0,1.6) arc (90:90-\alphad:1.6) node[pos=0.60, right] {$\alpha$};
-      \draw[-{Latex[length=3mm]}] ($(C)+(0.9,0)$) -- ++(0,-2.0) node[below] {$g$};
-    \end{tikzpicture}
-    \caption{Side view (pendulum swing plane).}
-  \end{subfigure}
+    % Pendulum angle alpha (in the (e_t, z) plane).
+    \draw[-{Latex[length=3mm]}]
+      plot[domain=0:\alphad, samples=25]
+        ({\Lr*cos(\thetad) - \Ralpha*sin(\x)*sin(\thetad)},
+         {\Lr*sin(\thetad) + \Ralpha*sin(\x)*cos(\thetad)},
+         {\Ralpha*cos(\x)})
+      node[pos=0.65, right] {$\alpha$};
+  \end{tikzpicture}
   \caption{Rotary (Furuta) inverted pendulum schematic and generalized coordinates used in this chapter.}
   \label{fig:furuta_schematic}
 \end{figure}
@@ -145,6 +120,8 @@ A schematic of the coordinates and parameters is shown in Fig.\ \ref{fig:furuta_
 ---
 
 ## 2. Parameter evaluation
+
+Formal parameter identification methods for Furuta pendulum rigs (including fitting inertia/friction terms from data) are well documented; see, e.g., \cite{GarciaAlarcon2012}.
 
 Given:
 
@@ -411,7 +388,7 @@ $$ (\hat J_0+\hat J_2\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + \hat 
 
 $$K\cos\alpha\,\ddot\theta + \hat J_2\ddot\alpha - \frac{1}{2}\hat J_2\sin(2\alpha)\dot\theta^2 - G\sin\alpha = 0$$
 
-The derived equations are structurally consistent with classical Furuta pendulum models, with the distinction that actuator dynamics are treated at the acceleration level rather than torque level.
+The derived equations are structurally consistent with classical Furuta pendulum models \cite{Cazzolato2011}, with the distinction that actuator dynamics are treated at the acceleration level rather than torque level.
 
 ---
 

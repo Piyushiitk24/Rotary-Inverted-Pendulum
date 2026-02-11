@@ -229,7 +229,7 @@ def export_tables(report_dir: Path, thesis_tables_dir: Path) -> list[str]:
     )
     trials_tex = df_to_tabular(
         trials_tbl.round(3),
-        caption="Trials overview (thesis-facing identifiers H/N/T).",
+        caption="Trials overview (report-facing identifiers H/N/T).",
         label="tab:trials_overview",
         resize=True,
     )
@@ -314,7 +314,7 @@ def export_tables(report_dir: Path, thesis_tables_dir: Path) -> list[str]:
 
 
 def export_dataset_table(manifest_path: Path, thesis_tables_dir: Path) -> None:
-    """Write a short dataset table mapping thesis-facing IDs to timestamp-coded run IDs."""
+    """Write a short dataset table mapping report-facing IDs to timestamp-coded run IDs."""
     try:
         import json
 
@@ -336,7 +336,7 @@ def export_dataset_table(manifest_path: Path, thesis_tables_dir: Path) -> None:
         elif "_LIN_" in label:
             mode = "LIN"
 
-        # Thesis-facing IDs.
+        # Report-facing IDs.
         if experiment == "hold":
             trial = {"LIN": "H1", "SMC": "H2", "SMC4": "H3"}.get(mode, "H?")
         elif experiment == "nudge":

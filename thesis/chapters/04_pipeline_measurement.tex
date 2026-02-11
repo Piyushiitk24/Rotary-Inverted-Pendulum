@@ -4,34 +4,34 @@
 \section{Control loop timing}
 All controllers are executed in a fixed-period real-time loop on the Arduino Mega 2560. A \emph{control tick} refers to one execution of this loop. In this project:
 \begin{itemize}
-  \item the nominal tick period is set in firmware as \texttt{LOOP\_US}=\SI{5000}{\micro s} (i.e., \SI{200}{Hz}, $T=\SI{5}{ms}$),
-  \item each tick measures its actual duration using \texttt{micros()} and uses $dt=\texttt{dtUs}\cdot10^{-6}$ for all discrete-time updates,
+  \item the nominal tick period is $T_s=\SI{5}{ms}$ (i.e., \SI{200}{Hz}),
+  \item each tick measures its actual duration using a microsecond-resolution timer and uses the measured $dt$ for all discrete-time updates,
   \item the CSV time-series stream is logged at \SI{50}{Hz} (decimated from the \SI{200}{Hz} control tick).
 \end{itemize}
 
 Because timing jitter can affect derivative estimation and controller performance, the firmware monitors:
 \begin{itemize}
   \item minimum and maximum observed tick duration ($dt_{\min}$, $dt_{\max}$),
-  \item the count of tick overruns beyond the nominal period (defined as $dt > \SI{6}{ms}$, i.e., \texttt{dtUs} $>$ \texttt{LOOP\_US}+1000).
+  \item the count of tick overruns beyond the nominal period, defined as $dt > T_{\mathrm{ov}}$ with $T_{\mathrm{ov}}=\SI{6}{ms}$.
 \end{itemize}
 These diagnostics are printed at \SI{1}{Hz} and are used as a sanity check when adding computation (e.g., trigonometry in nonlinear control modes).
 
 \section{Derivative estimation}
-The control law requires $\dot{\alpha}$ and $\dot{\theta}$. Direct finite differences are too noisy at \SI{200}{Hz}, so the firmware uses a first-order filtered differentiator discretized by the bilinear (Tustin) transform:
+The control law requires $\dot{\alpha}$ and $\dot{\theta}$. Direct finite differences are too noisy at \SI{200}{Hz}, so the firmware uses a first-order filtered differentiator discretized by the bilinear (Tustin) transform \cite{Astrom2008,ST_RIP_2019}:
 \[
 H(s) = \frac{s}{1+s/\omega_c}.
 \]
-Applying the bilinear mapping $s \approx \frac{2}{T}\frac{1-z^{-1}}{1+z^{-1}}$ yields the discrete-time recursion
+Applying the bilinear mapping $s \approx \frac{2}{T_s}\frac{1-z^{-1}}{1+z^{-1}}$ yields the discrete-time recursion
 \[
 y[n] = b_0\,(x[n]-x[n-1]) - a_1\,y[n-1],
 \]
-where $x[n]$ is the measured angle (in degrees), $y[n]$ is the filtered derivative (deg/s), and with $T$ the nominal tick period:
+where $x[n]$ is the measured angle (in degrees), $y[n]$ is the filtered derivative (deg/s), and with $T_s$ the nominal tick period:
 \[
-b_0 = \frac{2\omega_c}{2+\omega_c T},\qquad
-a_1 = \frac{\omega_c T - 2}{2+\omega_c T}.
+b_0 = \frac{2\omega_c}{2+\omega_c T_s},\qquad
+a_1 = \frac{\omega_c T_s - 2}{2+\omega_c T_s}.
 \]
 
-The cutoff $\omega_c$ (rad/s) is tuned experimentally, and the coefficients $(b_0,a_1)$ are computed using the nominal tick period $T$.
+The cutoff $\omega_c$ (rad/s) is tuned experimentally, and the coefficients $(b_0,a_1)$ are computed using the nominal tick period $T_s$.
 
 \paragraph{Wrap handling and clamping.}
 For the pendulum angle $\alpha$, the pre-difference $(x[n]-x[n-1])$ is wrapped to $\pm 180^\circ$ to avoid a spurious $\approx 360^\circ$ jump near the encoder wrap. Both derivatives are clamped to conservative maximum magnitudes to prevent extreme one-sample spikes from dominating the controller.
