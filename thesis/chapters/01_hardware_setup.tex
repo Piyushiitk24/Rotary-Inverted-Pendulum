@@ -10,7 +10,21 @@ Figure~\ref{fig:rig_photo} shows the custom experimental rig used in this work.
 
 This report is concerned with stabilization about the upright equilibrium and with servo-like base positioning while maintaining upright balance.
 
+\section{Hardware build-up from scratch}
+\label{sec:hardware_build}
+To make the platform reproducible for students, the assembly was performed in the following dependency order:
+\begin{enumerate}
+  \item \textbf{Mechanical base and motor mount:} mount the stepper rigidly and verify shaft runout is acceptable before adding sensors.
+  \item \textbf{Rotary arm and pendulum pivot:} install the rotary arm, then align the L-shaped pendulum shaft through the three 688RS bearings.
+  \item \textbf{Base closed-loop retrofit:} convert the motor axis into a measured axis by adding the AS5600 housing and magnet assembly.
+  \item \textbf{Driver and power wiring:} connect STEP/DIR/EN, \SI{24}{V} motor power, and common ground between motor supply, driver, and controller.
+  \item \textbf{I\textsuperscript{2}C network and noise hardening:} connect both AS5600 sensors through PCA9548A channels and apply EMI-aware routing/shielding.
+  \item \textbf{Calibration references:} define $\theta=0$ and $\alpha=0$ with multi-sample averaging before any closed-loop experiment.
+\end{enumerate}
+Sections~\ref{sec:mechanical_rig}--\ref{sec:sensing} detail each stage and the associated design constraints.
+
 \section{Mechanical rig}
+\label{sec:mechanical_rig}
 The mechanical assembly consists of:
 \begin{itemize}
   \item a rotary arm (yaw axis) driven by a stepper motor,
@@ -19,11 +33,38 @@ The mechanical assembly consists of:
 \end{itemize}
 
 \subsection*{Actuation axis and coupling}
-The arm is mounted coaxially to the stepper shaft (direct drive). The actuator is operated in microstepping mode such that one full arm revolution corresponds to approximately $1600$ commanded steps, i.e.,
+The arm is mounted coaxially to the stepper shaft (direct drive). The actuator is operated with a conversion of approximately $1600$ commanded steps per arm revolution:
 \[
 k_s \approx \frac{1600}{360} \approx \SI{4.444}{\step\per\degree},
 \]
 which is the conversion used throughout the firmware and analysis.
+
+\subsection*{Converting the stepper into a closed-loop unit}
+In open-loop operation, the commanded step count can diverge from the physical base angle due to missed steps, impulsive disturbances, or temporary stalls. To eliminate this ambiguity, the motor was retrofitted as a \emph{closed-loop single unit}: a 3D-printed AS5600 housing was fixed at the motor base, and the magnet mount was aligned coaxially with the rotating shaft so the base angle can be measured directly.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{0.32\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/sensor_housing_front.png}
+    \caption{Front view of housing with sensor installed.}
+    \label{fig:sensor_housing_front}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.32\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/sensor_housing_back.png}
+    \caption{Back view showing mounting geometry.}
+    \label{fig:sensor_housing_back}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.32\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/sensor_housing_fixed_to_motor.png}
+    \caption{Housing fixed to motor base (closed-loop unit).}
+    \label{fig:sensor_housing_fixed_to_motor}
+  \end{subfigure}
+  \caption{3D-printed AS5600 housing used to convert the stepper into a closed-loop base actuator. For replication, the critical points are coaxial magnet alignment, rigid mounting, and consistent magnet-to-chip spacing. Small misalignment at this stage produces unstable angle data later in control experiments.}
+  \label{fig:sensor_housing_closed_loop}
+\end{figure}
 
 \subsection*{Pendulum pivot (bearing-supported)}
 The pendulum rotates about a bearing-supported pivot shaft that is aligned with the rotary arm. The shaft passes through three 688RS bearings, which reduce friction and minimize backlash in the pendulum degree of freedom (important because dissipative pivot dynamics couple directly into the required base acceleration for upright stabilization). The pivot assembly also carries the pendulum angle encoder magnet/fixture so the AS5600 measures $\alpha$ directly about this axis.
@@ -36,6 +77,7 @@ The main geometric and inertial parameters are derived and numerically identifie
 \end{itemize}
 
 \section{Electronics and actuation}
+\label{sec:electronics_actuation}
 \subsection*{Controller and driver}
 The base actuator is a stepper motor controlled by:
 \begin{itemize}
@@ -45,6 +87,24 @@ The base actuator is a stepper motor controlled by:
 \end{itemize}
 Motor power, driver, and microcontroller share a common ground. The driver supply is decoupled using a bulk electrolytic capacitor and a small ceramic capacitor close to the driver.
 
+\subsection*{Driver and actuation settings}
+\begin{table}[htbp]
+  \centering
+  \small
+  \setlength{\tabcolsep}{6pt}
+  \caption{Driver interface and actuation settings used in firmware.}
+  \label{tab:driver_actuation_settings}
+  \begin{tabularx}{\linewidth}{@{}l l X@{}}
+    \toprule
+    Setting & Value & Notes \\
+    \midrule
+    STEP/DIR/EN pins & D11 / D6 / D7 & Digital control outputs to the TMC2209 driver. \\
+    I\textsuperscript{2}C bus clock & \SI{400}{kHz} & Multiplexer and AS5600 sensors share this bus speed. \\
+    Base conversion & $1600$ steps/rev ($\SI{4.444}{\step\per\degree}$) & Conversion used in firmware for actuation and analysis. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
 \subsection*{Acceleration-input actuation model}
 The driver is commanded in continuous-velocity mode (step rate in \si{\step\per\second}). To match this actuation pipeline, all controllers in this project are implemented in an \emph{acceleration-input form}: the controller computes a commanded base acceleration (in \si{\step\per\second\squared}), which is integrated in firmware to produce the commanded velocity:
 \[
@@ -53,16 +113,17 @@ u \equiv \ddot{\theta} \ \longrightarrow\  \dot{\theta}_{\mathrm{cmd}} \ \longri
 This is a central design choice: it makes the theoretical input used in modelling and control ($u=\ddot{\theta}$) coincide with the practical signal sent to the actuator (after integration to a velocity command).
 
 \section{Sensing}
+\label{sec:sensing}
 \subsection*{Angle sensing}
 Two AS5600 magnetic encoders measure absolute angles. Both devices share the same fixed I\textsuperscript{2}C address, so they are read through an I\textsuperscript{2}C multiplexer (PCA9548A, default address 0x70) at \SI{400}{kHz}:
 \begin{itemize}
   \item Pendulum encoder (at the pendulum pivot axis)
-  \item Base encoder (at the motor/base axis)
+  \item Base encoder (at the motor/base axis, see Figure~\ref{fig:sensor_housing_closed_loop})
 \end{itemize}
 Each AS5600 provides a \SI{12}{bit} absolute angle measurement over $[0,360^\circ)$ (nominal resolution $\approx \SI{0.0879}{\degree}$ per count).
 
-\subsection*{Mechanical encoder mounting (CAD / 3D-printed housings)}
-A practical contribution of this work is the mechanical mounting strategy for the magnetic encoders. Both the pendulum and base sensors use:
+\subsection*{Mechanical encoder mounting details}
+Both pendulum and base sensors use:
 \begin{itemize}
   \item a rigid printed housing to locate the AS5600 PCB relative to the rotating axis,
   \item a coaxial magnet mount attached to the rotating part,
@@ -70,6 +131,16 @@ A practical contribution of this work is the mechanical mounting strategy for th
   \item mechanical features to reduce radial offset and wobble.
 \end{itemize}
 This reduces sensitivity to small misalignments that can otherwise cause jitter, dropouts, or inconsistent angle readings (all of which directly degrade derivative estimates and can destabilize the controller). The firmware additionally monitors AS5600 magnet-status diagnostics (detect/high/low) during certain fault conditions to help distinguish true actuator faults from sensor misalignment.
+
+\subsection*{I\textsuperscript{2}C interference mitigation used in practice}
+Because AS5600 links run close to a high-current stepper drive, the I\textsuperscript{2}C bus was treated as an EMI-sensitive interface. The baseline wiring rules used in this build were:
+\begin{itemize}
+  \item twist SDA and SCL together tightly and keep the run short,
+  \item route I\textsuperscript{2}C wires away from motor phase wires and driver power loops,
+  \item wrap the twisted pair with aluminium foil to create a simple shield,
+  \item connect the foil shield to ground at the controller side only, leaving the sensor-side foil end floating.
+\end{itemize}
+This hardware practice reduced burst-like glitches caused by switching noise. Software-side protections (jump rejection and derivative-safe handling) are documented in Chapter~\ref{ch:measurement}, Section~\ref{sec:measurement_glitch_rejection}.
 
 \subsection*{Calibration references}
 Before each experimental trial, a short calibration routine averages multiple sensor samples (default: 25) to reduce single-sample noise and to define reference angles:
@@ -91,8 +162,56 @@ For completeness, the essential microcontroller I/O used by the rig is:
     Function & Arduino pins & Notes \\
     \midrule
     Stepper driver signals (STEP, DIR, EN) & D11 (STEP), D6 (DIR), D7 (EN) & digital outputs to the stepper driver \\
-    I\textsuperscript{2}C bus (SDA/SCL) & D20 (SDA), D21 (SCL) & shared by the multiplexer and both encoders \\
+    I\textsuperscript{2}C bus (SDA/SCL) & D20 (SDA), D21 (SCL) & shared by PCA9548A and both AS5600 encoders \\
     I\textsuperscript{2}C multiplexer channels & ch0 (pendulum), ch1 (base) & selects which AS5600 encoder is visible on the bus \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Bill of materials}
+\label{sec:bom}
+Tables~\ref{tab:bom} and~\ref{tab:bom_passive} list the hardware required to reproduce the rig. Entries marked \texttt{TBD} are intentionally left open until the final procurement manifest is frozen.
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \caption{Bill of materials (core subsystems).}
+  \label{tab:bom}
+  \begin{tabularx}{\linewidth}{@{}l c p{0.19\linewidth} p{0.18\linewidth} X@{}}
+    \toprule
+    Item & Qty & Spec/Model & Purpose & Notes/Source \\
+    \midrule
+    Microcontroller board & 1 & Arduino Mega 2560 & Real-time control and serial interface & Matches firmware pin map and loop implementation \\
+    Stepper driver module & 1 & TMC2209 (STEP/DIR/EN) & Stepper current control and pulse interface & Base axis driver stage \\
+    Stepper motor & 1 & 1.8\si{\degree}/step, model \texttt{TBD} & Base rotational actuation & Exact model/vendor \texttt{TBD} \\
+    Motor power supply & 1 & \SI{24}{V} DC, current \texttt{TBD} & Dedicated motor rail & Repo indicates \SI{24}{V}; adapter model \texttt{TBD} \\
+    Magnetic encoder modules & 2 & AS5600 & Absolute pendulum and base angle sensing & One on pendulum, one on base axis \\
+    I\textsuperscript{2}C multiplexer & 1 & PCA9548A (0x70 default) & Allows two AS5600 devices on one I\textsuperscript{2}C bus & ch0 pendulum, ch1 base \\
+    Encoder magnets & 2 & Diametric magnet, size \texttt{TBD} & Magnetic target for AS5600 & Maintain \SIrange{2}{3}{mm} air gap \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \caption{Bill of materials (mechanical details and wiring passives).}
+  \label{tab:bom_passive}
+  \begin{tabularx}{\linewidth}{@{}l c p{0.19\linewidth} p{0.18\linewidth} X@{}}
+    \toprule
+    Item & Qty & Spec/Model & Purpose & Notes/Source \\
+    \midrule
+    Pendulum pivot bearings & 3 & 688RS & Low-friction pendulum pivot support & Bearing-supported L-pivot shaft \\
+    Rotary arm assembly & 1 & Custom part, $L_r \approx \SI{0.19}{m}$ & Base arm geometry & Fabrication details \texttt{TBD} \\
+    L-shaped pendulum assembly & 1 & Custom part, $L_v \approx \SI{0.12}{m}$ & Pendulum body and mass distribution & Includes pivot shaft and end mass \\
+    Base encoder 3D-printed housing set & 1 set & Custom CAD print (\texttt{sensor\_housing\_*}) & Converts motor axis into measured closed-loop axis & See Figure~\ref{fig:sensor_housing_closed_loop} \\
+    Pull-up resistors & 2 & \SI{5}{k\ohm}, tolerance \texttt{TBD} & SDA/SCL biasing & Final resistor package/tolerance \texttt{TBD} \\
+    Driver bulk capacitor & 1 & \SI{100}{\micro\farad}, voltage \texttt{TBD} & VMOT rail smoothing & Place close to VMOT/GND pins \\
+    Driver/sensor ceramic capacitors & \texttt{TBD} & \SI{0.1}{\micro\farad}, package \texttt{TBD} & High-frequency decoupling & One near VMOT and one per sensor supply \\
+    Sensor local capacitors & 2 & \SI{1}{\micro\farad}, voltage \texttt{TBD} & Local AS5600 supply filtering & Final dielectric/package \texttt{TBD} \\
+    Prototyping and wiring hardware & \texttt{TBD} & Breadboards, jumpers, foil shield, connectors & Electrical assembly and EMI mitigation & Counts depend on physical layout \\
     \bottomrule
   \end{tabularx}
 \end{table}
@@ -114,3 +233,7 @@ The rig is operated under explicit safety limits for repeatability:
 \end{itemize}
 
 Limit checks are debounced across multiple control ticks to avoid false positives from single-sample sensor glitches. When a limit is confirmed, the motor output is disabled and the system returns to an idle state so the trial can be restarted safely.
+
+\section{Replication notes and lessons learned}
+\label{sec:replication_notes}
+The most common bring-up failures in this project were: sensor noise spikes, magnet/housing misalignment, I\textsuperscript{2}C interference from motor wiring, and same-address encoder conflicts without multiplexing. The highest-leverage mitigation sequence was: establish rigid mechanical alignment first, verify magnet spacing and status bits, apply twisted-and-shielded I\textsuperscript{2}C wiring with one-end shield grounding, then enable software glitch rejection and calibration averaging. Following this order prevents repeated false debugging loops and makes educational replication significantly faster.

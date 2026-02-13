@@ -37,6 +37,7 @@ The cutoff $\omega_c$ (rad/s) is tuned experimentally, and the coefficients $(b_
 For the pendulum angle $\alpha$, the pre-difference $(x[n]-x[n-1])$ is wrapped to $\pm 180^\circ$ to avoid a spurious $\approx 360^\circ$ jump near the encoder wrap. Both derivatives are clamped to conservative maximum magnitudes to prevent extreme one-sample spikes from dominating the controller.
 
 \section{Wrap safety and glitch rejection}
+\label{sec:measurement_glitch_rejection}
 The AS5600 sensors are read over I\textsuperscript{2}C via a multiplexer; occasional mux/I\textsuperscript{2}C glitches can produce implausible one-sample jumps. The firmware applies two layers of protection:
 \begin{enumerate}
   \item \textbf{Raw jump rejection}: if a single-tick jump exceeds a configured threshold, the sample is discarded and the previous value is reused.
