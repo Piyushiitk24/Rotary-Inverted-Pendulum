@@ -28,6 +28,8 @@ from balance_analysis.plots import (
     auto_symmetric_ylim,
     plot_effort_hist,
     plot_lowfreq_spectrum,
+    plot_metric_bars,
+    plot_mode_comparison_timeseries,
     plot_nudge_tracking,
     plot_phase_portrait,
     plot_sparse_series,
@@ -129,6 +131,10 @@ def _collect_sessions(args) -> tuple[list[Path], dict[str, Any], dict[str, Any]]
 
 def _mode_rank(mode: str) -> int:
     return {"LIN": 0, "SMC": 1, "SMC4": 2}.get(mode, 99)
+
+
+def _mode_acc_limit(mode: str) -> float:
+    return 12000.0 if str(mode).upper() == "SMC4" else 20000.0
 
 
 def _score_representative(row: pd.Series) -> float:
@@ -422,6 +428,8 @@ def main() -> int:
     trials_csv = out_dir / "metrics_trials.csv"
     trials_df.to_csv(trials_csv, index=False)
 
+    summary_by_experiment_mode_df = pd.DataFrame()
+
     if not trials_df.empty:
         summary_cols = [
             "duration_s",
@@ -448,6 +456,7 @@ def main() -> int:
                 summary2 = sub.groupby(["experiment", "mode"])[existing].agg(["mean", "median", "std", "count"])
                 summary2.columns = [f"{metric}_{stat}" for metric, stat in summary2.columns]
                 summary2 = summary2.reset_index()
+                summary_by_experiment_mode_df = summary2.copy()
                 summary2.to_csv(out_dir / "metrics_summary_by_experiment_mode.csv", index=False)
 
     if nudge_rows:
@@ -589,6 +598,8 @@ def main() -> int:
                 trial_index = int(item["trial_index"])
                 trial = item["trial"]
                 matches = item["matches"]
+                max_acc_steps = _mode_acc_limit(mode)
+                abort_pend_deg = 25.0 if mode.upper() != "LIN" else None
 
                 prefix = f"{exp}_" if exp else ""
                 base_name = f"{prefix}{mode}_rep_{session_dir.name}_trial{trial_index}"
@@ -597,6 +608,10 @@ def main() -> int:
                 fig1 = plot_timeseries(
                     trial.df,
                     title=f"{title_prefix}{mode} representative: {session_dir.name} (trial {trial_index})",
+                    max_acc_steps=max_acc_steps,
+                    soft_motor_deg=78.0,
+                    abort_pend_deg=abort_pend_deg,
+                    effort_ylim_steps=20000.0,
                     **ts_kwargs,
                 )
                 fig1.savefig(figs_dir / f"{base_name}_timeseries.png", dpi=160)
@@ -608,7 +623,12 @@ def main() -> int:
                 fig2.savefig(figs_dir / f"{base_name}_phase_alpha.pdf")
                 plt.close(fig2)
 
-                fig3 = plot_effort_hist(trial.df, title=f"{title_prefix}{mode} effort histogram")
+                fig3 = plot_effort_hist(
+                    trial.df,
+                    title=f"{title_prefix}{mode} effort histogram",
+                    max_acc_steps=max_acc_steps,
+                    hist_xlim_steps=20000.0,
+                )
                 fig3.savefig(figs_dir / f"{base_name}_effort_hist.png", dpi=160)
                 fig3.savefig(figs_dir / f"{base_name}_effort_hist.pdf")
                 plt.close(fig3)
@@ -673,12 +693,52 @@ def main() -> int:
                             trial.df,
                             title=f"{title_prefix}{mode} nudge tracking",
                             steps=plot_steps,
+                            max_acc_steps=max_acc_steps,
                             include_effort=True,
+                            soft_motor_deg=78.0,
+                            abort_pend_deg=abort_pend_deg,
+                            effort_ylim_steps=20000.0,
+                            settle_band_deg=1.0,
                             **ts_kwargs,
                         )
                         fig5.savefig(figs_dir / f"{base_name}_nudge.png", dpi=160)
                         fig5.savefig(figs_dir / f"{base_name}_nudge.pdf")
                         plt.close(fig5)
+
+            if exp in {"hold", "tap"} and loaded:
+                compare_items = [
+                    {
+                        "mode": str(item["mode"]),
+                        "label": str(item["mode"]),
+                        "df": item["trial"].df,
+                        "max_acc_steps": _mode_acc_limit(str(item["mode"])),
+                    }
+                    for item in sorted(loaded, key=lambda x: _mode_rank(str(x["mode"])))
+                ]
+                fig_compare = plot_mode_comparison_timeseries(
+                    compare_items,
+                    title=f"{exp.title()} representative comparison",
+                    soft_motor_deg=78.0,
+                    abort_pend_deg=None,
+                    effort_ylim_steps=20000.0,
+                    **ts_kwargs,
+                )
+                fig_compare.savefig(figs_dir / f"{exp}_compare_timeseries.png", dpi=160)
+                fig_compare.savefig(figs_dir / f"{exp}_compare_timeseries.pdf")
+                plt.close(fig_compare)
+
+            if exp in {"hold", "tap"} and not summary_by_experiment_mode_df.empty:
+                sub_sum = summary_by_experiment_mode_df[
+                    summary_by_experiment_mode_df["experiment"].astype(str) == exp
+                ].copy()
+                if not sub_sum.empty:
+                    fig_bars = plot_metric_bars(
+                        sub_sum,
+                        title=f"{exp.title()} metric comparison",
+                    )
+                    fig_bars.savefig(figs_dir / f"{exp}_metric_bars.png", dpi=160)
+                    fig_bars.savefig(figs_dir / f"{exp}_metric_bars.pdf")
+                    plt.close(fig_bars)
 
     # README
     readme = out_dir / "README.md"

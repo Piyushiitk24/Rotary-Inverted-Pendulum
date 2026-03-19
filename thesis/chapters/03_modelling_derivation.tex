@@ -1,10 +1,11 @@
 \chapter{Mathematical Modelling from First Principles}
 \label{ch:modelling}
 
-This chapter derives the nonlinear dynamics of the rotary (Furuta) inverted pendulum from first principles. The objective is to obtain an explicit model suitable for:
+This chapter derives the nonlinear dynamics of the rotary (Furuta) inverted pendulum from first principles. The goal is to obtain a simple model that can be used for parameter identification and upright control design. The model in this chapter is ideal: it does not include missed steps, sensor glitches, or actuator saturation. Those real-hardware effects are handled later in the firmware chapters.
 
+The objective is to obtain:
 \begin{itemize}
-  \item numerical parameter identification for the custom rig, and
+  \item numerical parameter identification for the custom rig,
   \item controller design about the upright equilibrium.
 \end{itemize}
 

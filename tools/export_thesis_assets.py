@@ -57,6 +57,15 @@ def pick_figure_source(fig_dir: Path, experiment: str, mode: str, plot: str, pre
     return None
 
 
+def pick_named_figure_source(fig_dir: Path, stem: str, prefer: str) -> Path | None:
+    exts = ["pdf", "png"] if prefer == "pdf" else ["png", "pdf"]
+    for ext in exts:
+        path = fig_dir / f"{stem}.{ext}"
+        if path.exists():
+            return path
+    return None
+
+
 def export_figures(report_fig_dir: Path, thesis_fig_dir: Path, prefer: str) -> list[str]:
     # Curated exports (minimum set).
     spec = [
@@ -84,6 +93,14 @@ def export_figures(report_fig_dir: Path, thesis_fig_dir: Path, prefer: str) -> l
                 continue
             dst = thesis_fig_dir / f"{stem}{src.suffix}"
             shutil.copy2(src, dst)
+
+    for stem in ["hold_compare_timeseries", "tap_compare_timeseries", "hold_metric_bars", "tap_metric_bars"]:
+        src = pick_named_figure_source(report_fig_dir, stem, prefer)
+        if src is None:
+            warnings.append(f"Missing figure: {stem}.pdf/png")
+            continue
+        dst = thesis_fig_dir / f"{stem}{src.suffix}"
+        shutil.copy2(src, dst)
 
     return warnings
 

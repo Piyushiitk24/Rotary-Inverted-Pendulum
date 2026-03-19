@@ -1,27 +1,26 @@
 \chapter{Conclusion and Future Work}
 
 \section{Conclusion}
-This project developed a complete upright-only control stack for a custom stepper-driven rotary (Furuta) inverted pendulum:
+This project developed an upright-only control stack for a custom stepper-driven rotary (Furuta) inverted pendulum:
 \begin{itemize}
-  \item A first-principles nonlinear model was derived and numerically specialized for the physical rig (Chapter~\ref{ch:modelling}).
-  \item A practical real-time firmware pipeline was implemented, including robust derivative estimation, wrap-safe angle handling, glitch rejection, engage logic, soft limits, and stall diagnostics (Chapters~\ref{ch:measurement}--\ref{ch:actuation}).
-  \item Three upright controllers were implemented and compared: linear full-state feedback, hybrid sliding mode control, and full-surface sliding mode control (Chapters~\ref{ch:lin}--\ref{ch:smc4}).
-  \item Reference tracking while balancing (``nudge mode'') was demonstrated in the linear controller, converting the system from a regulator to a servo without sacrificing upright stability (Chapter~\ref{ch:lin} and Chapter~\ref{ch:results}).
+  \item A first-principles model was derived and specialized for the physical rig (Chapter~\ref{ch:modelling}).
+  \item A practical firmware pipeline was implemented, including derivative filtering, wrap-safe angle handling, glitch rejection, engage logic, soft limits, stall diagnostics, and controlled disarm behavior (Chapters~\ref{ch:measurement}--\ref{ch:actuation}).
+  \item Three upright controllers were implemented on the same hardware: linear full-state feedback, hybrid sliding mode control, and full-surface sliding mode control (Chapters~\ref{ch:lin}--\ref{ch:smc4}).
+  \item Commanded base-position moves while balancing were demonstrated with the linear controller through nudge mode (Chapter~\ref{ch:results}).
 \end{itemize}
 
-Across the pinned dataset (Chapter~\ref{ch:experiments}), the linear and hybrid SMC controllers achieved stable hold-at-center behavior and provided a strong baseline for comparison. The full-surface sliding mode controller demonstrated upright stabilization in undisturbed conditions, but its disturbance behavior highlights an important practical conclusion: on a stepper-actuated platform, aggressive nonlinear control effort can be limited by missed steps and stall phenomena even when the underlying control law is theoretically well-posed.
+Across the pinned seven-run dataset, the linear controller was the most consistent overall choice on this rig. It gave the calmest hold behavior and remained upright in the pinned tap run. The hybrid SMC reduced peak upright excursions well in the pinned hold run, but its disturbed recovery was less reliable in the pinned tap run. The full-surface SMC also balanced upright in undisturbed conditions, but it was the most sensitive to actuator limits and protective shaping on this stepper-driven platform.
+
+The nudge experiment showed that commanded base motion while balancing is practical on the real rig, but the pinned run should be read carefully: it demonstrates successful motion without a fall, not tight settling inside the fixed $\pm\SI{1}{\degree}$ band.
+
+These conclusions are qualitative because each condition is represented by one pinned run only. Stronger claims would require repeated trials for each controller and experiment type.
 
 \section{Future work}
-The following next steps are concrete extensions motivated by the observed experimental limitations:
+The main next steps suggested by this thesis are:
 \begin{itemize}
-  \item \textbf{Limited statistical strength $\rightarrow$ repeat trials $\rightarrow$ defensible comparisons.}
-        Increase the number of trials per condition (e.g., $\geq 10$ per controller per experiment type) and report distributions (boxplots/CI) rather than single representative traces.
-  \item \textbf{Unmarked disturbances $\rightarrow$ deterministic tap annotations $\rightarrow$ time-window metrics.}
-        Add explicit ``tap'' markers in the host logger (or an external trigger such as a button/IMU) so the disturbance onset can be aligned in device time and impulse-response metrics (peak, recovery time) can be computed consistently.
-	  \item \textbf{Limited bandwidth in logs $\rightarrow$ higher-rate logging $\rightarrow$ clearer effort/latency analysis.}
-	        Log at a higher rate (ideally at the control tick, \SI{200}{Hz}) for selected signals (at least $\alpha$, $\dot{\alpha}$, $u$, saturation flags) to better characterize controller effort, timing jitter, and any high-frequency components.
-	  \item \textbf{Stepper stall/missed-step events in aggressive recovery $\rightarrow$ actuator-aware control $\rightarrow$ fewer abrupt falls.}
-	        Incorporate actuator constraints into the nonlinear control design, e.g., by tuning reaching parameters to reduce acceleration tails, adding rate-of-change limits on $u$, or explicitly designing with bounded-input robustness. For hardware, a torque-controlled actuator (DC/BLDC with encoder) would reduce missed-step failure modes and make the acceleration-input assumption closer to the true plant input.
-	  \item \textbf{Derivative sensitivity under noise/glitches $\rightarrow$ improved estimation $\rightarrow$ fewer false aborts.}
-	        Evaluate alternative estimators (e.g., tuned low-pass differentiators, complementary filtering, or Kalman filtering with the identified model) and compare the resulting $\dot{\alpha}$ noise floor and stability margins.
+  \item \textbf{Repeat trials for stronger comparisons.} Run many trials per controller and per experiment type so future reports can show distributions instead of single representative runs.
+  \item \textbf{Add explicit tap markers.} A button, trigger, or external sensor would make disturbance onset measurable and would allow cleaner recovery-time metrics.
+  \item \textbf{Increase logging bandwidth.} Logging selected signals closer to the \SI{200}{Hz} control rate would improve effort and timing analysis.
+  \item \textbf{Use more actuator-aware nonlinear control.} The tap results show that actuator limits matter strongly on this platform. Future nonlinear designs should account for bounded actuation more directly.
+  \item \textbf{Improve state estimation.} Better derivative estimation or observer-based methods could reduce noise sensitivity and false aborts.
 \end{itemize}

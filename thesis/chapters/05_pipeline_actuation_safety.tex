@@ -2,18 +2,25 @@
 \label{ch:actuation}
 
 \section{Stepper actuation pipeline}
-The stepper driver is commanded in continuous-velocity mode. All controllers compute a base acceleration command, which is then mapped to the motor direction convention and integrated to produce the commanded step rate:
+The stepper driver is commanded in continuous-velocity mode. The controller measures the true base angle for feedback, but the motor command itself is still an open-loop speed command. All controllers compute a base acceleration command, which is then mapped to the motor direction convention and integrated to produce the commanded step rate:
 \[
 u \equiv \ddot{\theta}\ \xrightarrow{\text{controller}}\ u_{\mathrm{cmd}}
 \xrightarrow{\text{sign map}}\ u_{\mathrm{cmd,motor}}
 \xrightarrow{\int}\ \dot{\theta}_{\mathrm{cmd}}.
 \]
 Here $u_{\mathrm{cmd}}$ is expressed as a step-acceleration command (units \si{\step\per\second\squared}), and $\dot{\theta}_{\mathrm{cmd}}$ is the commanded step rate (units \si{\step\per\second}).
-The integration is implemented as:
+The integration is implemented as
 \[
 \dot{\theta}_{\mathrm{cmd}} \leftarrow \dot{\theta}_{\mathrm{cmd}} + \bigl(\ddot{\theta}_{\mathrm{cmd}} - \lambda_{\mathrm{leak}}\dot{\theta}_{\mathrm{cmd}}\bigr)\,T,
 \]
 where $\lambda_{\mathrm{leak}}$ is optionally enabled only in the \emph{linear} controller (Chapter~\ref{ch:lin}) to suppress slow drift.
+
+\paragraph{Low-speed stop deadband.}
+Very small speed commands are suppressed to reduce buzz and dithering near zero motion. In the pinned dataset, the shared setting was
+\[
+\texttt{speedStopHz} = \SI{50}{\step\per\second}.
+\]
+If the commanded speed magnitude stays below this threshold, the motor is stopped for that control tick.
 
 \paragraph{Engage ramp.}
 On transition into the active balancing state, the commanded acceleration is multiplied by an engage ramp to avoid impulsive start-up commands while derivatives and references are initializing. In firmware this ramp is a linear \SI{100}{ms} rise:
@@ -22,29 +29,34 @@ u_{\mathrm{cmd}} \leftarrow u_{\mathrm{cmd}}\cdot \min\!\left(\frac{t-t_{\mathrm
 \]
 
 \paragraph{Stop-before-reverse.}
-To avoid direction chatter and mechanical jerk near zero, the firmware enforces a stop-before-reverse policy: if the desired direction changes sign while the motor is running, a deceleration stop is commanded immediately and the reverse command can only occur on a subsequent control tick ($\ge\SI{5}{ms}$ later at \SI{200}{Hz}).
+To avoid direction chatter and mechanical jerk near zero, the firmware enforces a stop-before-reverse policy: if the desired direction changes sign while the motor is already running, the current tick commands a stop first and the reverse command can only be issued on a later control tick ($\ge\SI{5}{ms}$ later at \SI{200}{Hz}).
 
 \section{Soft limits and failure modes}
 The firmware includes several safety layers to make experiments repeatable on a stepper-driven rig:
 \begin{itemize}
-  \item \textbf{Soft base limits} near mechanical bounds (prevents ``pushing into the stop'').
-  \item \textbf{Stall detection} when the motor is commanded but the base does not move (prints diagnostics for stall/missed-step events).
-  \item \textbf{Predictable disarm/idle behavior} so runs can be restarted quickly without power-cycling.
+  \item \textbf{Soft base limits} near mechanical bounds,
+  \item \textbf{stall detection} when the motor is commanded but the base does not move,
+  \item \textbf{predictable disarm and idle behavior} so runs can be restarted quickly without power-cycling.
 \end{itemize}
 
 \paragraph{Soft limits.}
-In addition to the hard base angle limit $|\theta|>\SI{80}{\degree}$ (Chapter~\ref{ch:hardware}), the implementation applies a soft limit margin $\Delta_\theta=\SI{2}{\degree}$. If the measured base angle is within this margin (i.e., $|\theta|>\SI{80}{\degree}-\Delta_\theta=\SI{78}{\degree}$) and the commanded velocity would push further outward, the velocity command is suppressed (clamped to zero). This reduces the probability of ``hitting the stop'' while the pendulum is still upright.
+In addition to the hard base angle limit $|\theta|>\SI{80}{\degree}$ (Chapter~\ref{ch:hardware}), the implementation applies a soft limit margin $\Delta_\theta=\SI{2}{\degree}$. If the measured base angle is within this margin (that is, $|\theta|>\SI{78}{\degree}$) and the commanded velocity would push further outward, the velocity command is suppressed. This reduces the chance of pushing into the mechanical stop while the pendulum is still upright.
 
-\paragraph{Stall detection (stall/missed-step events).}
-In some runs (especially under aggressive disturbance recovery), the stepper can miss steps or fail to move despite a nonzero commanded velocity. The implementation detects this by monitoring the measured base angle change $\Delta\theta$ over each control tick while the motor is commanded above a minimum step-rate threshold $|\dot{\theta}_{\mathrm{cmd}}|>\dot{\theta}_{\mathrm{cmd},\min}$, with $\dot{\theta}_{\mathrm{cmd},\min}=\SI{500}{\step\per\second}$. If motion is expected but the wrapped base angle change satisfies $|\Delta\theta|<\Delta\theta_{\min}$ with $\Delta\theta_{\min}=\SI{0.10}{\degree}$ for $N_{\mathrm{stall}}=30$ consecutive control ticks (i.e., \SI{150}{ms} at \SI{200}{Hz}), a warning diagnostic is printed. The warning includes AS5600 base-sensor magnet diagnostics (status bits, AGC, magnitude) to help distinguish true motor/driver dropouts from sensor mounting issues.
+\paragraph{Stall detection (stall or missed-step events).}
+In some runs, especially during aggressive disturbance recovery, the stepper can miss steps or fail to move despite a nonzero commanded velocity. The implementation checks this in three parts:
+\begin{itemize}
+  \item \textbf{Threshold:} motion is expected only when $|\dot{\theta}_{\mathrm{cmd}}|>\dot{\theta}_{\mathrm{cmd},\min}$ with $\dot{\theta}_{\mathrm{cmd},\min}=\SI{500}{\step\per\second}$.
+  \item \textbf{Persistence:} if the measured change stays below $|\Delta\theta|<\Delta\theta_{\min}$ with $\Delta\theta_{\min}=\SI{0.10}{\degree}$ for $N_{\mathrm{stall}}=30$ consecutive control ticks (\SI{150}{ms} at \SI{200}{Hz}), the condition is treated as a stall or missed-motion event.
+  \item \textbf{Diagnostic output:} the warning prints AS5600 base-sensor magnet diagnostics (status bits, AGC, magnitude) to help distinguish true motor or driver dropouts from sensor mounting problems.
+\end{itemize}
 
 \paragraph{Disarm and repeatability.}
-When a hard limit is exceeded for $N_{\mathrm{fall}}=3$ consecutive control ticks (debounced; \SI{15}{ms} at \SI{200}{Hz}), the firmware disables stepper outputs and returns to an idle state. The system remains ready to re-engage once the pendulum is returned upright, enabling rapid repeated trials without power-cycling.
+When a hard limit is exceeded for $N_{\mathrm{fall}}=3$ consecutive control ticks (debounced, so \SI{15}{ms} at \SI{200}{Hz}), the firmware disables stepper outputs and returns to an idle state. The system remains ready to re-engage once the pendulum is returned upright, enabling rapid repeated trials without power-cycling.
 
 \section{Auto-trim and velocity leak}
 Two slow ``bias killers'' are implemented to improve repeatability under sensor offsets and small persistent disturbances:
 \begin{itemize}
-  \item \textbf{Auto-trim of the upright reference}: when stable and not saturated, the upright reference is updated at $\lambda_{\mathrm{trim}}=\SI{0.20}{s^{-1}}$, enabled only when $|\alpha|<\alpha_{\mathrm{trim,win}}=\SI{3}{\degree}$ and $|\dot{\alpha}|<\dot{\alpha}_{\mathrm{trim,win}}=\SI{50}{\degree\per\second}$. The accumulated trim offset is clamped to $|\alpha_{\mathrm{trim}}|\le \alpha_{\mathrm{trim,max}}=\SI{1.5}{\degree}$ relative to the calibration reference.
-  \item \textbf{Velocity leak (linear-only)}: the acceleration integrator uses a leaky term with $\lambda_{\mathrm{leak}}=\SI{2.0}{s^{-1}}$, enabled only when near upright ($|\alpha|<\alpha_{\mathrm{leak,win}}=\SI{5}{\degree}$) and near the base reference ($|\theta_{\mathrm{err}}|<\theta_{\mathrm{leak,win}}=\SI{20}{\degree}$). This reduces slow random-walk drift due to static bias in the acceleration command.
+  \item \textbf{Auto-trim of the upright reference:} when stable and not saturated, the upright reference is updated at $\lambda_{\mathrm{trim}}=\SI{0.20}{s^{-1}}$, enabled only when $|\alpha|<\alpha_{\mathrm{trim,win}}=\SI{3}{\degree}$ and $|\dot{\alpha}|<\dot{\alpha}_{\mathrm{trim,win}}=\SI{50}{\degree\per\second}$. The accumulated trim offset is clamped to $|\alpha_{\mathrm{trim}}|\le \alpha_{\mathrm{trim,max}}=\SI{1.5}{\degree}$ relative to the calibration reference.
+  \item \textbf{Velocity leak (linear-only):} the acceleration integrator uses a leaky term with $\lambda_{\mathrm{leak}}=\SI{2.0}{s^{-1}}$, enabled only when near upright ($|\alpha|<\alpha_{\mathrm{leak,win}}=\SI{5}{\degree}$) and near the base reference ($|\theta_{\mathrm{err}}|<\theta_{\mathrm{leak,win}}=\SI{20}{\degree}$). This reduces slow random-walk drift due to static bias in the acceleration command.
 \end{itemize}
-The velocity leak is \emph{disabled} in nonlinear modes. In SMC controllers, the acceleration command is derived directly from a nonlinear reaching law; adding a leak alters the effective input channel and can undermine the intended behavior.
+The velocity leak is \emph{disabled} in nonlinear modes. In SMC controllers, the acceleration command is derived directly from a nonlinear reaching law, so adding a leak would change the effective input channel.

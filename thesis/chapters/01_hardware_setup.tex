@@ -2,24 +2,57 @@
 \label{ch:hardware}
 
 \section{Overview}
-The experimental plant is a rotary (Furuta) inverted pendulum. A horizontal arm rotates about a vertical axis (base coordinate $\theta$). The pendulum is implemented as an \emph{L-shaped rod}: its horizontal segment forms a pivot shaft aligned with the arm (radial direction) and passes through three 688RS bearings mounted on the arm, while its vertical segment swings in the tangential--vertical plane (pendulum coordinate $\alpha$). The reference configuration is \emph{upright-only}, i.e., $\alpha=0$ corresponds to the pendulum held upright.
+The experimental plant is a rotary (Furuta) inverted pendulum. A horizontal arm rotates about a vertical axis (base coordinate $\theta$). The pendulum is implemented as an \emph{L-shaped rod}: its horizontal segment forms a pivot shaft aligned with the arm (radial direction) and passes through three 688RS bearings mounted on the arm, while its vertical segment swings in the tangential--vertical plane (pendulum coordinate $\alpha$). The reference configuration is \emph{upright-only}, so $\alpha=0$ means the pendulum is upright.
 
 Figure~\ref{fig:rig_photo} shows the custom experimental rig used in this work.
 
 \ThesisFigure{figures/rig_photo}{Photograph of the custom stepper-driven rotary (Furuta) inverted pendulum rig used in this work.}{fig:rig_photo}{0.95\linewidth}
 
-This report is concerned with stabilization about the upright equilibrium and with servo-like base positioning while maintaining upright balance.
+This report focuses on balancing near the upright position and on commanded base-position moves while the pendulum stays upright. The base angle is measured directly, but the stepper still receives open-loop STEP/DIR commands. Because of that, the controller can measure $\theta$ accurately without turning the actuator into a true torque-controlled servo.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    >=Latex,
+    box/.style={draw, rounded corners, align=center, minimum width=2.9cm, minimum height=0.95cm}
+  ]
+    \node[box] (host) at (0,2.1) {Host PC\\logger};
+    \node[box] (ctrl) at (0,0) {Arduino Mega\\control firmware};
+    \node[box] (mux) at (0,-2.1) {PCA9548A\\I\textsuperscript{2}C mux};
+
+    \node[box] (driver) at (4.0,0) {TMC2209\\driver};
+    \node[box] (baseenc) at (4.0,-1.15) {Base AS5600\\($\theta$)};
+    \node[box] (pendenc) at (4.0,-3.05) {Pendulum AS5600\\($\alpha$)};
+
+    \node[box] (motor) at (8.0,0) {Stepper motor\\and arm};
+    \node[box] (pend) at (8.0,-2.1) {Pendulum\\mechanics};
+
+    \draw[<->] (host) -- node[left]{USB serial} (ctrl);
+    \draw[->] (ctrl) -- node[above]{STEP/DIR/EN} (driver);
+    \draw[->] (driver) -- node[above]{motor power} (motor);
+    \draw[->] (motor) -- node[right]{base motion} (pend);
+
+    \draw[->] (baseenc) -- (mux);
+    \draw[->] (pendenc) -- (mux);
+    \draw[->] (mux) -- node[left]{I\textsuperscript{2}C} (ctrl);
+
+    \draw[dashed,->] (motor) -- node[right]{measured by} (baseenc);
+    \draw[dashed,->] (pend) -- node[below]{measured by} (pendenc);
+  \end{tikzpicture}
+  \caption{System-level signal flow for the rig. Control uses measured $\theta$ and $\alpha$, but the stepper itself is still driven by open-loop STEP/DIR commands.}
+  \label{fig:rig_block_diagram}
+\end{figure}
 
 \section{Hardware build-up from scratch}
 \label{sec:hardware_build}
-To make the platform reproducible for students, the assembly was performed in the following dependency order:
+To document the platform clearly for student replication, the assembly was performed in the following order:
 \begin{enumerate}
   \item \textbf{Mechanical base and motor mount:} mount the stepper rigidly and verify shaft runout is acceptable before adding sensors.
   \item \textbf{Rotary arm and pendulum pivot:} install the rotary arm, then align the L-shaped pendulum shaft through the three 688RS bearings.
-  \item \textbf{Base closed-loop retrofit:} convert the motor axis into a measured axis by adding the AS5600 housing and magnet assembly.
+  \item \textbf{Base measurement retrofit:} turn the motor axis into a measured axis by adding the AS5600 housing and magnet assembly.
   \item \textbf{Driver and power wiring:} connect STEP/DIR/EN, \SI{24}{V} motor power, and common ground between motor supply, driver, and controller.
-  \item \textbf{I\textsuperscript{2}C network and noise hardening:} connect both AS5600 sensors through PCA9548A channels and apply EMI-aware routing/shielding.
-  \item \textbf{Calibration references:} define $\theta=0$ and $\alpha=0$ with multi-sample averaging before any closed-loop experiment.
+  \item \textbf{I\textsuperscript{2}C network and noise hardening:} connect both AS5600 sensors through PCA9548A channels and apply EMI-aware routing and shielding.
+  \item \textbf{Calibration references:} define $\theta=0$ and $\alpha=0$ with multi-sample averaging before any balancing experiment.
 \end{enumerate}
 Sections~\ref{sec:mechanical_rig}--\ref{sec:sensing} detail each stage and the associated design constraints.
 
@@ -39,8 +72,8 @@ k_s \approx \frac{1600}{360} \approx \SI{4.444}{\step\per\degree},
 \]
 which is the conversion used throughout the firmware and analysis.
 
-\subsection*{Converting the stepper into a closed-loop unit}
-In open-loop operation, the commanded step count can diverge from the physical base angle due to missed steps, impulsive disturbances, or temporary stalls. To eliminate this ambiguity, the motor was retrofitted as a \emph{closed-loop single unit}: a 3D-printed AS5600 housing was fixed at the motor base, and the magnet mount was aligned coaxially with the rotating shaft so the base angle can be measured directly.
+\subsection*{Turning the stepper into a measured axis}
+In open-loop stepper operation, the commanded step count can differ from the real base angle because of missed steps, impulsive disturbances, or temporary stalls. To measure the true base motion directly, the motor axis was instrumented with a 3D-printed AS5600 housing and a coaxial magnet mount. This improves state measurement, but it does not remove the possibility of missed motion under load.
 
 \begin{figure}[htbp]
   \centering
@@ -59,21 +92,21 @@ In open-loop operation, the commanded step count can diverge from the physical b
   \begin{subfigure}[t]{0.32\linewidth}
     \centering
     \includegraphics[width=\linewidth]{figures/sensor_housing_fixed_to_motor.png}
-    \caption{Housing fixed to motor base (closed-loop unit).}
+    \caption{Housing fixed to the motor base.}
     \label{fig:sensor_housing_fixed_to_motor}
   \end{subfigure}
-  \caption{3D-printed AS5600 housing used to convert the stepper into a closed-loop base actuator. For replication, the critical points are coaxial magnet alignment, rigid mounting, and consistent magnet-to-chip spacing. Small misalignment at this stage produces unstable angle data later in control experiments.}
+  \caption{3D-printed AS5600 housing used to measure the base angle directly. The critical points are coaxial magnet alignment, rigid mounting, and consistent magnet-to-chip spacing. Small misalignment here produces poor angle data later in control experiments.}
   \label{fig:sensor_housing_closed_loop}
 \end{figure}
 
 \subsection*{Pendulum pivot (bearing-supported)}
-The pendulum rotates about a bearing-supported pivot shaft that is aligned with the rotary arm. The shaft passes through three 688RS bearings, which reduce friction and minimize backlash in the pendulum degree of freedom (important because dissipative pivot dynamics couple directly into the required base acceleration for upright stabilization). The pivot assembly also carries the pendulum angle encoder magnet/fixture so the AS5600 measures $\alpha$ directly about this axis.
+The pendulum rotates about a bearing-supported pivot shaft that is aligned with the rotary arm. The shaft passes through three 688RS bearings, which reduce friction and minimize backlash in the pendulum degree of freedom. This matters because pivot losses couple directly into the base acceleration required for upright stabilization. The pivot assembly also carries the pendulum angle encoder magnet and fixture so the AS5600 measures $\alpha$ directly about this axis.
 
 \subsection*{Key geometric parameters}
 The main geometric and inertial parameters are derived and numerically identified in Chapter~\ref{ch:modelling}. For reference, the rig uses:
 \begin{itemize}
-  \item Arm length $L_r \approx \SI{0.19}{m}$
-  \item Pendulum vertical length $L_v \approx \SI{0.12}{m}$ with a concentrated mass near the lower end
+  \item arm length $L_r \approx \SI{0.19}{m}$,
+  \item pendulum vertical length $L_v \approx \SI{0.12}{m}$ with a concentrated mass near the lower end.
 \end{itemize}
 
 \section{Electronics and actuation}
@@ -106,19 +139,19 @@ Motor power, driver, and microcontroller share a common ground. The driver suppl
 \end{table}
 
 \subsection*{Acceleration-input actuation model}
-The driver is commanded in continuous-velocity mode (step rate in \si{\step\per\second}). To match this actuation pipeline, all controllers in this project are implemented in an \emph{acceleration-input form}: the controller computes a commanded base acceleration (in \si{\step\per\second\squared}), which is integrated in firmware to produce the commanded velocity:
+The driver is commanded in continuous-velocity mode (step rate in \si{\step\per\second}). To match this actuation pipeline, all controllers in this project are written in an \emph{acceleration-input form}: the controller computes a commanded base acceleration (in \si{\step\per\second\squared}), which is integrated in firmware to produce the commanded velocity:
 \[
 u \equiv \ddot{\theta} \ \longrightarrow\  \dot{\theta}_{\mathrm{cmd}} \ \longrightarrow\ \text{stepper speed command}.
 \]
-This is a central design choice: it makes the theoretical input used in modelling and control ($u=\ddot{\theta}$) coincide with the practical signal sent to the actuator (after integration to a velocity command).
+This is a useful design match between the model and the firmware command structure. It does \emph{not} mean the hardware realizes the commanded acceleration exactly, because the stepper still receives an open-loop speed command and can miss motion under load.
 
 \section{Sensing}
 \label{sec:sensing}
 \subsection*{Angle sensing}
 Two AS5600 magnetic encoders measure absolute angles. Both devices share the same fixed I\textsuperscript{2}C address, so they are read through an I\textsuperscript{2}C multiplexer (PCA9548A, default address 0x70) at \SI{400}{kHz}:
 \begin{itemize}
-  \item Pendulum encoder (at the pendulum pivot axis)
-  \item Base encoder (at the motor/base axis, see Figure~\ref{fig:sensor_housing_closed_loop})
+  \item pendulum encoder (at the pendulum pivot axis),
+  \item base encoder (at the motor/base axis, see Figure~\ref{fig:sensor_housing_closed_loop}).
 \end{itemize}
 Each AS5600 provides a \SI{12}{bit} absolute angle measurement over $[0,360^\circ)$ (nominal resolution $\approx \SI{0.0879}{\degree}$ per count).
 
@@ -130,7 +163,7 @@ Both pendulum and base sensors use:
   \item a controlled magnet-to-chip air-gap (typically \SIrange{2}{3}{mm}),
   \item mechanical features to reduce radial offset and wobble.
 \end{itemize}
-This reduces sensitivity to small misalignments that can otherwise cause jitter, dropouts, or inconsistent angle readings (all of which directly degrade derivative estimates and can destabilize the controller). The firmware additionally monitors AS5600 magnet-status diagnostics (detect/high/low) during certain fault conditions to help distinguish true actuator faults from sensor misalignment.
+This reduces sensitivity to small misalignments that can otherwise cause jitter, dropouts, or inconsistent angle readings. The firmware also monitors AS5600 magnet-status diagnostics (detect/high/low) during some fault conditions to help distinguish true actuator faults from sensor misalignment.
 
 \subsection*{I\textsuperscript{2}C interference mitigation used in practice}
 Because AS5600 links run close to a high-current stepper drive, the I\textsuperscript{2}C bus was treated as an EMI-sensitive interface. The baseline wiring rules used in this build were:
@@ -143,10 +176,10 @@ Because AS5600 links run close to a high-current stepper drive, the I\textsupers
 This hardware practice reduced burst-like glitches caused by switching noise. Software-side protections (jump rejection and derivative-safe handling) are documented in Chapter~\ref{ch:measurement}, Section~\ref{sec:measurement_glitch_rejection}.
 
 \subsection*{Calibration references}
-Before each experimental trial, a short calibration routine averages multiple sensor samples (default: 25) to reduce single-sample noise and to define reference angles:
+Before each experimental trial, a short calibration routine averages multiple sensor samples (default: 25) to reduce single-sample noise and define reference angles:
 \begin{itemize}
-  \item $\alpha=0$ reference: pendulum held upright
-  \item $\theta=0$ reference: arm centered
+  \item $\alpha=0$ reference: pendulum held upright,
+  \item $\theta=0$ reference: arm centered.
 \end{itemize}
 
 \subsection*{Pin assignments (summary)}
@@ -170,7 +203,7 @@ For completeness, the essential microcontroller I/O used by the rig is:
 
 \section{Bill of materials}
 \label{sec:bom}
-Tables~\ref{tab:bom} and~\ref{tab:bom_passive} list the hardware required to reproduce the rig. Entries marked \texttt{TBD} are intentionally left open until the final procurement manifest is frozen.
+Tables~\ref{tab:bom} and~\ref{tab:bom_passive} list the hardware required to reproduce the rig. The functional design is fixed, but a few procurement details were not finalized when this report was written. Those unresolved entries are kept visible instead of being guessed.
 
 \begin{table}[htbp]
   \centering
@@ -206,7 +239,7 @@ Tables~\ref{tab:bom} and~\ref{tab:bom_passive} list the hardware required to rep
     Pendulum pivot bearings & 3 & 688RS & Low-friction pendulum pivot support & Bearing-supported L-pivot shaft \\
     Rotary arm assembly & 1 & Custom part, $L_r \approx \SI{0.19}{m}$ & Base arm geometry & Fabrication details \texttt{TBD} \\
     L-shaped pendulum assembly & 1 & Custom part, $L_v \approx \SI{0.12}{m}$ & Pendulum body and mass distribution & Includes pivot shaft and end mass \\
-    Base encoder 3D-printed housing set & 1 set & Custom CAD print (\texttt{sensor\_housing\_*}) & Converts motor axis into measured closed-loop axis & See Figure~\ref{fig:sensor_housing_closed_loop} \\
+    Base encoder 3D-printed housing set & 1 set & Custom CAD print (\texttt{sensor\_housing\_*}) & Converts motor axis into a measured axis & See Figure~\ref{fig:sensor_housing_closed_loop} \\
     Pull-up resistors & 2 & \SI{5}{k\ohm}, tolerance \texttt{TBD} & SDA/SCL biasing & Final resistor package/tolerance \texttt{TBD} \\
     Driver bulk capacitor & 1 & \SI{100}{\micro\farad}, voltage \texttt{TBD} & VMOT rail smoothing & Place close to VMOT/GND pins \\
     Driver/sensor ceramic capacitors & \texttt{TBD} & \SI{0.1}{\micro\farad}, package \texttt{TBD} & High-frequency decoupling & One near VMOT and one per sensor supply \\
@@ -219,21 +252,21 @@ Tables~\ref{tab:bom} and~\ref{tab:bom_passive} list the hardware required to rep
 \section{Host computer and data acquisition}
 All experiments are run with a host computer connected over USB serial. A Python logger records:
 \begin{itemize}
-  \item a device-time CSV stream (angles, angular rates, command signals), and
+  \item a device-time CSV stream (angles, angular rates, and command signals),
   \item a text event stream (status lines and diagnostic messages).
 \end{itemize}
-These artifacts are later used to compute metrics and generate the figures/tables in the Results chapter.
+These artifacts are later used to compute metrics and generate the figures and tables in the Results chapter.
 
 \section{Safety limits and operating envelope}
 The rig is operated under explicit safety limits for repeatability:
 \begin{itemize}
   \item Base limit: $|\theta| > \SI{80}{\degree}$ triggers a safety disarm.
   \item Pendulum limit: $|\alpha| > \SI{30}{\degree}$ triggers a safety disarm.
-  \item Upright-only validity window (nonlinear controllers): an additional hard abort is applied at $|\alpha|>\SI{25}{\degree}$ (and also at extreme $|\dot{\alpha}|$) to enforce ``no swing-up'' operation and to avoid numerically unsafe regions.
+  \item Upright-only validity window (nonlinear controllers): an additional hard abort is applied at $|\alpha|>\SI{25}{\degree}$ (and also at extreme $|\dot{\alpha}|$) to enforce upright-only operation and avoid numerically unsafe regions.
 \end{itemize}
 
 Limit checks are debounced across multiple control ticks to avoid false positives from single-sample sensor glitches. When a limit is confirmed, the motor output is disabled and the system returns to an idle state so the trial can be restarted safely.
 
 \section{Replication notes and lessons learned}
 \label{sec:replication_notes}
-The most common bring-up failures in this project were: sensor noise spikes, magnet/housing misalignment, I\textsuperscript{2}C interference from motor wiring, and same-address encoder conflicts without multiplexing. The highest-leverage mitigation sequence was: establish rigid mechanical alignment first, verify magnet spacing and status bits, apply twisted-and-shielded I\textsuperscript{2}C wiring with one-end shield grounding, then enable software glitch rejection and calibration averaging. Following this order prevents repeated false debugging loops and makes educational replication significantly faster.
+The most common bring-up failures in this project were sensor noise spikes, magnet or housing misalignment, I\textsuperscript{2}C interference from motor wiring, and same-address encoder conflicts without multiplexing. The most effective troubleshooting order was: establish rigid mechanical alignment first, verify magnet spacing and status bits, apply twisted-and-shielded I\textsuperscript{2}C wiring with one-end shield grounding, and then enable software glitch rejection and calibration averaging. Following this order reduces repeated debugging loops and makes student replication faster.

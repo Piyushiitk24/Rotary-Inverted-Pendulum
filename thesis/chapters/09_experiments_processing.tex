@@ -2,7 +2,7 @@
 \label{ch:experiments}
 
 \section{Dataset definition}
-All results in this report are generated from a fixed dataset of experimental runs (summarized in Table~\ref{tab:dataset_manifest}). This avoids ambiguity and makes the analysis reproducible.
+All results in this report are generated from one fixed dataset of experimental runs selected through the manifest \texttt{experiments/manifest\_thesis\_20260209.json}. This makes the analysis repeatable: the same report can be rebuilt from the same seven pinned runs.
 
 \subsection*{Report-facing run identifiers}
 For readability, the internal run labels used by the analysis pipeline are mapped to report-facing identifiers:
@@ -11,12 +11,12 @@ For readability, the internal run labels used by the analysis pipeline are mappe
   \item Commanded reference tracking (nudge): \textbf{N1}
   \item Finger tap disturbance: \textbf{T1--T3}
 \end{itemize}
-Each experimental run is archived using a timestamp-coded run identifier. Table~\ref{tab:dataset_manifest} lists the run identifiers used for this report.
+Each condition is represented by one pinned run only, so later comparisons are qualitative and metric-based rather than statistical. Table~\ref{tab:dataset_manifest} lists the run identifiers used for this report.
 
 \InputIfExists{tables/tab_dataset_manifest.tex}{\emph{(Run the export script to generate the dataset table.)}}
 
 \section{Controller parameters used in experiments}
-For completeness, Table~\ref{tab:controller_params_overview} summarizes the numeric controller and pipeline parameters used to generate the results in Chapter~\ref{ch:results}. These values correspond to the fixed configurations used during the pinned dataset runs (H1--H3, N1, T1--T3).
+For completeness, Table~\ref{tab:controller_params_overview} summarizes the numeric controller and pipeline parameters used to generate the results in Chapter~\ref{ch:results}. These values correspond to the fixed configurations used during the pinned dataset runs H1--H3, N1, and T1--T3.
 \begingroup
 \small
 \setlength{\tabcolsep}{4pt}
@@ -47,10 +47,11 @@ For completeness, Table~\ref{tab:controller_params_overview} summarizes the nume
   Shared & Base angle limit & 80 & \si{\degree} & hard disarm beyond this bound \\
   Shared & Pendulum angle limit & 30 & \si{\degree} & hard disarm beyond this bound \\
   Shared & Hard limit debounce $N_{\mathrm{fall}}$ & 3 & ticks & \SI{15}{ms} at \SI{200}{Hz} \\
-  Shared & Soft limit margin $\Delta_\theta$ & 2 & \si{\degree} & clamps outward motion for $|\theta|>\SI{80}{\degree}-\Delta_\theta=\SI{78}{\degree}$ \\
+  Shared & Soft limit margin $\Delta_\theta$ & 2 & \si{\degree} & clamps outward motion for $|\theta|>\SI{78}{\degree}$ \\
   Shared & Engage ramp duration $T_{\mathrm{ramp}}$ & 100 & ms & linear ramp applied after controller engagement \\
   Shared & Acceleration cap $u_{\max}$ & 20000 & \si{\step\per\second\squared} & actuator shaping \\
   Shared & Speed cap $\dot{\theta}_{\max}$ & 15000 & \si{\step\per\second} & actuator shaping \\
+  Shared & Speed stop deadband \texttt{speedStopHz} & 50 & \si{\step\per\second} & motor stopped for smaller speed commands \\
   Shared & Stall detect min cmd speed $\dot{\theta}_{\mathrm{cmd},\min}$ & 500 & \si{\step\per\second} & expect-motion threshold \\
   Shared & Stall detect min motion $\Delta\theta_{\min}$ & 0.10 & \si{\degree} & per control tick \\
   Shared & Stall detect persistence $N_{\mathrm{stall}}$ & 30 & ticks & \SI{150}{ms} at \SI{200}{Hz} \\
@@ -62,52 +63,54 @@ For completeness, Table~\ref{tab:controller_params_overview} summarizes the nume
   Shared (nonlinear) & Cosine floor $\cos_{\min}$ & 0.2 & -- & used in $\cos_{\mathrm{safe}}$ \\
 
   \addlinespace
-	  Linear & $K_{\theta}$ & 31.5 & \si{\step\per\second\squared\per\degree} & base/arm position gain \\
-	  Linear & $K_{\alpha}$ & 725.6 & \si{\step\per\second\squared\per\degree} & pendulum angle gain \\
-	  Linear & $K_{\dot{\theta}}$ & 28.3 & \si{\step\per\second\squared}\,per\,(\si{\degree\per\second}) & base/arm rate gain \\
-	  Linear & $K_{\dot{\alpha}}$ & 73.5 & \si{\step\per\second\squared}\,per\,(\si{\degree\per\second}) & pendulum rate gain \\
-	  Linear & Derivative filter cutoff $\omega_c$ & 450 & \si{rad\per\second} & bilinear (Tustin) filtered differentiator \\
-	  Linear & $\alpha$ deadband $\alpha_{\mathrm{db}}$ & 0.5 & \si{\degree} & reduces noise-chasing near upright \\
-	  Linear & Velocity leak coefficient $\lambda_{\mathrm{leak}}$ & 2.0 & \si{s^{-1}} & enabled only near upright/center \\
-	  Linear & Velocity leak window $|\alpha|$ $\alpha_{\mathrm{leak,win}}$ & 5 & \si{\degree} & enables leak only near upright \\
-	  Linear & Velocity leak window $|\theta_{\mathrm{err}}|$ $\theta_{\mathrm{leak,win}}$ & 20 & \si{\degree} & enables leak only near center \\
-	  Linear & Upright reference trim rate & 0.20 & \si{s^{-1}} & slow bias compensation (auto-trim) \\
-	  Linear & Auto-trim clamp $\alpha_{\mathrm{trim,max}}$ & 1.5 & \si{\degree} & relative to calibration reference \\
-	  Linear & Auto-trim window $|\alpha|$ $\alpha_{\mathrm{trim,win}}$ & 3 & \si{\degree} & enables trim only near upright \\
-	  Linear & Auto-trim window $|\dot{\alpha}|$ $\dot{\alpha}_{\mathrm{trim,win}}$ & 50 & \si{\degree\per\second} & enables trim only when still \\
+  Linear & $K_{\theta}$ & 31.5 & \si{\step\per\second\squared\per\degree} & base or arm position gain \\
+  Linear & $K_{\alpha}$ & 725.6 & \si{\step\per\second\squared\per\degree} & pendulum angle gain \\
+  Linear & $K_{\dot{\theta}}$ & 28.3 & \si{\step\per\second\squared}\,per\,(\si{\degree\per\second}) & base or arm rate gain \\
+  Linear & $K_{\dot{\alpha}}$ & 73.5 & \si{\step\per\second\squared}\,per\,(\si{\degree\per\second}) & pendulum rate gain \\
+  Linear & Derivative filter cutoff $\omega_c$ & 450 & \si{rad\per\second} & bilinear filtered differentiator \\
+  Linear & $\alpha$ deadband $\alpha_{\mathrm{db}}$ & 0.5 & \si{\degree} & reduces noise chasing near upright \\
+  Linear & Velocity leak coefficient $\lambda_{\mathrm{leak}}$ & 2.0 & \si{s^{-1}} & enabled only near upright and center \\
+  Linear & Velocity leak window $|\alpha|$ $\alpha_{\mathrm{leak,win}}$ & 5 & \si{\degree} & enables leak only near upright \\
+  Linear & Velocity leak window $|\theta_{\mathrm{err}}|$ $\theta_{\mathrm{leak,win}}$ & 20 & \si{\degree} & enables leak only near center \\
+  Linear & Upright reference trim rate & 0.20 & \si{s^{-1}} & slow bias compensation \\
+  Linear & Auto-trim clamp $\alpha_{\mathrm{trim,max}}$ & 1.5 & \si{\degree} & relative to calibration reference \\
+  Linear & Auto-trim window $|\alpha|$ $\alpha_{\mathrm{trim,win}}$ & 3 & \si{\degree} & enables trim only near upright \\
+  Linear & Auto-trim window $|\dot{\alpha}|$ $\dot{\alpha}_{\mathrm{trim,win}}$ & 50 & \si{\degree\per\second} & enables trim only when still \\
 
   \addlinespace
   Hybrid SMC & Surface slope $\lambda$ & 15 & \si{s^{-1}} & $s=\dot{\alpha}+\lambda\alpha$ \\
   Hybrid SMC & Reaching gain $K$ & 800 & \si{\degree\per\second\squared} & boundary-layer reaching law \\
   Hybrid SMC & Boundary layer $\phi$ & 50 & \si{\degree\per\second} & reduces chattering \\
   Hybrid SMC & Base assist scale $\gamma$ & 1.0 & -- & gated base-centering assist \\
+  Hybrid SMC & \texttt{smcSign} & +1 & -- & firmware sign correction for actuation direction \\
   Hybrid SMC & Base assist gate $|\alpha|$ $\alpha_{\gamma}$ & 5 & \si{\degree} & enables centering assist only near upright \\
   Hybrid SMC & Base assist gate $|\dot{\alpha}|$ $\dot{\alpha}_{\gamma}$ & 150 & \si{\degree\per\second} & enables centering assist only when still \\
 
   \addlinespace
   Full-surface SMC & Pendulum slope $\lambda_{\alpha}$ & 15 & \si{s^{-1}} & part of four-state surface \\
   Full-surface SMC & Base slope $\lambda_{\theta}$ & 2.0 & \si{s^{-1}} & shapes base tracking term \\
-  Full-surface SMC & Coupling weight $k$ & 0.50 & -- & couples base term into surface \\
+  Full-surface SMC & Coupling weight $k$ & 0.50 & -- & requested coupling in the analytic surface \\
   Full-surface SMC & Reaching gain $K$ & 800 & \si{\degree\per\second\squared} & boundary-layer reaching law \\
   Full-surface SMC & Boundary layer $\phi$ & 50 & \si{\degree\per\second} & reduces chattering \\
+  Full-surface SMC & Assist scale $\gamma$ & 1.0 & -- & gated base-centering assist \\
   Full-surface SMC & Coupling hard limit $k_{\max}$ & 1.20 & -- & prevents ill-conditioning \\
-  Full-surface SMC & Denominator margin $\mathrm{den}_{\min}$ & 0.60 & -- & enforces $B\cos\alpha-k\ge\mathrm{den}_{\min}$ \\
+  Full-surface SMC & Denominator margin $\mathrm{den}_{\min}$ & 0.60 & -- & enforces denominator protection \\
   Full-surface SMC & Coupling ramp duration & 200 & ms & ramp-in after engage \\
-  Full-surface SMC & Internal $\dot{\alpha}$ clamp $\dot{\alpha}_{\mathrm{ctrl},\max}$ & 200 & \si{\degree\per\second} & limits spikes in $\lambda_{\alpha}\dot{\alpha}$ term \\
+  Full-surface SMC & Internal $\dot{\alpha}$ clamp $\dot{\alpha}_{\mathrm{ctrl},\max}$ & 200 & \si{\degree\per\second} & limits spikes in the internal computation \\
   Full-surface SMC & Error clamp $|\theta_{\mathrm{err}}|$ $\theta_{\mathrm{err},\max}$ & 78 & \si{\degree} & explicit base error clamping \\
   Full-surface SMC & Error clamp $|\dot{\theta}_{\mathrm{err}}|$ $\dot{\theta}_{\mathrm{err},\max}$ & 200 & \si{\degree\per\second} & explicit base error clamping \\
-  Full-surface SMC & Base term clamp $\theta_{\mathrm{term},\max}$ & 300 & \si{\degree\per\second} & clamps combined base term \\
-  Full-surface SMC & Extra accel cap $u_{\max,\mathrm{SMC4}}$ & 12000 & \si{\step\per\second\squared} & tighter shaping than global cap \\
-  Full-surface SMC & Extra speed cap $\dot{\theta}_{\max,\mathrm{SMC4}}$ & 2000 & \si{\step\per\second} & tighter shaping than global cap \\
-  Full-surface SMC & Base assist gate $|\dot{\alpha}|$ $\dot{\alpha}_{\gamma,\mathrm{SMC4}}$ & 250 & \si{\degree\per\second} & enables assist when still \\
+  Full-surface SMC & Base term clamp $\theta_{\mathrm{term},\max}$ & 300 & \si{\degree\per\second} & clamps the combined base term \\
+  Full-surface SMC & Extra accel cap $u_{\max,\mathrm{SMC4}}$ & 12000 & \si{\step\per\second\squared} & tighter shaping than the global cap \\
+  Full-surface SMC & Extra speed cap $\dot{\theta}_{\max,\mathrm{SMC4}}$ & 2000 & \si{\step\per\second} & tighter shaping than the global cap \\
+  Full-surface SMC & Base assist gate $|\dot{\alpha}|$ $\dot{\alpha}_{\gamma,\mathrm{SMC4}}$ & 250 & \si{\degree\per\second} & enables assist in the calmer region \\
 
   \addlinespace
   Reference tracking & Target limit $|\theta_{\mathrm{target}}|$ $\theta_{\mathrm{target,max}}$ & 35 & \si{\degree} & bounds user-specified targets \\
   Reference tracking & Max reference speed & 12 & \si{\degree\per\second} & trapezoidal profile limit \\
   Reference tracking & Max reference acceleration & 60 & \si{\degree\per\second\squared} & trapezoidal profile limit \\
-  Reference tracking & Stability gate $|\alpha|$ $\alpha_{\mathrm{move,win}}$ & 5 & \si{\degree} & required to keep moving profile active \\
-  Reference tracking & Stability gate $|\dot{\alpha}|$ $\dot{\alpha}_{\mathrm{move,win}}$ & 80 & \si{\degree\per\second} & required to keep moving profile active \\
-  Reference tracking & Engage grace $T_g$ & 200 & ms & before enabling pause/resume gating \\
+  Reference tracking & Stability gate $|\alpha|$ $\alpha_{\mathrm{move,win}}$ & 5 & \si{\degree} & required to keep the moving profile active \\
+  Reference tracking & Stability gate $|\dot{\alpha}|$ $\dot{\alpha}_{\mathrm{move,win}}$ & 80 & \si{\degree\per\second} & required to keep the moving profile active \\
+  Reference tracking & Engage grace $T_g$ & 200 & ms & before enabling pause or resume gating \\
   Reference tracking & Pause/resume debounce $N_{\mathrm{stable}}=N_{\mathrm{unstable}}$ & 10 & ticks & consecutive ticks required \\
 \end{longtable}
 \endgroup
@@ -115,21 +118,23 @@ For completeness, Table~\ref{tab:controller_params_overview} summarizes the nume
 \section{Logging artifacts}
 Each logger session produces:
 \begin{itemize}
-  \item a device-time time-series log (approximately \SI{50}{Hz}),
-  \item a host-time event log (status + diagnostic messages).
+  \item a device-time time-series log (about \SI{50}{Hz}),
+  \item a host-time event log (status and diagnostic messages).
 \end{itemize}
-Within a session, each occurrence of controller engagement followed by a disarm event defines one \emph{trial} (one ``engaged block'').
+Within a session, each controller engagement followed by a disarm defines one \emph{trial}.
+
+The hold and nudge runs are straightforward to interpret from the recorded trajectories. The tap runs are less direct: they do not contain explicit disturbance markers, so the dataset supports qualitative disturbance-recovery comparisons but not precise impulse-response timing metrics.
 
 \section{Event-to-CSV alignment and limitations}
-The event log timestamps are host wall-clock time, while the time-series log uses device time. Therefore, naive alignment (e.g., anchoring to an engage printout) can introduce \SI{100}{ms}--\SI{500}{ms} shifts and corrupt any time-window metrics.
+The event log timestamps are host wall-clock time, while the time-series log uses device time. Therefore, naive alignment can introduce \SIrange{100}{500}{ms} shifts and corrupt any time-window metrics.
 
-The analysis pipeline aligns host events to device time by matching sparse status snapshots to the nearest device-time samples using a multi-signal error metric (e.g., $\alpha$, $\dot{\alpha}$, $\theta$, $\dot{\theta}$, acceleration, velocity) under a monotonicity constraint. A linear host-to-device mapping is then fit and residuals are reported. If alignment quality is unreliable, the pipeline avoids drawing precise event-time annotations and instead reports metrics computed directly from device-time trajectories.
+The analysis pipeline aligns host events to device time by matching sparse status snapshots to nearby device-time samples using a multi-signal error metric (for example $\alpha$, $\dot{\alpha}$, $\theta$, $\dot{\theta}$, acceleration, and velocity) under a monotonicity constraint. A linear host-to-device mapping is then fit and residuals are reported. If alignment quality is unreliable, the pipeline avoids precise event-time annotations and instead reports metrics computed directly from device-time trajectories.
 
 \section{Metric definitions}
-All metrics are defined once here and reused in tables:
+All metrics are defined once here and reused in later tables:
 \begin{itemize}
-  \item \textbf{RMS and max}: $\mathrm{RMS}(|\alpha|)$, $\max|\alpha|$, $\max|\theta|$, etc., computed over the trial duration.
-  \item \textbf{Drift slope}: slope of $\theta(t)$ over the trial (least-squares fit), reported in \si{\degree\per\second}.
-  \item \textbf{Effort}: RMS and max of the commanded base acceleration $u$ (\si{\step\per\second\squared}).
-  \item \textbf{Saturation/clamp percentages}: fraction of samples where acceleration saturation is active and fraction where the base is near the mechanical limit (clamped flag).
+  \item \textbf{RMS and max:} $\mathrm{RMS}(|\alpha|)$, $\max|\alpha|$, $\max|\theta|$, and related quantities over the trial duration.
+  \item \textbf{Drift slope:} slope of $\theta(t)$ over the trial (least-squares fit), reported in \si{\degree\per\second}.
+  \item \textbf{Effort:} RMS and max of the commanded base acceleration $u$ in \si{\step\per\second\squared}.
+  \item \textbf{Saturation and clamp percentages:} fraction of samples where acceleration saturation is active and fraction where the base is near the mechanical limit.
 \end{itemize}

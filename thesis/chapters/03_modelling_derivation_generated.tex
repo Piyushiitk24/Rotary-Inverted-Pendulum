@@ -1,7 +1,43 @@
 % AUTO-GENERATED FILE — DO NOT EDIT.
 % Generated from tools/modelling_complete.md by tools/build_modelling_chapter.py
 
+This chapter builds the mathematical model used later for controller design. The main outputs are:
+
+\begin{itemize}
+\tightlist
+\item
+  the nonlinear upright model,
+\item
+  the linearized upright model,
+\item
+  the numerical constants used later in the firmware and controller chapters.
+\end{itemize}
+
+The goal here is not to model every real-world effect. The model is intentionally idealized so the main pendulum physics can be written clearly.
+
+Assumptions used in this chapter:
+
+\begin{itemize}
+\tightlist
+\item
+  rigid links,
+\item
+  frictionless joints,
+\item
+  commanded base acceleration \(\ddot{\theta}\) treated as the input,
+\item
+  no missed steps or motor stalls,
+\item
+  no sensor glitches,
+\item
+  no actuator saturation.
+\end{itemize}
+
+These assumptions are good for control design, but they do not describe the whole real platform. Later firmware chapters add the practical protections needed for the real stepper-driven rig.
+
 \section{Definition}\label{definition}
+
+This section defines the coordinates and grouped constants used in the derivation.
 
 Generalized coordinates:
 
@@ -44,8 +80,6 @@ Let
 \(J_p\): pendulum inertia about its center of mass, about an axis perpendicular to the swing plane. \[\hat J_0 \triangleq \hat J_1 + m_p L_r^2\]
 
 The definition of \(\hat J_0\) follows from collecting the \(\dot{\theta}^2\) terms in the kinetic energy: it is the arm-side yaw inertia about the motor axis plus the parallel-axis contribution of the swinging mass at radius \(L_r\).
-
-Rigid links; frictionless joints.
 
 A schematic of the coordinates and parameters is shown in Fig.~\ref{fig:furuta_schematic}.
 
@@ -112,6 +146,8 @@ A schematic of the coordinates and parameters is shown in Fig.~\ref{fig:furuta_s
 
 \section{Parameter evaluation}\label{parameter-evaluation}
 
+This section substitutes the measured dimensions and masses of the real rig into the symbols defined above. These numerical values are later used to compute the final model constants.
+
 Formal parameter identification methods for Furuta pendulum rigs (including fitting inertia/friction terms from data) are well documented; see, e.g., \cite{GarciaAlarcon2012}.
 
 Given:
@@ -150,9 +186,13 @@ Arm-side yaw inertia:
 
 \[\hat J_0=\hat J_1+m_pL_r^2\]
 
+At this stage we have the geometric and inertia terms needed to write the kinematics and energy equations.
+
 \begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
 
 \section{Kinematics}\label{kinematics}
+
+The next step is to write the pendulum center-of-mass position and velocity in terms of \(\theta\) and \(\alpha\). This is where the coupling between arm rotation and pendulum swing first appears.
 
 Let \(\{\mathbf i,\mathbf j,\mathbf k\}\) be an inertial orthonormal basis. Define the planar arm basis
 
@@ -180,6 +220,8 @@ Derivatives:
 
 \subsection{Velocity components}\label{velocity-components}
 
+We first differentiate the position coordinates one by one.
+
 For \(x\):
 
 \[\dot x = \frac{d}{dt}(L_r\cos\theta) - l_p\frac{d}{dt}(\sin\alpha\,\sin\theta)\] \[\frac{d}{dt}(L_r\cos\theta)=-L_r\sin\theta\,\dot\theta\] \[\frac{d}{dt}(\sin\alpha\,\sin\theta)=(\cos\alpha\,\dot\alpha)\sin\theta + \sin\alpha(\cos\theta\,\dot\theta)\] \[\dot x = -L_r\sin\theta\,\dot\theta - l_p\cos\alpha\sin\theta\,\dot\alpha - l_p\sin\alpha\cos\theta\,\dot\theta\]
@@ -193,6 +235,8 @@ For \(z\):
 \[\dot z = \frac{d}{dt}(l_p\cos\alpha)=-l_p\sin\alpha\,\dot\alpha\]
 
 \subsection{Speed squared}\label{speed-squared}
+
+Now combine the velocity components into one expression for \(v^2\). This quantity is needed for the translational kinetic energy.
 
 Compute \(v^2=\dot x^2+\dot y^2+\dot z^2\).
 
@@ -250,6 +294,8 @@ Therefore
 
 \section{Energies}\label{energies}
 
+Once the kinematics are known, the energy expressions are straightforward: translational kinetic energy, rotational kinetic energy, and gravitational potential energy.
+
 Translational kinetic energy:
 
 \[T_{\mathrm{trans}}=\frac{1}{2}m_p v^2\]
@@ -301,11 +347,15 @@ Lagrangian:
 
 \section{Euler--Lagrange equations}\label{eulerlagrange-equations}
 
+The Euler--Lagrange equations convert the energy expressions into equations of motion for the two generalized coordinates.
+
 \[\frac{d}{dt}\left(\frac{\partial\mathcal L}{\partial\dot q}\right)-\frac{\partial\mathcal L}{\partial q}=Q\]
 
 \[Q_\theta=\tau,\qquad Q_\alpha=0\]
 
 \subsection{\texorpdfstring{Equation in \(\theta\)}{Equation in \textbackslash theta}}\label{equation-in-theta}
+
+This is the arm or base-axis equation.
 
 \[\frac{\partial\mathcal L}{\partial\dot\theta}=(\hat J_0+\hat J_2\sin^2\alpha)\dot\theta + K\cos\alpha\,\dot\alpha\]
 
@@ -324,6 +374,8 @@ Thus
 \[ (\hat J_0+\hat J_2\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + \hat J_2\sin(2\alpha)\dot\theta\dot\alpha - K\sin\alpha\,\dot\alpha^2 = \tau\]
 
 \subsection{\texorpdfstring{Equation in \(\alpha\)}{Equation in \textbackslash alpha}}\label{equation-in-alpha}
+
+This is the pendulum equation.
 
 \[\frac{\partial\mathcal L}{\partial\dot\alpha}=\hat J_2\dot\alpha + K\cos\alpha\,\dot\theta\]
 
@@ -351,15 +403,19 @@ Cancel the \(\pm K\sin\alpha\,\dot\theta\dot\alpha\) terms:
 
 \section{Nonlinear model}\label{nonlinear-model}
 
+Combining the two Euler--Lagrange equations gives the nonlinear model used later for nonlinear controller design:
+
 \[ (\hat J_0+\hat J_2\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + \hat J_2\sin(2\alpha)\dot\theta\dot\alpha - K\sin\alpha\,\dot\alpha^2 = \tau\]
 
 \[K\cos\alpha\,\ddot\theta + \hat J_2\ddot\alpha - \frac{1}{2}\hat J_2\sin(2\alpha)\dot\theta^2 - G\sin\alpha = 0\]
 
-The derived equations are structurally consistent with classical Furuta pendulum models \cite{Cazzolato2011}, with the distinction that actuator dynamics are treated at the acceleration level rather than torque level.
+These equations are structurally consistent with classical Furuta pendulum models \cite{Cazzolato2011}. The key difference in this thesis is that later controller chapters use commanded base acceleration as the abstract input, because that matches the firmware command structure more naturally than a motor-torque input. This does \emph{not} mean the real hardware realizes the commanded acceleration exactly; on the real rig the command is still turned into a speed command and the stepper can miss motion under load.
 
 \begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
 
 \section{\texorpdfstring{Linearization about upright (\(\alpha\approx 0\))}{Linearization about upright (\textbackslash alpha\textbackslash approx 0)}}\label{linearization-about-upright-alphaapprox-0}
+
+For upright control design, the nonlinear model is simplified around the operating point \(\alpha \approx 0\). This keeps the main unstable pendulum physics while making the equations much easier to use in controller design.
 
 \[\sin\alpha\approx \alpha,\qquad \cos\alpha\approx 1,\qquad \sin(2\alpha)\approx 2\alpha\]
 
@@ -376,6 +432,8 @@ Solve for \(\ddot\alpha\):
 \begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
 
 \section{Numerical specialization}\label{numerical-specialization}
+
+This section substitutes the measured rig parameters into the linearized model so the final constants used later in the thesis can be read directly.
 
 Let \(J_0\equiv \hat J_0\) and \(J_1\equiv \hat J_2\). Numerical values:
 
@@ -418,5 +476,23 @@ Nonlinear model with numerical constants:
 \[ (J_0+J_1\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + J_1\sin(2\alpha)\dot\theta\dot\alpha - K\sin\alpha\,\dot\alpha^2 = \tau\]
 
 \[K\cos\alpha\,\ddot\theta + J_1\ddot\alpha - \frac{1}{2}J_1\sin(2\alpha)\dot\theta^2 - G\sin\alpha = 0\]
+
+\subsection{What is used later}\label{what-is-used-later}
+
+The controller chapters mainly use the following results from this derivation:
+
+\begin{itemize}
+\tightlist
+\item
+  Nonlinear upright relation: \[\ddot\alpha = A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2 - B\cos\alpha\,\ddot\theta\]
+\item
+  Linearized upright relation: \[\ddot\alpha = 100.8\,\alpha - 1.952\,\ddot\theta\]
+\item
+  Stepper conversion used in firmware and plots: \[k_s = 4.444\ \text{step/deg}\]
+\end{itemize}
+
+So the main constants passed forward from this chapter are {[} A = 100.8,\qquad B = 1.952,\qquad k\_s = 4.444~\text{step/deg}. {]}
+
+These values match the constants used later in the firmware and controller chapters. They should be read as \emph{model constants}, not as a guarantee that the real stepper-driven hardware follows the commanded acceleration exactly.
 
 \begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}

@@ -4,8 +4,8 @@
 \section{Coordinates}
 The system is described by two angles:
 \begin{itemize}
-  \item $\theta(t)$: base/arm yaw angle about the motor axis,
-  \item $\alpha(t)$: pendulum angle about the bearing-supported pivot axis (aligned with the arm/radial direction), measured from the upright configuration ($\alpha=0$ upright).
+  \item $\theta(t)$: base or arm yaw angle about the motor axis,
+  \item $\alpha(t)$: pendulum angle about the bearing-supported pivot axis, measured from the upright configuration ($\alpha=0$ upright).
 \end{itemize}
 The state vector used by all controllers is
 \[
@@ -15,13 +15,13 @@ The state vector used by all controllers is
 \section{Sign conventions}
 Throughout this report, the sign conventions are chosen such that:
 \begin{itemize}
-  \item positive $\theta$ corresponds to a fixed, consistent arm rotation direction when viewed from above, and
-  \item positive $\alpha$ corresponds to the pendulum tilting in a fixed direction relative to that arm rotation.
+  \item positive $\theta$ corresponds to one fixed arm rotation direction when viewed from above,
+  \item positive $\alpha$ corresponds to one fixed pendulum tilt direction relative to the arm.
 \end{itemize}
-In practice, different builds can differ in wiring and sensor mounting. Therefore, an experimental sign-validation procedure is used so that the measured encoder directions and the commanded motor direction are consistent with the chosen $(\theta,\alpha)$ coordinates. The modelling and controller equations in this report assume this consistency.
+In practice, different builds can differ in wiring and sensor mounting. The sign settings are therefore checked experimentally during bring-up: a small manual pendulum tilt is used to verify the sign of $\alpha$, and a small commanded motor motion is used to verify the signs of $\theta$ and the motor command. For the pinned thesis dataset, the saved settings were \texttt{motorSign = 1}, \texttt{ALPHA\_SIGN = -1}, \texttt{THETA\_SIGN = 1}, and \texttt{CTRL\_SIGN = 1}. The modelling and controller equations in this report assume this sign consistency.
 
 \section{Wrap-safe angle differences}
-Both encoders provide absolute angles in $[0,360^\circ)$. For control and reference tracking we use a wrap-safe shortest-path difference operator:
+Both encoders provide absolute angles in $[0,360^\circ)$. For control and reference tracking we use the shortest signed angle difference:
 \[
 \mathrm{diff}(a,b)\in[-180^\circ,180^\circ],\qquad \mathrm{diff}(a,b)\equiv a-b\ \text{wrapped to}\ [-180^\circ,180^\circ].
 \]
@@ -29,6 +29,7 @@ This avoids discontinuities at $0/360^\circ$. It is used, for example, for the b
 \[
 \theta_{\mathrm{err}}=\mathrm{diff}(\theta,\theta_{\mathrm{ref}}).
 \]
+In firmware this means \emph{current minus reference}, matching the helper \texttt{getAngleDiffDeg}.
 
 \section{Units policy and stepper conversion}
 The first-principles modelling in Chapter~\ref{ch:modelling} is expressed in SI units (radians, seconds). The embedded implementation and plots in this report use degrees for angles for readability.
@@ -39,18 +40,39 @@ k_s \equiv \frac{\text{steps}}{\text{degree}},
 \]
 so that $\theta$ can be converted to measured steps by $k_s\,\theta$. Likewise, an angular acceleration command (\si{\degree\per\second\squared}) can be converted to a stepper acceleration command (\si{\step\per\second\squared}) by multiplying by $k_s$.
 
-\section{Recorded signals (experiment logs)}
+When this report writes $u=\ddot{\theta}$ in the model chapters, $u$ is the abstract acceleration input. In firmware and plots, the logged command is the implementation-space version of that input, expressed in stepper units.
+
+\section{Variables and recorded signals}
+This report uses three related but different naming layers:
+\begin{itemize}
+  \item \textbf{Model variables:} $\theta$, $\alpha$, $\dot{\theta}$, $\dot{\alpha}$, and $u=\ddot{\theta}$.
+  \item \textbf{Firmware variables:} names used directly in the embedded code.
+  \item \textbf{Raw CSV columns:} the columns written directly by the logger.
+\end{itemize}
+
+\subsection*{Model variables}
+\begin{itemize}
+  \item $\theta$, $\alpha$: measured base and pendulum angles,
+  \item $\dot{\theta}$, $\dot{\alpha}$: estimated angular rates,
+  \item $u=\ddot{\theta}$: the control input used in the model and control derivations.
+\end{itemize}
+
+\subsection*{Firmware variables}
+\begin{itemize}
+  \item \texttt{thetaErr = diff(theta, thetaRef)}: base tracking error,
+  \item \texttt{thetaDotErr = thetaDot - thetaRefDot}: base-rate tracking error,
+  \item \texttt{accCmdPhysical}: commanded base acceleration before motor-sign mapping,
+  \item \texttt{thetaDotCmdMotor}: commanded motor speed after acceleration integration.
+\end{itemize}
+
+\subsection*{Raw CSV columns}
 Each experimental trial records:
 \begin{itemize}
-  \item the pendulum and base angles and their estimated derivatives, and
-  \item the commanded base acceleration and the resulting commanded step rate sent to the driver.
+  \item \texttt{alpha\_deg}, \texttt{alpha\_dot\_deg\_s},
+  \item \texttt{theta\_deg}, \texttt{theta\_dot\_deg\_s},
+  \item \texttt{acc\_cmd\_steps\_s2}, \texttt{vel\_cmd\_steps\_s},
+  \item \texttt{pos\_meas\_steps}, \texttt{position\_clamped}.
 \end{itemize}
-In summary, the principal recorded signals are:
-\begin{itemize}
-  \item $\alpha$, $\dot{\alpha}$ (deg, deg/s),
-  \item $\theta$, $\dot{\theta}$ (deg, deg/s),
-  \item commanded base acceleration $u$ (\si{\step\per\second\squared}),
-  \item commanded step rate $\dot{\theta}_{\mathrm{cmd}}$ (\si{\step\per\second}),
-  \item boolean indicators for acceleration saturation and proximity to mechanical limits.
-\end{itemize}
-In addition to the high-rate CSV stream, the firmware also prints low-rate status and diagnostic lines used to segment trials and (when possible) align host-time events to device-time signals (Chapter~\ref{ch:experiments}).
+The raw CSV does \emph{not} contain a dedicated acceleration-saturation column. Saturation percentages are computed later by the analysis pipeline from the logged command and the known firmware limits.
+
+In addition to the high-rate CSV stream, the firmware also prints low-rate status and diagnostic lines used to segment trials and, when possible, align host-time events to device-time signals (Chapter~\ref{ch:experiments}).

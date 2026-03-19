@@ -2,20 +2,16 @@
 \label{ch:framing}
 
 \section{Problem}
-This project studies upright-only stabilization of a rotary (Furuta) inverted pendulum under real hardware constraints (stepper actuation, sensor noise, limits, and real-time timing) \cite{Furuta1991,Hamza2019,Ju2025}.
+This project studies upright-only stabilization of a rotary (Furuta) inverted pendulum on real hardware \cite{Furuta1991,Hamza2019,Ju2025}. The goal is simple: keep the pendulum upright while the rig deals with stepper-actuator limits, sensor noise, missed motion, and real-time timing. The base angle is measured for feedback, but the motor is still driven by open-loop STEP/DIR commands, so the actuator does not behave like an ideal servo.
 
 \section{Key contributions (summary)}
 \begin{itemize}
-  \item \textbf{Acceleration-input control matched to stepper actuation.} Most Furuta pendulum treatments model motor torque as the input \cite{Cazzolato2011,Hamza2019}; here we derive and implement an acceleration-input formulation $u=\ddot{\theta}$ to match stepper velocity-mode actuation (acceleration integrated to a commanded step rate).
-  \item \textbf{First-principles modelling} of the custom rig (geometry, inertia, identified constants), with the full derivation included in the main body (Chapter~\ref{ch:modelling}).
-  \item \textbf{Three upright controllers} implemented and experimentally compared:
-    \begin{itemize}
-      \item Linear full-state feedback (baseline)
-      \item Hybrid nonlinear sliding mode controller (pendulum surface + gated base-centering assist)
-      \item Full-surface sliding mode controller (single surface with $\theta$-terms)
-    \end{itemize}
-  \item \textbf{Reference tracking while balancing (“nudge mode”).} A trapezoidal $\theta_{\text{ref}}$ generator with pause/resume enables servo-like base positioning while maintaining upright balance.
-  \item \textbf{Firmware robustness features} for a stepper-controlled rig: derivative filtering, wrap-safe angle differences, glitch rejection, engage gating, limits/soft limits, stall detection, and controlled disarm behavior.
+  \item \textbf{Input matched to the firmware command structure.} Most Furuta pendulum treatments use motor torque as the input \cite{Cazzolato2011,Hamza2019}. This project instead uses an acceleration-input model, then implements that input through the firmware path ``acceleration $\rightarrow$ commanded speed $\rightarrow$ stepper''.
+  \item \textbf{First-principles modelling of the custom rig.} The report derives the nonlinear model, linearizes it about the upright position, and identifies the constants used later for control design.
+  \item \textbf{Three upright controllers on one platform.} The thesis studies one linear full-state controller, one hybrid sliding-mode controller, and one full-surface sliding-mode controller on the same rig.
+  \item \textbf{Commanded base positioning while balancing.} A trapezoidal $\theta_{\text{ref}}$ generator with pause/resume logic allows nudge-mode reference moves. In the pinned dataset, this is demonstrated with the linear controller.
+  \item \textbf{Practical firmware protections for a stepper-driven rig.} These include derivative filtering, wrap-safe angle differences, glitch rejection, engage logic, soft limits, stall diagnostics, and controlled disarm behavior.
+  \item \textbf{A qualitative comparison on a fixed dataset.} Results are drawn from seven pinned runs only: H1--H3, N1, and T1--T3. The comparison is therefore qualitative and metric-based, not statistical.
 \end{itemize}
 
 \section{Reading guide}
@@ -25,6 +21,6 @@ This project studies upright-only stabilization of a rotary (Furuta) inverted pe
   \item Modelling derivation (main body): Chapter~\ref{ch:modelling}
   \item Firmware pipeline: Chapters~\ref{ch:measurement}--\ref{ch:actuation}
   \item Controllers: Chapters~\ref{ch:lin}--\ref{ch:smc4}
-  \item Experiment protocol + metric definitions: Chapter~\ref{ch:experiments}
-  \item Results + comparison: Chapter~\ref{ch:results}
+  \item Experiment protocol and metric definitions: Chapter~\ref{ch:experiments}
+  \item Results and comparison: Chapter~\ref{ch:results}
 \end{itemize}

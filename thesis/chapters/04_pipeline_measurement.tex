@@ -2,11 +2,13 @@
 \label{ch:measurement}
 
 \section{Control loop timing}
-All controllers are executed in a fixed-period real-time loop on the Arduino Mega 2560. A \emph{control tick} refers to one execution of this loop. In this project:
+All controllers run in a fixed-period real-time loop on the Arduino Mega 2560. A \emph{control tick} means one execution of this loop. In this project:
 \begin{itemize}
-  \item the nominal tick period is $T_s=\SI{5}{ms}$ (i.e., \SI{200}{Hz}),
-  \item each tick measures its actual duration using a microsecond-resolution timer and uses the measured $dt$ for all discrete-time updates,
-  \item the CSV time-series stream is logged at \SI{50}{Hz} (decimated from the \SI{200}{Hz} control tick).
+  \item the nominal tick period is $T_s=\SI{5}{ms}$ (that is, \SI{200}{Hz}),
+  \item each tick measures its actual duration using a microsecond timer,
+  \item the measured $dt$ is used for the main integrators and reference updates,
+  \item the derivative filter coefficients are computed once from the nominal \SI{5}{ms} period and are not recalculated from the measured per-tick $dt$,
+  \item the CSV time-series stream is logged at about \SI{50}{Hz} (decimated from the \SI{200}{Hz} control tick).
 \end{itemize}
 
 Because timing jitter can affect derivative estimation and controller performance, the firmware monitors:
@@ -14,34 +16,43 @@ Because timing jitter can affect derivative estimation and controller performanc
   \item minimum and maximum observed tick duration ($dt_{\min}$, $dt_{\max}$),
   \item the count of tick overruns beyond the nominal period, defined as $dt > T_{\mathrm{ov}}$ with $T_{\mathrm{ov}}=\SI{6}{ms}$.
 \end{itemize}
-These diagnostics are printed at \SI{1}{Hz} and are used as a sanity check when adding computation (e.g., trigonometry in nonlinear control modes).
+These diagnostics are printed at \SI{1}{Hz} and used as a sanity check when more computation is added, especially in nonlinear modes.
 
 \section{Derivative estimation}
-The control law requires $\dot{\alpha}$ and $\dot{\theta}$. Direct finite differences are too noisy at \SI{200}{Hz}, so the firmware uses a first-order filtered differentiator discretized by the bilinear (Tustin) transform \cite{Astrom2008,ST_RIP_2019}:
+The control law needs $\dot{\alpha}$ and $\dot{\theta}$. A raw sample-to-sample difference is too noisy at \SI{200}{Hz}, so the firmware uses a smoothed numerical derivative based on a first-order filtered differentiator and the bilinear (Tustin) transform \cite{Astrom2008,ST_RIP_2019}:
 \[
 H(s) = \frac{s}{1+s/\omega_c}.
 \]
-Applying the bilinear mapping $s \approx \frac{2}{T_s}\frac{1-z^{-1}}{1+z^{-1}}$ yields the discrete-time recursion
+Applying the bilinear mapping $s \approx \frac{2}{T_s}\frac{1-z^{-1}}{1+z^{-1}}$ gives the discrete-time recursion
 \[
 y[n] = b_0\,(x[n]-x[n-1]) - a_1\,y[n-1],
 \]
-where $x[n]$ is the measured angle (in degrees), $y[n]$ is the filtered derivative (deg/s), and with $T_s$ the nominal tick period:
+where $x[n]$ is the measured angle (in degrees), $y[n]$ is the filtered derivative (deg/s), and $T_s$ is the nominal tick period:
 \[
 b_0 = \frac{2\omega_c}{2+\omega_c T_s},\qquad
 a_1 = \frac{\omega_c T_s - 2}{2+\omega_c T_s}.
 \]
 
-The cutoff $\omega_c$ (rad/s) is tuned experimentally, and the coefficients $(b_0,a_1)$ are computed using the nominal tick period $T_s$.
+The cutoff $\omega_c$ is tuned experimentally, and the coefficients $(b_0,a_1)$ are computed using the nominal tick period $T_s$. For the firmware setting $\omega_c=\SI{450}{rad/s}$ and $T_s=\SI{5}{ms}$, the coefficients are
+\[
+b_0 = 211.7647,\qquad a_1 = 0.0588.
+\]
 
 \paragraph{Wrap handling and clamping.}
-For the pendulum angle $\alpha$, the pre-difference $(x[n]-x[n-1])$ is wrapped to $\pm 180^\circ$ to avoid a spurious $\approx 360^\circ$ jump near the encoder wrap. Both derivatives are clamped to conservative maximum magnitudes to prevent extreme one-sample spikes from dominating the controller.
+For the pendulum angle $\alpha$, the pre-difference $(x[n]-x[n-1])$ is wrapped to $\pm 180^\circ$ so the encoder wrap does not look like a false $\approx 360^\circ$ jump. After filtering, both derivatives are clamped to conservative limits:
+\[
+|\dot{\alpha}| \le \SI{300}{\degree\per\second},\qquad
+|\dot{\theta}| \le \SI{300}{\degree\per\second}.
+\]
+These limits keep single-sample spikes from dominating the controller.
 
 \section{Wrap safety and glitch rejection}
 \label{sec:measurement_glitch_rejection}
-The AS5600 sensors are read over I\textsuperscript{2}C via a multiplexer; occasional mux/I\textsuperscript{2}C glitches can produce implausible one-sample jumps. The firmware applies two layers of protection:
+The AS5600 sensors are read over I\textsuperscript{2}C via a multiplexer, so occasional mux or bus glitches can produce impossible one-sample jumps. The firmware applies three protections:
 \begin{enumerate}
-  \item \textbf{Raw jump rejection}: if a single-tick jump exceeds a configured threshold, the sample is discarded and the previous value is reused.
-  \item \textbf{Derivative reject accounting}: if the pre-difference is zeroed due to rejection, a diagnostic counter is incremented (visible in low-rate diagnostics).
+  \item \textbf{Raw jump rejection:} if a single-tick jump exceeds \SI{30}{\degree} in either $\alpha$ or $\theta$, the sample is discarded and the previous value is reused.
+  \item \textbf{Derivative-safe handling:} when a jump is rejected, the corresponding pre-difference is forced to zero so the derivative estimate does not see a large false spike.
+  \item \textbf{Reject accounting:} diagnostic counters record how often these protections are used.
 \end{enumerate}
 
 All angle differences used in control and reference tracking use the wrap-safe operator described in Chapter~\ref{ch:notation}.
