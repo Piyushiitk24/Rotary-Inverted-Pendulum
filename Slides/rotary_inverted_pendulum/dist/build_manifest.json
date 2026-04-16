@@ -1,0 +1,2820 @@
+{
+  "meta": {
+    "title": "Rotary Inverted Pendulum Thesis Deck",
+    "deck_filename": "rotary_inverted_pendulum_thesis_deck.pptx",
+    "base_deck_filename": "rotary_inverted_pendulum_thesis_base.pptx",
+    "manifest_filename": "build_manifest.json"
+  },
+  "slides": [
+    {
+      "number": 1,
+      "kind": "title",
+      "title": "Rotary (Furuta) Inverted Pendulum",
+      "subtitle": "Modelling and experimental comparison of linear and sliding-mode controllers",
+      "tag": "M.Tech Thesis  \u00b7  Experiment 2",
+      "author_line": "Piyush Tiwari  |  M.Tech (Control & Automation)  |  IIT Kanpur",
+      "date_line": "April 2026",
+      "elements": []
+    },
+    {
+      "number": 2,
+      "kind": "content",
+      "title": "Problem Framing, Contributions, and Roadmap",
+      "subtitle": "This deck keeps the hardware reality, the modelling choices, and the controller mathematics on the same thread.",
+      "elements": [
+        {
+          "type": "card",
+          "x": 0.45,
+          "y": 1.15,
+          "w": 3.0,
+          "h": 1.45,
+          "title": "Problem framing",
+          "body": null,
+          "bullets": [
+            "Upright-only balancing on a real stepper-driven Furuta rig",
+            "Measured base angle, but actuation still happens through open-loop STEP/DIR",
+            "Goal: show what it takes to make this experimentally repeatable"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 3.55,
+          "y": 1.15,
+          "w": 3.05,
+          "h": 1.45,
+          "title": "Project contributions",
+          "body": null,
+          "bullets": [
+            "Measured-stepper retrofit using an AS5600 on the motor axis",
+            "First-principles L-shaped rig model with acceleration-input control design",
+            "Three upright controllers on one hardware platform"
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 6.72,
+          "y": 1.15,
+          "w": 2.78,
+          "h": 1.45,
+          "title": "Roadmap",
+          "body": null,
+          "bullets": [
+            "Hardware and sensing",
+            "Model and filter design",
+            "Linear, hybrid SMC, full-state SMC",
+            "Pinned experimental comparison"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.45,
+          "y": 2.85,
+          "w": 9.05,
+          "h": 1.7,
+          "title": "Thesis stance",
+          "body": null,
+          "bullets": [
+            "The analytic laws are derived cleanly, but each one is followed by the firmware protections required by the stepper platform.",
+            "Acceleration is treated as the abstract control input because that matches the actual firmware path: acceleration \u2192 commanded speed \u2192 stepper.",
+            "The comparison is rigorous but honest: it uses seven pinned runs H1\u2013H3, N1, and T1\u2013T3, so conclusions are qualitative and metric-based, not statistical."
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 3,
+      "kind": "content",
+      "title": "Motivation and Problem Statement",
+      "subtitle": "The project is interesting because the plant is classic, but the actuator and sensing stack are not.",
+      "elements": [
+        {
+          "type": "card",
+          "x": 0.45,
+          "y": 1.18,
+          "w": 4.35,
+          "h": 2.0,
+          "title": "Why not just use a standard servo rig?",
+          "body": null,
+          "bullets": [
+            "The base is driven by a NEMA17 stepper through FastAccelStepper, not by a torque-controlled servo.",
+            "Missed motion is possible under load, so commanded step count is not enough for feedback.",
+            "The work is therefore both a controls problem and a hardware-software integration problem."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 1.18,
+          "w": 4.5,
+          "h": 2.0,
+          "title": "Practical problem statement",
+          "body": null,
+          "bullets": [
+            "Keep the pendulum upright near \u03b1 = 0 while respecting \u00b180\u00b0 base travel and \u00b130\u00b0 pendulum safety limits.",
+            "Estimate the required states at 200 Hz from noisy absolute encoders on a multiplexed I\u00b2C bus.",
+            "Compare a linear controller, a pendulum-surface SMC, and a full-state surface SMC on the same rig."
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.45,
+          "y": 3.45,
+          "w": 4.35,
+          "h": 1.0,
+          "title": "Naive failure mode",
+          "body": "If the controller asks for recovery torque that the stepper cannot realize, the measured state continues to look bad, and the controller can keep demanding more aggressive motion until the pendulum leaves the upright window.",
+          "bullets": null,
+          "stripe": "B91C1C",
+          "fill": "FEF2F2",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 3.45,
+          "w": 4.5,
+          "h": 1.0,
+          "title": "Thesis objective",
+          "body": "Build a technically defensible pipeline from hardware retrofit to modelling to controller implementation and quantify what each controller actually does on the real platform.",
+          "bullets": null,
+          "stripe": "047857",
+          "fill": "ECFDF5",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 4,
+      "kind": "content",
+      "title": "Why Is the Furuta Pendulum Hard?",
+      "subtitle": "The instability is fast, the plant is underactuated, and this platform adds actuator mismatch on top of that.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s04_linear_open_loop",
+          "latex": "\\ddot{\\alpha} = 100.8\\,\\alpha - 1.952\\,\\ddot{\\theta}",
+          "x": 0.6,
+          "y": 1.2,
+          "w": 4.2,
+          "h": 0.6,
+          "font_size": 22
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 1.15,
+          "w": 1.4,
+          "h": 1.25,
+          "title": "Open-loop pole",
+          "body": "$\\lambda=\\pm 12.47\\ \\mathrm{rad/s}$",
+          "bullets": null,
+          "stripe": "B91C1C",
+          "fill": "FEF2F2",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 6.65,
+          "y": 1.15,
+          "w": 1.4,
+          "h": 1.25,
+          "title": "Base travel",
+          "body": "$|\\theta| \\le 80^\\circ$",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 8.25,
+          "y": 1.15,
+          "w": 1.25,
+          "h": 1.25,
+          "title": "Engage window",
+          "body": "$|\\alpha|<3^\\circ,\\ |\\dot{\\alpha}|<20^\\circ/s$",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.45,
+          "y": 2.25,
+          "w": 4.45,
+          "h": 2.0,
+          "title": "Classical difficulty",
+          "body": null,
+          "bullets": [
+            "Underactuated system: the pendulum is not actuated directly; only the base is.",
+            "The unstable mode is fast enough that estimation and actuation lag matter immediately.",
+            "Nonlinear gravity and centrifugal coupling remain active even near upright."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 2.25,
+          "w": 4.45,
+          "h": 2.0,
+          "title": "Platform-specific difficulty",
+          "body": null,
+          "bullets": [
+            "The controller computes acceleration, but the firmware realizes it by integrating to a speed command.",
+            "The base is measured in closed loop, but the motor itself is still commanded open loop.",
+            "Sensor mux glitches, missed steps, and mechanical travel limits all feed back into control design."
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 5,
+      "kind": "content",
+      "title": "Hardware Overview",
+      "subtitle": "This is a custom stepper-driven rotary inverted pendulum with an L-shaped pendulum and dual absolute encoders.",
+      "elements": [
+        {
+          "type": "image",
+          "asset_id": "rig_photo",
+          "src": "thesis/figures/rig_photo.png",
+          "x": 0.45,
+          "y": 1.18,
+          "w": 4.9,
+          "h": 3.3,
+          "fit": "contain",
+          "asset_path": "assets/figures/rig_photo.png"
+        },
+        {
+          "type": "text",
+          "x": 0.55,
+          "y": 4.55,
+          "w": 4.75,
+          "h": 0.28,
+          "text": "Custom stepper-driven Furuta rig used for all experiments.",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "left",
+          "valign": "top"
+        },
+        {
+          "type": "card",
+          "x": 5.55,
+          "y": 1.18,
+          "w": 3.95,
+          "h": 1.55,
+          "title": "Main hardware stack",
+          "body": null,
+          "bullets": [
+            "Arduino Mega 2560 + TMC2209 + FastAccelStepper",
+            "NEMA17 stepper at 1600 microsteps/rev",
+            "Two AS5600 absolute encoders via PCA9548A mux"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.55,
+          "y": 2.92,
+          "w": 3.95,
+          "h": 1.55,
+          "title": "Mechanical plant",
+          "body": null,
+          "bullets": [
+            "Horizontal arm rotating about the vertical base axis \u03b8",
+            "L-shaped pendulum with horizontal pivot shaft and vertical swinging segment \u03b1",
+            "Three 688RS bearings supporting the pendulum pivot"
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 6,
+      "kind": "key",
+      "title": "Sensor Architecture: Two AS5600s Through One I\u00b2C Mux",
+      "subtitle": "The sensing path is simple in concept but critical in practice because both encoders share the same fixed AS5600 address.",
+      "elements": [
+        {
+          "type": "flow",
+          "x": 0.55,
+          "y": 1.28,
+          "w": 8.9,
+          "h": 0.95,
+          "nodes": [
+            {
+              "label": "Pendulum\\nAS5600",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "Base\\nAS5600",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "PCA9548A\\nchannel select",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "200 \u00b5s\\nsettle delay",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "Arduino\\nWire @ 400 kHz",
+              "fill": "D6E8F5"
+            }
+          ],
+          "arrow_color": "0D6EAF"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.55,
+          "w": 4.25,
+          "h": 1.75,
+          "title": "Measurement details that matter",
+          "body": null,
+          "bullets": [
+            "Channel 0 reads \u03b1, channel 1 reads \u03b8.",
+            "Both sensors are 12-bit absolute encoders over [0, 360\u00b0).",
+            "The firmware averages 25 calibration samples to reduce roughly 0.5\u00b0 single-sample noise."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 2.55,
+          "w": 4.4,
+          "h": 1.75,
+          "title": "Why this deserves emphasis",
+          "body": null,
+          "bullets": [
+            "The mux is not cosmetic; it is the enabling mechanism that makes dual-AS5600 sensing possible on one bus.",
+            "Noise handling starts at the wiring and magnet geometry, not only in software.",
+            "Every later derivative and controller estimate depends on this sensing path being trustworthy."
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": true
+    },
+    {
+      "number": 7,
+      "kind": "key",
+      "title": "Stepper Motor \u2192 Measured Axis: Closed-Loop Base Tracking Retrofit",
+      "subtitle": "The stepper is still commanded open loop, but the output shaft is now directly measured by a coaxial AS5600 assembly.",
+      "elements": [
+        {
+          "type": "image",
+          "asset_id": "sensor_front",
+          "src": "thesis/figures/sensor_housing_front.png",
+          "x": 0.55,
+          "y": 1.2,
+          "w": 2.7,
+          "h": 1.55,
+          "fit": "contain",
+          "asset_path": "assets/figures/sensor_front.png"
+        },
+        {
+          "type": "image",
+          "asset_id": "sensor_back",
+          "src": "thesis/figures/sensor_housing_back.png",
+          "x": 3.45,
+          "y": 1.2,
+          "w": 2.7,
+          "h": 1.55,
+          "fit": "contain",
+          "asset_path": "assets/figures/sensor_back.png"
+        },
+        {
+          "type": "image",
+          "asset_id": "sensor_fixed",
+          "src": "thesis/figures/sensor_housing_fixed_to_motor.png",
+          "x": 6.35,
+          "y": 1.2,
+          "w": 2.7,
+          "h": 1.55,
+          "fit": "contain",
+          "asset_path": "assets/figures/sensor_fixed.png"
+        },
+        {
+          "type": "text",
+          "x": 0.75,
+          "y": 2.8,
+          "w": 2.25,
+          "h": 0.2,
+          "text": "Front view",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "text",
+          "x": 3.65,
+          "y": 2.8,
+          "w": 2.25,
+          "h": 0.2,
+          "text": "Back view",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "text",
+          "x": 6.55,
+          "y": 2.8,
+          "w": 2.25,
+          "h": 0.2,
+          "text": "Mounted on the motor base",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 3.2,
+          "w": 4.2,
+          "h": 1.45,
+          "title": "Physical trick",
+          "body": null,
+          "bullets": [
+            "A magnet is fixed coaxially to the motor output shaft.",
+            "A rigid 3D-printed housing keeps the AS5600 aligned with controlled air gap.",
+            "This turns the motor axis into a measured state instead of trusting commanded steps."
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 3.2,
+          "w": 4.3,
+          "h": 1.45,
+          "title": "Why it is not a true servo yet",
+          "body": null,
+          "bullets": [
+            "The controller now knows the actual base angle \u03b8.",
+            "But the TMC2209 still receives STEP/DIR speed commands, not torque commands.",
+            "So the measured axis is closed-loop in sensing, while actuation remains open-loop in realization."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": true
+    },
+    {
+      "number": 8,
+      "kind": "content",
+      "title": "Hardware Constraints and Limitations",
+      "subtitle": "The controller design is shaped as much by hardware limits as by the equations.",
+      "elements": [
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 1.18,
+          "w": 2.15,
+          "h": 1.45,
+          "title": "Mechanical travel",
+          "body": null,
+          "bullets": [
+            "Base hard limit: $|\\theta|>80^\\circ$",
+            "Soft outward clamp begins near $78^\\circ$",
+            "Pendulum hard limit: $|\\alpha|>30^\\circ$"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 2.95,
+          "y": 1.18,
+          "w": 2.15,
+          "h": 1.45,
+          "title": "Actuation mismatch",
+          "body": null,
+          "bullets": [
+            "No torque control",
+            "Acceleration integrated to commanded speed",
+            "Motor can stall or miss motion"
+          ],
+          "stripe": "B91C1C",
+          "fill": "FEF2F2",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.35,
+          "y": 1.18,
+          "w": 1.95,
+          "h": 1.45,
+          "title": "Loop timing",
+          "body": null,
+          "bullets": [
+            "$T_s=5$ ms",
+            "200 Hz control loop",
+            "About 50 Hz logging"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 7.55,
+          "y": 1.18,
+          "w": 1.95,
+          "h": 1.45,
+          "title": "Stall monitor",
+          "body": null,
+          "bullets": [
+            "Expect motion above 500 steps/s",
+            "Warn if $|\\Delta\\theta|<0.10^\\circ$ for 150 ms"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.9,
+          "w": 4.45,
+          "h": 1.55,
+          "title": "What this means for controller design",
+          "body": null,
+          "bullets": [
+            "The implemented law must be stepper-friendly: bounded speed, bounded acceleration, and robust to missed motion.",
+            "Any claim of stability must be read together with the firmware aborts, soft limits, and actuator shaping."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.25,
+          "y": 2.9,
+          "w": 4.25,
+          "h": 1.55,
+          "title": "Firmware response to failure",
+          "body": null,
+          "bullets": [
+            "Soft-limit suppression near the base stop",
+            "Predictable disarm to IDLE after debounced limit violation",
+            "Auto-rearm only after the pendulum re-enters the engage window"
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 9,
+      "kind": "content",
+      "title": "State Machine: Calibrate \u2192 Idle \u2192 Active",
+      "subtitle": "The control software is organized around an explicit state machine instead of a monolithic loop with hidden assumptions.",
+      "elements": [
+        {
+          "type": "flow",
+          "x": 0.75,
+          "y": 1.35,
+          "w": 8.6,
+          "h": 1.05,
+          "nodes": [
+            {
+              "label": "CALIBRATE",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "IDLE",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "ACTIVE",
+              "fill": "ECFDF5"
+            }
+          ],
+          "arrow_color": "0D6EAF"
+        },
+        {
+          "type": "card",
+          "x": 0.65,
+          "y": 2.75,
+          "w": 4.2,
+          "h": 1.65,
+          "title": "Engage logic",
+          "body": null,
+          "bullets": [
+            "Require $|\\alpha|<3^\\circ$ and $|\\dot{\\alpha}|<20^\\circ/s$",
+            "Hold the condition for 20 ticks = 100 ms before engage",
+            "Keep derivative history warm when transitioning from IDLE to ACTIVE"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 2.75,
+          "w": 4.2,
+          "h": 1.65,
+          "title": "Disarm logic",
+          "body": null,
+          "bullets": [
+            "Debounced FALLEN detection over 3 ticks",
+            "Immediate nonlinear abort outside the upright-only SMC window",
+            "Disable stepper outputs and return to IDLE in a predictable way"
+          ],
+          "stripe": "B91C1C",
+          "fill": "FEF2F2",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 10,
+      "kind": "content",
+      "title": "Measurement Pipeline Before Any Controller Sees the States",
+      "subtitle": "The estimator is intentionally simple, but the preprocessing around it is where most of the practical robustness comes from.",
+      "elements": [
+        {
+          "type": "flow",
+          "x": 0.55,
+          "y": 1.28,
+          "w": 8.95,
+          "h": 0.95,
+          "nodes": [
+            {
+              "label": "Read raw\\n\u03b1, \u03b8",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "Wrap-safe\\nangle diff",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "Reject >30\u00b0\\none-tick jumps",
+              "fill": "FEF2F2"
+            },
+            {
+              "label": "Tustin\\nderivative filter",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "Clamp\\n\u03b1\u0307, \u03b8\u0307",
+              "fill": "EEF5FB"
+            }
+          ],
+          "arrow_color": "0D6EAF"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.55,
+          "w": 4.15,
+          "h": 1.85,
+          "title": "Key numerical settings",
+          "body": null,
+          "bullets": [
+            "Nominal loop: 200 Hz, logging: about 50 Hz",
+            "Jump rejection threshold: $30^\\circ$ per control tick",
+            "Derivative clamps: $|\\dot{\\alpha}|, |\\dot{\\theta}| \\le 300^\\circ/s$"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 2.55,
+          "w": 4.45,
+          "h": 1.85,
+          "title": "Why this stage is central",
+          "body": null,
+          "bullets": [
+            "Both SMC surfaces depend directly on \u03b1\u0307, so bad derivative estimates immediately corrupt the control law.",
+            "The glitch handling forces impossible jumps to zero before the filter sees them.",
+            "This is why the estimator deserves a dedicated section rather than a one-line implementation note."
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 11,
+      "kind": "content",
+      "title": "Modelling Strategy and Assumptions",
+      "subtitle": "The model is idealized for control design, but the rig-specific geometry is retained instead of collapsing to the usual simplified pendulum picture.",
+      "elements": [
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 1.2,
+          "w": 3.0,
+          "h": 2.05,
+          "title": "Assumptions",
+          "body": null,
+          "bullets": [
+            "Rigid links and frictionless joints",
+            "No missed steps, no sensor glitches, no actuator saturation inside the analytic model",
+            "Commanded base acceleration \u03b8\u0308 treated as the abstract input"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 3.75,
+          "y": 1.2,
+          "w": 2.75,
+          "h": 2.05,
+          "title": "Geometry retained",
+          "body": null,
+          "bullets": [
+            "L-shaped pendulum instead of a single uniform rod",
+            "Mass split between non-swinging shaft mass and swinging mass",
+            "Pendulum COM computed from the real vertical rod plus tip mass"
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 6.75,
+          "y": 1.2,
+          "w": 2.7,
+          "h": 2.05,
+          "title": "Grouped constants",
+          "body": null,
+          "bullets": [
+            "$K = m_p L_r l_p$",
+            "$G = m_p g l_p$",
+            "$\\hat J_0 = \\hat J_1 + m_p L_r^2$"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 3.55,
+          "w": 8.9,
+          "h": 1.0,
+          "title": "Design choice to remember",
+          "body": "Torque appears in the full Euler\u2013Lagrange equations, but the controller chapters intentionally rewrite the upright dynamics in acceleration-input form because that is the quantity the firmware can shape most directly.",
+          "bullets": null,
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 12,
+      "kind": "content",
+      "title": "Kinematics and Coordinates",
+      "subtitle": "The coupling between arm rotation and pendulum swing appears already at the position and velocity level.",
+      "elements": [
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 1.25,
+          "w": 3.25,
+          "h": 1.9,
+          "title": "Coordinates",
+          "body": null,
+          "bullets": [
+            "$\\theta$: base yaw angle",
+            "$\\alpha$: pendulum angle, with $\\alpha=0$ upright",
+            "$L_r$: motor axis to pendulum pivot",
+            "$l_p$: pivot to pendulum COM"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "equation",
+          "eq_id": "s12_rp_v2",
+          "latex": "\\begin{aligned}\\mathbf r_p &= L_r\\mathbf e_r + l_p(\\sin\\alpha\\,\\mathbf e_t + \\cos\\alpha\\,\\mathbf k)\\\\[3pt]v^2 &= (L_r^2+l_p^2\\sin^2\\alpha)\\dot\\theta^2 + l_p^2\\dot\\alpha^2 + 2L_r l_p\\cos\\alpha\\,\\dot\\theta\\dot\\alpha\\end{aligned}",
+          "x": 4.0,
+          "y": 1.3,
+          "w": 5.1,
+          "h": 1.55,
+          "font_size": 20
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 3.45,
+          "w": 8.9,
+          "h": 1.15,
+          "title": "Interpretation",
+          "body": "The mixed term $2L_r l_p \\cos\\alpha\\,\\dot{\\theta}\\dot{\\alpha}$ is the first clear sign that arm motion and pendulum motion are dynamically coupled even before the equations of motion are formed.",
+          "bullets": null,
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 13,
+      "kind": "content",
+      "title": "Energies, Lagrangian, and Nonlinear Equations of Motion",
+      "subtitle": "Once the rig-specific kinetic energy terms are retained, the Euler\u2013Lagrange equations expose the exact nonlinear structure later used by the SMC designs.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s13_lagrangian",
+          "latex": "\\begin{aligned}T &= \\tfrac12(\\hat J_0+\\hat J_2\\sin^2\\alpha)\\dot\\theta^2 + \\tfrac12\\hat J_2\\dot\\alpha^2 + K\\cos\\alpha\\,\\dot\\theta\\dot\\alpha\\\\[3pt]V &= m_p g l_p \\cos\\alpha\\\\[3pt]\\mathcal L &= T - V\\end{aligned}",
+          "x": 0.65,
+          "y": 1.22,
+          "w": 4.25,
+          "h": 1.6,
+          "font_size": 18
+        },
+        {
+          "type": "equation",
+          "eq_id": "s13_eom",
+          "latex": "\\begin{aligned}(\\hat J_0+\\hat J_2\\sin^2\\alpha)\\ddot\\theta + K\\cos\\alpha\\,\\ddot\\alpha + \\hat J_2\\sin(2\\alpha)\\dot\\theta\\dot\\alpha - K\\sin\\alpha\\,\\dot\\alpha^2 &= \\tau\\\\[4pt]K\\cos\\alpha\\,\\ddot\\theta + \\hat J_2\\ddot\\alpha - \\tfrac12\\hat J_2\\sin(2\\alpha)\\dot\\theta^2 - G\\sin\\alpha &= 0\\end{aligned}",
+          "x": 5.1,
+          "y": 1.22,
+          "w": 4.15,
+          "h": 1.75,
+          "font_size": 16
+        },
+        {
+          "type": "card",
+          "x": 0.65,
+          "y": 3.35,
+          "w": 8.6,
+          "h": 1.2,
+          "title": "What matters later",
+          "body": "These equations preserve the $\\hat J_2\\sin^2\\alpha$ inertia modulation, the $\\sin\\alpha\\cos\\alpha\\,\\dot\\theta^2$ centrifugal effect, and the coupling through $K\\cos\\alpha$, which are precisely the terms the nonlinear controllers exploit.",
+          "bullets": null,
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 14,
+      "kind": "key",
+      "title": "What Our Model Retains vs Common Simplified Furuta Models",
+      "subtitle": "The point is not rhetorical superiority; it is that several small-looking terms are exactly the ones that matter when you move from a teaching model to a custom stepper rig.",
+      "elements": [
+        {
+          "type": "table",
+          "x": 0.55,
+          "y": 1.28,
+          "w": 8.95,
+          "h": 2.55,
+          "headers": [
+            "Feature",
+            "Common simplified model",
+            "This thesis model"
+          ],
+          "rows": [
+            [
+              "Pendulum geometry",
+              "Uniform rod abstraction",
+              "Actual L-shaped geometry with shaft mass separated from swinging mass"
+            ],
+            [
+              "Yaw inertia term",
+              "Often constant",
+              "Retains $\\hat J_2\\sin^2\\alpha$ inside the mass matrix"
+            ],
+            [
+              "Pendulum rotational KE",
+              "Often collapsed or omitted",
+              "Retains $T_{\\mathrm{rot}}=\\tfrac12J_p(\\dot\\alpha^2+\\sin^2\\alpha\\,\\dot\\theta^2)$"
+            ],
+            [
+              "Centrifugal coupling",
+              "Often dropped near upright",
+              "Retains $\\sin\\alpha\\cos\\alpha\\,\\dot\\theta^2$ explicitly"
+            ],
+            [
+              "Control input used later",
+              "Motor torque",
+              "Commanded base acceleration matched to firmware architecture"
+            ]
+          ],
+          "fill_header": "FEF3C7",
+          "fill_body": "FFFFFF"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 4.05,
+          "w": 8.95,
+          "h": 0.6,
+          "title": "Takeaway",
+          "body": "The retained terms are not decorative complexity; they are the nonlinear structure that later appears again in the hybrid and full-state SMC derivations.",
+          "bullets": null,
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": true
+    },
+    {
+      "number": 15,
+      "kind": "key",
+      "title": "Acceleration as Input: Why and How",
+      "subtitle": "The decisive modelling move is to redesign the plant around the quantity the firmware can shape: commanded base acceleration.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s15_acc_input",
+          "latex": "\\ddot{\\alpha} = A\\sin\\alpha + \\sin\\alpha\\cos\\alpha\\,\\dot{\\theta}^2 - B\\cos\\alpha\\,\\ddot{\\theta}",
+          "x": 0.75,
+          "y": 1.25,
+          "w": 4.45,
+          "h": 0.65,
+          "font_size": 22
+        },
+        {
+          "type": "flow",
+          "x": 5.45,
+          "y": 1.12,
+          "w": 3.85,
+          "h": 1.05,
+          "nodes": [
+            {
+              "label": "Controller\\ncomputes \u03b8\u0308",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "Integrate to\\ncommanded \u03b8\u0307",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "FastAccelStepper\\nspeed command",
+              "fill": "D6E8F5"
+            }
+          ],
+          "arrow_color": "0D6EAF"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.55,
+          "w": 4.4,
+          "h": 1.9,
+          "title": "Why this is architecturally cleaner",
+          "body": null,
+          "bullets": [
+            "The control law becomes independent of the driver current-control internals.",
+            "The model matches the actual firmware path instead of pretending the stepper is torque controlled.",
+            "The downside is explicit: the hardware does not realize the commanded acceleration perfectly under load."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.15,
+          "y": 2.55,
+          "w": 4.35,
+          "h": 1.9,
+          "title": "Numerical constants used later",
+          "body": null,
+          "bullets": [
+            "$A = 100.8$",
+            "$B = 1.952$",
+            "$k_s = 4.444\\ \\mathrm{step/deg}$"
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": true
+    },
+    {
+      "number": 16,
+      "kind": "content",
+      "title": "Linearisation About Upright",
+      "subtitle": "Around \u03b1 \u2248 0 the dynamics simplify enough for transparent state-space design while still keeping the main unstable physics visible.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s16_linearised",
+          "latex": "\\begin{aligned}\\sin\\alpha &\\approx \\alpha,\\qquad \\cos\\alpha \\approx 1\\\\[2pt]\\ddot{\\alpha} &= 100.8\\,\\alpha - 1.952\\,\\ddot{\\theta}\\end{aligned}",
+          "x": 0.75,
+          "y": 1.28,
+          "w": 4.35,
+          "h": 0.95,
+          "font_size": 20
+        },
+        {
+          "type": "card",
+          "x": 5.35,
+          "y": 1.2,
+          "w": 4.0,
+          "h": 1.05,
+          "title": "Open-loop fall rate",
+          "body": "$\\lambda = \\pm \\sqrt{G/J_{eq}} = \\pm 12.47\\ \\mathrm{rad/s}$",
+          "bullets": null,
+          "stripe": "B91C1C",
+          "fill": "FEF2F2",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.65,
+          "w": 4.35,
+          "h": 1.85,
+          "title": "Why this linearisation is still useful",
+          "body": null,
+          "bullets": [
+            "It exposes the unstable pendulum mode and the base-to-pendulum control effectiveness directly.",
+            "It gives a compact four-state plant for pole placement and LQR.",
+            "It is also the benchmark against which the nonlinear controllers are judged."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.15,
+          "y": 2.65,
+          "w": 4.35,
+          "h": 1.85,
+          "title": "What it does not capture",
+          "body": null,
+          "bullets": [
+            "Nonlinear gravity $A\\sin\\alpha$ away from small angles",
+            "Centrifugal coupling $\\sin\\alpha\\cos\\alpha\\,\\dot\\theta^2$",
+            "Actuator saturation, missed steps, and sensing glitches"
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 17,
+      "kind": "content",
+      "title": "State-Space Representation",
+      "subtitle": "The linear controller sees the rig as a four-state acceleration-input plant.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s17_state_space",
+          "latex": "\\begin{aligned}\\mathbf x &= \\begin{bmatrix}\\theta & \\alpha & \\dot{\\theta} & \\dot{\\alpha}\\end{bmatrix}^{\\mathsf T}\\\\[3pt]\\dot{\\mathbf x} &= \\mathbf A \\mathbf x + \\mathbf B u,\\qquad u\\equiv \\ddot{\\theta}\\\\[3pt]\\mathbf A &= \\begin{bmatrix}0&0&1&0\\\\0&0&0&1\\\\0&0&0&0\\\\0&100.8&0&0\\end{bmatrix},\\qquad \\mathbf B = \\begin{bmatrix}0\\\\0\\\\1\\\\-1.952\\end{bmatrix}\\end{aligned}",
+          "x": 0.65,
+          "y": 1.28,
+          "w": 6.2,
+          "h": 1.35,
+          "font_size": 16
+        },
+        {
+          "type": "card",
+          "x": 7.05,
+          "y": 1.25,
+          "w": 2.35,
+          "h": 1.45,
+          "title": "Interpretation",
+          "body": null,
+          "bullets": [
+            "\u03b8\u0308 acts directly on \u03b8\u0307",
+            "The same \u03b8\u0308 also drives \u03b1\u0308 through \u2212B",
+            "\u03b1 feeds back as the unstable mode through A"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.65,
+          "y": 3.05,
+          "w": 8.75,
+          "h": 1.5,
+          "title": "Why this form is convenient",
+          "body": "It gives a direct bridge from the modelling chapter to controller synthesis: one can place poles analytically, derive an LQR gain, and then convert the result into stepper acceleration units using the fixed conversion $k_s=4.444$.",
+          "bullets": null,
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 18,
+      "kind": "content",
+      "title": "Real Firmware Control Architecture",
+      "subtitle": "This is the practical control-system block diagram actually implemented in the firmware, not an idealized textbook loop.",
+      "elements": [
+        {
+          "type": "flow",
+          "x": 0.45,
+          "y": 1.25,
+          "w": 9.05,
+          "h": 1.1,
+          "nodes": [
+            {
+              "label": "AS5600\\n\u03b8, \u03b1",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "Mux select\\n+ settle",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "Wrap +\\nglitch reject",
+              "fill": "FEF2F2"
+            },
+            {
+              "label": "Tustin\\nfilter",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "Controller",
+              "fill": "FEF3C7"
+            },
+            {
+              "label": "Sign map",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "\u03b8\u0308 \u2192 \u03b8\u0307\\nintegrator",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "Deadband +\\nreverse stop + limits",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "FastAccelStepper\\n\u2192 motor",
+              "fill": "D6E8F5"
+            }
+          ],
+          "arrow_color": "0D6EAF"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.8,
+          "w": 4.35,
+          "h": 1.7,
+          "title": "Where the architecture differs from a servo textbook",
+          "body": null,
+          "bullets": [
+            "The controller closes the loop around measured \u03b8 and \u03b1, but the actuator channel is still speed-command based.",
+            "The accel-to-speed integrator and speed deadband are part of the plant as seen by software.",
+            "This is why practical protections are not optional add-ons."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.1,
+          "y": 2.8,
+          "w": 4.3,
+          "h": 1.7,
+          "title": "Explicit protection layers",
+          "body": null,
+          "bullets": [
+            "Soft-limit suppression near \u00b180\u00b0",
+            "Stop-before-reverse to avoid direction chatter",
+            "Stall diagnostics based on measured \u03b8, not only commanded speed"
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 19,
+      "kind": "key",
+      "title": "State Estimation: Bilinear Derivative Filter",
+      "subtitle": "The derivative filter is mathematically small, but it is one of the highest leverage implementation choices in the whole project.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s19_filter",
+          "latex": "\\begin{aligned}H(s) &= \\frac{s}{1+s/\\omega_c}\\\\[3pt]y[n] &= b_0\\,(x[n]-x[n-1]) - a_1\\,y[n-1]\\end{aligned}",
+          "x": 0.65,
+          "y": 1.25,
+          "w": 4.25,
+          "h": 0.95,
+          "font_size": 22
+        },
+        {
+          "type": "card",
+          "x": 5.15,
+          "y": 1.18,
+          "w": 4.2,
+          "h": 1.15,
+          "title": "Implemented coefficients",
+          "body": "$b_0 = \\frac{2\\omega_c}{2+\\omega_c T_s},\\qquad a_1 = \\frac{\\omega_c T_s - 2}{\\omega_c T_s + 2}$",
+          "bullets": null,
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.65,
+          "w": 4.25,
+          "h": 1.8,
+          "title": "Practical estimator details",
+          "body": null,
+          "bullets": [
+            "Pendulum angle increments are wrapped into \u00b1180\u00b0 before filtering.",
+            "Rejected jumps force the corresponding increment to zero, so the filter does not see a false spike.",
+            "The filtered derivatives are then clamped before entering control."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 2.65,
+          "w": 4.35,
+          "h": 1.8,
+          "title": "Chosen operating point",
+          "body": null,
+          "bullets": [
+            "$\\omega_c = 450\\ \\mathrm{rad/s}$, so $f_c \\approx 71.6$ Hz",
+            "$T_s = 5$ ms at 200 Hz",
+            "Numerically: $b_0 = 211.7647,\\ a_1 = 0.0588$"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": true
+    },
+    {
+      "number": 20,
+      "kind": "content",
+      "title": "Filter Coefficient Derivation and Cutoff Selection",
+      "subtitle": "The cutoff is high enough to keep derivative lag small, but the roll-off is still strong enough to tame encoder quantization and mux glitches.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s20_tustin",
+          "latex": "\\begin{aligned}s &\\leftarrow \\frac{2}{T}\\frac{1-z^{-1}}{1+z^{-1}}\\\\[3pt]b_0 &= \\frac{2\\omega_c}{2+\\omega_c T},\\qquad a_1 = \\frac{\\omega_c T-2}{\\omega_c T+2}\\end{aligned}",
+          "x": 0.65,
+          "y": 1.25,
+          "w": 4.55,
+          "h": 0.9,
+          "font_size": 22
+        },
+        {
+          "type": "card",
+          "x": 5.45,
+          "y": 1.18,
+          "w": 3.95,
+          "h": 1.05,
+          "title": "Why not recompute every tick?",
+          "body": "The firmware measures actual dt for integrators and reference updates, but the derivative coefficients are fixed from the nominal 5 ms period to keep the implementation simple and stable.",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.65,
+          "w": 4.25,
+          "h": 1.85,
+          "title": "Cutoff tradeoff",
+          "body": null,
+          "bullets": [
+            "Lower \u03c9c: cleaner derivative, but more phase lag",
+            "Higher \u03c9c: sharper derivative, but more noise amplification",
+            "Chosen value 450 rad/s was found to be a workable compromise on this hardware"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 2.65,
+          "w": 4.35,
+          "h": 1.85,
+          "title": "Firmware-side safety around the filter",
+          "body": null,
+          "bullets": [
+            "30\u00b0 per-tick jump rejection before filtering",
+            "Derivative clamping after filtering",
+            "Diagnostic counters for glitch rejections and I\u00b2C faults"
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 21,
+      "kind": "content",
+      "title": "Linear Full-State Feedback by Pole Placement",
+      "subtitle": "The baseline controller is derived analytically from the linearized acceleration-input plant.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s21_lin_feedback",
+          "latex": "\\begin{aligned}u &= -\\mathbf K \\mathbf x\\\\[3pt]\\mathbf K &= \\begin{bmatrix}k_\\theta & k_\\alpha & k_{\\dot\\theta} & k_{\\dot\\alpha}\\end{bmatrix}\\\\[4pt]s^4 + a_3 s^3 + a_2 s^2 + a_1 s + a_0 &= 0\\end{aligned}",
+          "x": 0.65,
+          "y": 1.22,
+          "w": 4.4,
+          "h": 1.05,
+          "font_size": 20
+        },
+        {
+          "type": "card",
+          "x": 5.3,
+          "y": 1.18,
+          "w": 4.1,
+          "h": 1.1,
+          "title": "Coefficient relations",
+          "body": "$a_3 = k_{\\dot\\theta} - B k_{\\dot\\alpha},\\ a_2 = k_\\theta - A - Bk_\\alpha,\\ a_1 = -A k_{\\dot\\theta},\\ a_0 = -A k_\\theta$",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.7,
+          "w": 4.35,
+          "h": 1.8,
+          "title": "Design idea",
+          "body": null,
+          "bullets": [
+            "Choose a fast second-order factor for the pendulum mode.",
+            "Choose a slower second-order factor for the base-centering mode.",
+            "Match coefficients directly instead of using Ackermann\u2019s formula or a numerical black box."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.1,
+          "y": 2.7,
+          "w": 4.3,
+          "h": 1.8,
+          "title": "Why this baseline matters",
+          "body": null,
+          "bullets": [
+            "The linear controller is the calmest and most interpretable controller in the thesis.",
+            "It also provides the shared base-centering gains reused later by the hybrid and full-state SMC implementations."
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 22,
+      "kind": "content",
+      "title": "Closed-Form Gain Calculation and Stepper Conversion",
+      "subtitle": "The gains are first derived in degree-space dynamics and then converted into stepper acceleration units.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s22_gain_formulas",
+          "latex": "\\begin{aligned}k_\\theta &= -\\frac{\\tilde a_0}{A},\\qquad k_{\\dot\\theta} = -\\frac{\\tilde a_1}{A}\\\\[3pt]k_{\\dot\\alpha} &= \\frac{k_{\\dot\\theta}-\\tilde a_3}{B},\\qquad k_\\alpha = \\frac{k_\\theta - A - \\tilde a_2}{B}\\end{aligned}",
+          "x": 0.65,
+          "y": 1.22,
+          "w": 4.55,
+          "h": 0.95,
+          "font_size": 21
+        },
+        {
+          "type": "card",
+          "x": 5.4,
+          "y": 1.15,
+          "w": 4.0,
+          "h": 1.25,
+          "title": "Firmware gains used in experiments",
+          "body": "$K_\\theta=31.5,\\ K_\\alpha=725.6,\\ K_{\\dot\\theta}=28.3,\\ K_{\\dot\\alpha}=73.5$",
+          "bullets": null,
+          "stripe": "047857",
+          "fill": "ECFDF5",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.7,
+          "w": 4.1,
+          "h": 1.8,
+          "title": "Unit conversion",
+          "body": null,
+          "bullets": [
+            "$k_s = 1600/360 = 4.444\\ \\mathrm{step/deg}$",
+            "Theoretical gains are multiplied by ks to obtain stepper acceleration units.",
+            "The deployed gains are then tuned on hardware while preserving the analytic structure."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 4.95,
+          "y": 2.7,
+          "w": 4.45,
+          "h": 1.8,
+          "title": "Why this slide matters",
+          "body": null,
+          "bullets": [
+            "It shows the bridge from derivation to firmware constants explicitly.",
+            "The gains shown in code are not arbitrary empirical numbers; they sit on top of a closed-form design path."
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 23,
+      "kind": "content",
+      "title": "LQR as a Secondary Design Path",
+      "subtitle": "LQR is included as a compact alternative derivation, but the thesis keeps pole placement as the main transparent design route.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s23_lqr",
+          "latex": "\\min_u \\int_0^\\infty (\\mathbf x^\\mathsf T Q \\mathbf x + u^\\mathsf T R u)\\,dt,\\qquad \\mathbf K_{\\mathrm{LQR}} = R^{-1} B^\\mathsf T P",
+          "x": 0.75,
+          "y": 1.28,
+          "w": 4.8,
+          "h": 0.6,
+          "font_size": 22
+        },
+        {
+          "type": "card",
+          "x": 5.8,
+          "y": 1.18,
+          "w": 3.55,
+          "h": 1.2,
+          "title": "Why it is not the main story",
+          "body": null,
+          "bullets": [
+            "The resulting gain depends on chosen Q/R weights rather than explicit modal targets.",
+            "Pole placement was better for explaining the intended pendulum/base mode separation."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.75,
+          "w": 4.2,
+          "h": 1.65,
+          "title": "Why still include it",
+          "body": null,
+          "bullets": [
+            "It confirms the same linearized plant can be handled with standard optimal control machinery.",
+            "It is useful as a cross-check and as a future tuning path if the cost function is made actuator-aware."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 2.75,
+          "w": 4.35,
+          "h": 1.65,
+          "title": "Design takeaway",
+          "body": "This thesis uses LQR as supporting evidence that the linearized model is internally consistent, not as a competing headline controller branch.",
+          "bullets": null,
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 24,
+      "kind": "content",
+      "title": "Trapezoidal Reference Profiler and Stability Gates",
+      "subtitle": "The nudge mode is not a separate controller; it is a reference-generation layer wrapped around the same balancing stack.",
+      "elements": [
+        {
+          "type": "flow",
+          "x": 0.55,
+          "y": 1.25,
+          "w": 8.95,
+          "h": 0.95,
+          "nodes": [
+            {
+              "label": "User target\\n\u03b8_target",
+              "fill": "D6E8F5"
+            },
+            {
+              "label": "Trapezoidal\\nprofile",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "Stability\\ngate",
+              "fill": "FEF3C7"
+            },
+            {
+              "label": "Pause /\\nresume",
+              "fill": "EEF5FB"
+            },
+            {
+              "label": "\u03b8_ref, \u03b8\u0307_ref, \u03b8\u0308_ref",
+              "fill": "D6E8F5"
+            }
+          ],
+          "arrow_color": "0D6EAF"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.55,
+          "w": 4.15,
+          "h": 1.85,
+          "title": "Profile settings used in the thesis",
+          "body": null,
+          "bullets": [
+            "Target limit: $|\\theta_{\\mathrm{target}}| \\le 35^\\circ$",
+            "Max reference speed: $12^\\circ/s$",
+            "Max reference acceleration: $60^\\circ/s^2$"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 2.55,
+          "w": 4.45,
+          "h": 1.85,
+          "title": "Pause / resume logic",
+          "body": null,
+          "bullets": [
+            "Keep moving only if $|\\alpha|<5^\\circ$ and $|\\dot{\\alpha}|<80^\\circ/s$ after a 200 ms grace period",
+            "Debounce both stable and unstable conditions for 10 ticks",
+            "On instability, hand \u03b8ref once to the current measured \u03b8 and hold there until the rig is calm again"
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 25,
+      "kind": "content",
+      "title": "Implementation Tricks in Firmware",
+      "subtitle": "This slide collects the small choices that stop the real hardware from behaving like the ideal equations would suggest.",
+      "elements": [
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 1.18,
+          "w": 2.85,
+          "h": 1.4,
+          "title": "Wrap + glitch handling",
+          "body": null,
+          "bullets": [
+            "Wrap-safe angle differences",
+            "Reject >30\u00b0 one-tick jumps",
+            "Keep false spikes out of \u03b1\u0307 and \u03b8\u0307"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 3.55,
+          "y": 1.18,
+          "w": 2.85,
+          "h": 1.4,
+          "title": "Bias killers",
+          "body": null,
+          "bullets": [
+            "Velocity leak in linear mode only",
+            "Auto-trim the \u03b1 reference slowly",
+            "Clamp trim to \u00b11.5\u00b0"
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 6.55,
+          "y": 1.18,
+          "w": 2.85,
+          "h": 1.4,
+          "title": "Motor command shaping",
+          "body": null,
+          "bullets": [
+            "100 ms engage ramp",
+            "Low-speed stop deadband",
+            "Stop-before-reverse"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.95,
+          "w": 2.85,
+          "h": 1.4,
+          "title": "Watchdogs",
+          "body": null,
+          "bullets": [
+            "Base stall detection from measured \u03b8",
+            "Limit debounce before FALLEN",
+            "SMC upright-only abort window"
+          ],
+          "stripe": "B91C1C",
+          "fill": "FEF2F2",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 3.55,
+          "y": 2.95,
+          "w": 2.85,
+          "h": 1.4,
+          "title": "Tuning helpers",
+          "body": null,
+          "bullets": [
+            "Sign wizard for motor / \u03b8 / \u03b1 / control direction",
+            "EEPROM persistence for settings",
+            "Runtime controller parameter commands"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 6.55,
+          "y": 2.95,
+          "w": 2.85,
+          "h": 1.4,
+          "title": "Why these matter",
+          "body": "These are the difference between a controller law that looks correct on paper and a balancing session that survives repeated real-world trials.",
+          "bullets": null,
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 26,
+      "kind": "content",
+      "title": "Linear Controller Performance",
+      "subtitle": "The linear controller is the cleanest performer on this rig: calm in hold mode and capable of commanded base motion without a fall.",
+      "elements": [
+        {
+          "type": "image",
+          "asset_id": "hold_lin_timeseries",
+          "src": "reports/thesis/report_thesis_20260209/figures/hold_LIN_rep_session_20260209_095631_trial0_timeseries.png",
+          "x": 0.55,
+          "y": 1.18,
+          "w": 4.35,
+          "h": 2.0,
+          "fit": "contain",
+          "asset_path": "assets/figures/hold_lin_timeseries.png"
+        },
+        {
+          "type": "image",
+          "asset_id": "nudge_lin",
+          "src": "reports/thesis/report_thesis_20260209/figures/nudge_LIN_rep_session_20260209_114605_trial0_nudge.png",
+          "x": 5.05,
+          "y": 1.18,
+          "w": 4.35,
+          "h": 2.0,
+          "fit": "contain",
+          "asset_path": "assets/figures/nudge_lin.png"
+        },
+        {
+          "type": "text",
+          "x": 1.2,
+          "y": 3.2,
+          "w": 3.1,
+          "h": 0.22,
+          "text": "Hold run H1",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "text",
+          "x": 5.75,
+          "y": 3.2,
+          "w": 3.0,
+          "h": 0.22,
+          "text": "Nudge run N1",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 3.55,
+          "w": 8.85,
+          "h": 1.0,
+          "title": "Readout",
+          "body": "In the pinned dataset the linear controller gives the lowest hold-mode \u03b1 RMS (0.513\u00b0), survives the tap run T1, and demonstrates commanded base-position moves while keeping the pendulum upright during N1.",
+          "bullets": null,
+          "stripe": "047857",
+          "fill": "ECFDF5",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 27,
+      "kind": "key",
+      "title": "Hybrid SMC: Motivation and Sliding Surface",
+      "subtitle": "The first nonlinear design keeps the sliding surface pendulum-centric and treats base centering as a second objective.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s27_smc_surface",
+          "latex": "s = \\dot{\\alpha} + \\lambda \\alpha",
+          "x": 0.85,
+          "y": 1.28,
+          "w": 3.2,
+          "h": 0.55,
+          "font_size": 24
+        },
+        {
+          "type": "card",
+          "x": 4.35,
+          "y": 1.18,
+          "w": 5.0,
+          "h": 1.2,
+          "title": "Interpretation",
+          "body": "On the surface $s=0$, the pendulum follows $\\dot{\\alpha}=-\\lambda\\alpha$, so $\\alpha(t)=\\alpha_0 e^{-\\lambda t}$ and $\\lambda$ directly sets the desired decay rate.",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.75,
+          "w": 4.1,
+          "h": 1.7,
+          "title": "Why move to nonlinear control",
+          "body": null,
+          "bullets": [
+            "The linear controller ignores the exact $A\\sin\\alpha$ gravity term and the centrifugal coupling.",
+            "The SMC law uses the reduced nonlinear upright model directly.",
+            "This is especially attractive for moderate excursions where the small-angle approximation is visibly coarse."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 4.95,
+          "y": 2.75,
+          "w": 4.45,
+          "h": 1.7,
+          "title": "Hybrid idea",
+          "body": null,
+          "bullets": [
+            "The sliding surface handles pendulum stabilization only.",
+            "A separate gated PD-like base-centering term is later blended in.",
+            "This separation keeps tuning intuitive on the real rig."
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": true
+    },
+    {
+      "number": 28,
+      "kind": "content",
+      "title": "Hybrid SMC: Control Law Derivation",
+      "subtitle": "Start from the nonlinear acceleration-input plant, differentiate the sliding surface, and solve for the base acceleration that enforces the reaching law.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s28_smc_law",
+          "latex": "\\begin{aligned}f(\\alpha,\\dot{\\alpha},\\dot{\\theta}) &= A\\sin\\alpha + \\sin\\alpha\\cos\\alpha\\,\\dot{\\theta}^2 + \\lambda\\dot{\\alpha}\\\\[4pt]\\ddot{\\theta} &= \\frac{f(\\alpha,\\dot{\\alpha},\\dot{\\theta}) + K\\,\\mathrm{sat}(s/\\phi)}{B\\cos\\alpha}\\end{aligned}",
+          "x": 0.65,
+          "y": 1.18,
+          "w": 4.8,
+          "h": 1.2,
+          "font_size": 18
+        },
+        {
+          "type": "card",
+          "x": 5.65,
+          "y": 1.18,
+          "w": 3.75,
+          "h": 1.2,
+          "title": "Experimental parameters",
+          "body": "$\\lambda = 15,\\ K = 800,\\ \\phi = 50,\\ \\gamma = 1.0$",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.75,
+          "w": 4.35,
+          "h": 1.7,
+          "title": "Numerical implementation notes",
+          "body": null,
+          "bullets": [
+            "Angles are measured in degrees, but the nonlinear trigonometric terms are evaluated in radians.",
+            "A cosine floor protects the denominator: cos_safe = sign(cos \u03b1) max(|cos \u03b1|, 0.2).",
+            "The resulting \u03b8\u0308 command is converted into stepper acceleration units and saturated."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.1,
+          "y": 2.75,
+          "w": 4.3,
+          "h": 1.7,
+          "title": "Why the law is attractive",
+          "body": null,
+          "bullets": [
+            "Explicit compensation of gravity and centrifugal drift",
+            "Direct design knobs: \u03bb for decay, K for reaching, \u03d5 for boundary layer width",
+            "Still simple enough to run comfortably at 200 Hz on the Arduino Mega"
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 29,
+      "kind": "content",
+      "title": "Lyapunov Stability Proof for the Hybrid SMC Reaching Law",
+      "subtitle": "The analytic law gives a clean reaching proof, but the firmware protections must be stated alongside it.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s29_lyapunov",
+          "latex": "\\begin{aligned}V(s) &= \\tfrac12 s^2\\\\[2pt]\\dot{V} &= s\\dot{s} = -K\\,s\\,\\mathrm{sat}(s/\\phi)\\le 0\\\\[2pt]|s|>\\phi &\\Rightarrow \\dot{V}=-K|s|\\end{aligned}",
+          "x": 0.75,
+          "y": 1.22,
+          "w": 4.0,
+          "h": 1.1,
+          "font_size": 21
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 1.18,
+          "w": 4.35,
+          "h": 1.2,
+          "title": "Finite-time reaching outside the boundary layer",
+          "body": "The standard ideal reaching result is recovered: the surface is reached in finite time with a rate set by $K$ when $|s|>\\phi$.",
+          "bullets": null,
+          "stripe": "047857",
+          "fill": "ECFDF5",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.75,
+          "w": 4.25,
+          "h": 1.75,
+          "title": "Theory vs firmware",
+          "body": null,
+          "bullets": [
+            "The proof applies to the analytic law before saturation, deadband, engage ramp, and abort logic are added.",
+            "The deployed firmware also enforces the upright-only validity window, cosine protection, and acceleration limits.",
+            "So the Lyapunov result is a design guide, not an unconditional hardware theorem."
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.05,
+          "y": 2.75,
+          "w": 4.3,
+          "h": 1.75,
+          "title": "Why keep the proof in the deck",
+          "body": null,
+          "bullets": [
+            "It explains the logic of the controller rather than presenting SMC as a tuning heuristic.",
+            "It also shows exactly where the practical implementation begins to diverge from the ideal law."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 30,
+      "kind": "content",
+      "title": "Boundary Layer and Chattering Elimination",
+      "subtitle": "The saturation function keeps the reaching law usable on the real stepper platform by softening the switching near the surface.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s30_sat",
+          "latex": "\\mathrm{sat}(x)=\\begin{cases}+1,&x>1\\\\x,&|x|\\le 1\\\\-1,&x<-1\\end{cases},\\qquad \\dot{s}=-K\\,\\mathrm{sat}(s/\\phi)",
+          "x": 0.75,
+          "y": 1.28,
+          "w": 4.55,
+          "h": 0.7,
+          "font_size": 21
+        },
+        {
+          "type": "card",
+          "x": 5.55,
+          "y": 1.18,
+          "w": 3.8,
+          "h": 1.05,
+          "title": "Chosen boundary layer",
+          "body": "$\\phi = 50\\ \\mathrm{deg/s}$ in the pinned dataset",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.65,
+          "w": 4.2,
+          "h": 1.85,
+          "title": "Outside the layer",
+          "body": null,
+          "bullets": [
+            "The reaching term behaves like sign(s), so the controller pulls aggressively toward the surface.",
+            "This is the part that provides the classical finite-time reaching behavior."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 2.65,
+          "w": 4.35,
+          "h": 1.85,
+          "title": "Inside the layer",
+          "body": null,
+          "bullets": [
+            "The law becomes locally linear and smooths the control action.",
+            "This reduces chatter in commanded acceleration and therefore reduces harsh stepper commands near upright."
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 31,
+      "kind": "content",
+      "title": "Hybrid SMC: Base-Centering Blend",
+      "subtitle": "The controller is called hybrid because the pendulum-surface SMC is blended with a separate gated base-centering term.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s31_base_blend",
+          "latex": "\\ddot{\\theta}_{\\mathrm{base}} = \\ddot{\\theta}_{\\mathrm{ref}} + K_{\\theta}\\theta_{\\mathrm{err}} + K_{\\dot{\\theta}}\\dot{\\theta}_{\\mathrm{err}},\\qquad u_{\\mathrm{cmd}}=u_{\\mathrm{smc}}+\\gamma u_{\\mathrm{base}}",
+          "x": 0.65,
+          "y": 1.22,
+          "w": 5.0,
+          "h": 0.85,
+          "font_size": 18
+        },
+        {
+          "type": "card",
+          "x": 5.9,
+          "y": 1.18,
+          "w": 3.5,
+          "h": 1.1,
+          "title": "Gate used in firmware",
+          "body": "Enable only after 200 ms and only if $|\\alpha|<5^\\circ$ and $|\\dot{\\alpha}|<150^\\circ/s$",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.7,
+          "w": 4.25,
+          "h": 1.8,
+          "title": "Why the blend is needed",
+          "body": null,
+          "bullets": [
+            "A pendulum-only surface does not directly regulate the base position.",
+            "Small biases can make the arm random-walk even while the pendulum stays near upright.",
+            "The extra centering term is therefore a pragmatic fix for drift on the real rig."
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 2.7,
+          "w": 4.4,
+          "h": 1.8,
+          "title": "What is special here",
+          "body": "The two control objectives are intentionally decoupled: the SMC law dominates pendulum recovery, while the base-centering action is only allowed to act when the pendulum is already calm enough that the two objectives will not fight each other.",
+          "bullets": null,
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 32,
+      "kind": "content",
+      "title": "Hybrid SMC Performance",
+      "subtitle": "The hybrid SMC suppresses peak excursions well in the pinned hold run, but the tap run shows the practical limit of aggressive recovery on this stepper platform.",
+      "elements": [
+        {
+          "type": "image",
+          "asset_id": "hold_smc_timeseries",
+          "src": "reports/thesis/report_thesis_20260209/figures/hold_SMC_rep_session_20260209_095908_trial0_timeseries.png",
+          "x": 0.55,
+          "y": 1.18,
+          "w": 4.35,
+          "h": 2.0,
+          "fit": "contain",
+          "asset_path": "assets/figures/hold_smc_timeseries.png"
+        },
+        {
+          "type": "image",
+          "asset_id": "tap_smc_timeseries",
+          "src": "reports/thesis/report_thesis_20260209/figures/tap_SMC_rep_session_20260209_114953_trial0_timeseries.png",
+          "x": 5.05,
+          "y": 1.18,
+          "w": 4.35,
+          "h": 2.0,
+          "fit": "contain",
+          "asset_path": "assets/figures/tap_smc_timeseries.png"
+        },
+        {
+          "type": "text",
+          "x": 1.35,
+          "y": 3.2,
+          "w": 2.8,
+          "h": 0.22,
+          "text": "Hold run H2",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "text",
+          "x": 5.85,
+          "y": 3.2,
+          "w": 2.8,
+          "h": 0.22,
+          "text": "Tap run T2",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 3.55,
+          "w": 8.85,
+          "h": 1.0,
+          "title": "Readout",
+          "body": "In the pinned hold run the hybrid SMC gives the smallest max |\u03b1| and max |\u03b8|. In the pinned tap run it eventually falls, which is consistent with the platform-level limitation that the controller can demand recovery harder than the open-loop stepper can realize.",
+          "bullets": null,
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 33,
+      "kind": "key",
+      "title": "Full-State SMC: Unified Sliding Surface",
+      "subtitle": "The third controller encodes pendulum and base objectives in one scalar sliding manifold instead of separating them.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s33_smc4_surface",
+          "latex": "s = \\dot{\\alpha} + \\lambda_{\\alpha}\\alpha + k\\bigl(\\dot{\\theta}_{\\mathrm{err}} + \\lambda_{\\theta}\\theta_{\\mathrm{err}}\\bigr)",
+          "x": 0.75,
+          "y": 1.28,
+          "w": 5.4,
+          "h": 0.65,
+          "font_size": 20
+        },
+        {
+          "type": "card",
+          "x": 6.4,
+          "y": 1.18,
+          "w": 3.0,
+          "h": 1.15,
+          "title": "Pinned parameters",
+          "body": "$\\lambda_{\\alpha}=15,\\ \\lambda_{\\theta}=2,\\ k=0.5,\\ K=800,\\ \\phi=50$",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.7,
+          "w": 4.25,
+          "h": 1.8,
+          "title": "Interpretation of the new terms",
+          "body": null,
+          "bullets": [
+            "$\\lambda_{\\alpha}$ shapes pendulum decay on the surface",
+            "$\\lambda_{\\theta}$ shapes base error decay",
+            "$k$ couples base tracking into the sliding condition"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 2.7,
+          "w": 4.4,
+          "h": 1.8,
+          "title": "What is special here",
+          "body": null,
+          "bullets": [
+            "Pendulum stabilization and base tracking are no longer separate objectives blended later.",
+            "The denominator of the control law now depends directly on k, which makes safety analysis much more important."
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": true
+    },
+    {
+      "number": 34,
+      "kind": "key",
+      "title": "Denominator Safety and Singularity Management in Full-State SMC",
+      "subtitle": "This controller is mathematically elegant, but it introduces a denominator that can become dangerously small if the coupling is not managed.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s34_smc4_den",
+          "latex": "\\dot{s} = f_0(\\alpha,\\dot{\\theta}) + \\lambda_{\\alpha}\\dot{\\alpha} + k\\lambda_{\\theta}\\dot{\\theta}_{\\mathrm{err}} - k\\ddot{\\theta}_{\\mathrm{ref}} + (k - B\\cos\\alpha)\\ddot{\\theta}",
+          "x": 0.65,
+          "y": 1.22,
+          "w": 5.3,
+          "h": 0.85,
+          "font_size": 17
+        },
+        {
+          "type": "equation",
+          "eq_id": "s34_den_condition",
+          "latex": "\\ddot{\\theta} = \\frac{\\cdots}{B\\cos\\alpha - k},\\qquad |B\\cos\\alpha_{\\mathrm{safe}} - k_{\\mathrm{Eff}}| \\ge 0.60",
+          "x": 0.75,
+          "y": 2.18,
+          "w": 5.1,
+          "h": 0.6,
+          "font_size": 20
+        },
+        {
+          "type": "card",
+          "x": 6.15,
+          "y": 1.18,
+          "w": 3.25,
+          "h": 1.55,
+          "title": "Implemented safeguards",
+          "body": null,
+          "bullets": [
+            "Cosine floor: $|\\cos\\alpha| \\ge 0.2$ with sign preserved",
+            "Coupling limit: $k \\le 1.20$",
+            "Coupling ramp-in over 200 ms after engage"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 6.15,
+          "y": 2.95,
+          "w": 3.25,
+          "h": 1.55,
+          "title": "Theory vs firmware",
+          "body": null,
+          "bullets": [
+            "The analytic law assumes denominator regularity.",
+            "The firmware explicitly enforces that regularity by modifying k_eff and the denominator margin online.",
+            "This is one of the clearest places where implementation-aware control design matters."
+          ],
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": true
+    },
+    {
+      "number": 35,
+      "kind": "content",
+      "title": "Full-State SMC: Control Law and Implementation Safeguards",
+      "subtitle": "The full law is nonlinear, coupled, and explicitly actuator-shaped for the stepper platform.",
+      "elements": [
+        {
+          "type": "equation",
+          "eq_id": "s35_smc4_law",
+          "latex": "\\ddot{\\theta} = \\frac{f_0(\\alpha,\\dot{\\theta}) + \\lambda_{\\alpha}\\dot{\\alpha} + k_{\\mathrm{Eff}}\\lambda_{\\theta}\\dot{\\theta}_{\\mathrm{err}} - k_{\\mathrm{Eff}}\\ddot{\\theta}_{\\mathrm{ref}} + K\\,\\mathrm{sat}(s/\\phi)}{B\\cos\\alpha_{\\mathrm{safe}} - k_{\\mathrm{Eff}}}",
+          "x": 0.65,
+          "y": 1.18,
+          "w": 5.2,
+          "h": 0.95,
+          "font_size": 16
+        },
+        {
+          "type": "card",
+          "x": 6.1,
+          "y": 1.18,
+          "w": 3.3,
+          "h": 1.05,
+          "title": "SMC4-specific caps",
+          "body": "$u_{\\max}=12000\\ \\mathrm{steps/s^2},\\ \\dot{\\theta}_{\\max}=2000\\ \\mathrm{steps/s}$",
+          "bullets": null,
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 2.65,
+          "w": 4.2,
+          "h": 1.85,
+          "title": "Additional clamps in firmware",
+          "body": null,
+          "bullets": [
+            "Clamp $|\\theta_{\\mathrm{err}}| \\le 78^\\circ$",
+            "Clamp $|\\dot{\\theta}_{\\mathrm{err}}| \\le 200^\\circ/s$",
+            "Clamp internal $|\\dot{\\alpha}| \\le 200^\\circ/s$ in the SMC4 math"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        },
+        {
+          "type": "card",
+          "x": 5.0,
+          "y": 2.65,
+          "w": 4.4,
+          "h": 1.85,
+          "title": "Practical reading of this controller",
+          "body": null,
+          "bullets": [
+            "It is the most unified controller mathematically.",
+            "It is also the most sensitive to actuator limits and denominator conditioning on this platform.",
+            "That is why the implementation includes more shaping and more guards than the hybrid SMC."
+          ],
+          "stripe": "0A7A6E",
+          "fill": "FFFFFF",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 36,
+      "kind": "content",
+      "title": "Full-State SMC Performance",
+      "subtitle": "The full-state surface controller balances upright in calm conditions, but the required protection logic is visible in both its diagnostics and its effort levels.",
+      "elements": [
+        {
+          "type": "image",
+          "asset_id": "hold_smc4_timeseries",
+          "src": "reports/thesis/report_thesis_20260209/figures/hold_SMC4_rep_session_20260209_121635_trial0_timeseries.png",
+          "x": 0.55,
+          "y": 1.18,
+          "w": 4.2,
+          "h": 1.85,
+          "fit": "contain",
+          "asset_path": "assets/figures/hold_smc4_timeseries.png"
+        },
+        {
+          "type": "image",
+          "asset_id": "hold_smc4_den",
+          "src": "reports/thesis/report_thesis_20260209/figures/hold_SMC4_rep_session_20260209_121635_trial0_sparse_den.png",
+          "x": 4.95,
+          "y": 1.18,
+          "w": 2.15,
+          "h": 1.85,
+          "fit": "contain",
+          "asset_path": "assets/figures/hold_smc4_den.png"
+        },
+        {
+          "type": "image",
+          "asset_id": "hold_smc4_keff",
+          "src": "reports/thesis/report_thesis_20260209/figures/hold_SMC4_rep_session_20260209_121635_trial0_sparse_kEff.png",
+          "x": 7.3,
+          "y": 1.18,
+          "w": 2.1,
+          "h": 1.85,
+          "fit": "contain",
+          "asset_path": "assets/figures/hold_smc4_keff.png"
+        },
+        {
+          "type": "text",
+          "x": 1.35,
+          "y": 3.08,
+          "w": 2.5,
+          "h": 0.22,
+          "text": "Hold run H3",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "text",
+          "x": 5.25,
+          "y": 3.08,
+          "w": 1.55,
+          "h": 0.22,
+          "text": "Protected denominator",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "text",
+          "x": 7.45,
+          "y": 3.08,
+          "w": 1.75,
+          "h": 0.22,
+          "text": "Effective coupling",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 3.45,
+          "w": 8.85,
+          "h": 1.1,
+          "title": "Readout",
+          "body": "In the pinned hold run the controller stays upright, but it uses much higher effort than the linear and hybrid controllers. In the pinned tap run T3 it falls, reinforcing that this controller is the most sensitive to actuator limits and safety shaping on the present hardware.",
+          "bullets": null,
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 37,
+      "kind": "content",
+      "title": "Three-Controller Comparison",
+      "subtitle": "This comparison is rigorous in sourcing but intentionally modest in claim strength: it is based on one pinned run per condition.",
+      "elements": [
+        {
+          "type": "table",
+          "x": 0.55,
+          "y": 1.12,
+          "w": 8.95,
+          "h": 1.45,
+          "headers": [
+            "Controller",
+            "Hold \u03b1 RMS",
+            "Hold acc RMS",
+            "Tap outcome",
+            "Tap acc RMS"
+          ],
+          "rows": [
+            [
+              "Linear",
+              "0.513\u00b0",
+              "1354.846",
+              "Success (T1)",
+              "1695.658"
+            ],
+            [
+              "Hybrid SMC",
+              "0.826\u00b0",
+              "1465.582",
+              "Fallen (T2)",
+              "1493.067"
+            ],
+            [
+              "Full-state SMC",
+              "1.61\u00b0",
+              "3364.957",
+              "Fallen (T3)",
+              "3843.042"
+            ]
+          ],
+          "fill_header": "D6E8F5",
+          "fill_body": "FFFFFF"
+        },
+        {
+          "type": "image",
+          "asset_id": "hold_metric_bars",
+          "src": "reports/thesis/report_thesis_20260209/figures/hold_metric_bars.png",
+          "x": 0.55,
+          "y": 2.78,
+          "w": 4.25,
+          "h": 1.45,
+          "fit": "contain",
+          "asset_path": "assets/figures/hold_metric_bars.png"
+        },
+        {
+          "type": "image",
+          "asset_id": "tap_metric_bars",
+          "src": "reports/thesis/report_thesis_20260209/figures/tap_metric_bars.png",
+          "x": 5.05,
+          "y": 2.78,
+          "w": 4.25,
+          "h": 1.45,
+          "fit": "contain",
+          "asset_path": "assets/figures/tap_metric_bars.png"
+        },
+        {
+          "type": "text",
+          "x": 1.6,
+          "y": 4.22,
+          "w": 2.1,
+          "h": 0.2,
+          "text": "Pinned hold metrics",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "text",
+          "x": 6.1,
+          "y": 4.22,
+          "w": 2.1,
+          "h": 0.2,
+          "text": "Pinned tap metrics",
+          "size": 9,
+          "color": "64748B",
+          "bold": false,
+          "italic": true,
+          "align": "center",
+          "valign": "top"
+        },
+        {
+          "type": "card",
+          "x": 0.55,
+          "y": 4.45,
+          "w": 8.85,
+          "h": 0.45,
+          "title": "Dataset caveat",
+          "body": "Provenance: H1\u2013H3, N1, and T1\u2013T3 only. The deck therefore reports a qualitative, metric-based comparison rather than a statistical controller ranking.",
+          "bullets": null,
+          "stripe": "D97706",
+          "fill": "FFFBEB",
+          "title_color": "1B2A4A",
+          "body_color": "3D5472"
+        }
+      ],
+      "key_contribution": false
+    },
+    {
+      "number": 38,
+      "kind": "conclusion",
+      "title": "Contributions, Limitations, and Next Steps",
+      "subtitle": "The final message is that the thesis contributes both a model/controller stack and a practical recipe for making a custom stepper Furuta rig experimentally usable.",
+      "elements": [
+        {
+          "type": "card",
+          "x": 0.45,
+          "y": 1.15,
+          "w": 3.0,
+          "h": 2.45,
+          "title": "Main contributions",
+          "body": null,
+          "bullets": [
+            "Measured-stepper retrofit with dual AS5600 sensing",
+            "L-shaped first-principles model with acceleration-input control framing",
+            "Three controller implementations on one platform"
+          ],
+          "stripe": "D97706",
+          "fill": "1B2A4A",
+          "title_color": "FFFFFF",
+          "body_color": "F6F8FA"
+        },
+        {
+          "type": "card",
+          "x": 3.65,
+          "y": 1.15,
+          "w": 2.85,
+          "h": 2.45,
+          "title": "Key limitations",
+          "body": null,
+          "bullets": [
+            "One pinned run per condition only",
+            "No explicit tap onset markers",
+            "Actuator realization still limited by open-loop stepper behavior"
+          ],
+          "stripe": "B91C1C",
+          "fill": "1B2A4A",
+          "title_color": "FFFFFF",
+          "body_color": "F6F8FA"
+        },
+        {
+          "type": "card",
+          "x": 6.7,
+          "y": 1.15,
+          "w": 2.8,
+          "h": 2.45,
+          "title": "Next steps",
+          "body": null,
+          "bullets": [
+            "Run repeated trials per controller",
+            "Make disturbance timing measurable",
+            "Explore more actuator-aware nonlinear control"
+          ],
+          "stripe": "0D6EAF",
+          "fill": "1B2A4A",
+          "title_color": "FFFFFF",
+          "body_color": "F6F8FA"
+        },
+        {
+          "type": "text",
+          "x": 0.55,
+          "y": 4.25,
+          "w": 8.8,
+          "h": 0.42,
+          "text": "Most importantly, the thesis shows how much practical control rigor lives between the equations and the motor driver.",
+          "size": 13,
+          "color": "FFFFFF",
+          "bold": true,
+          "italic": false,
+          "align": "center",
+          "valign": "top"
+        }
+      ],
+      "key_contribution": false
+    }
+  ]
+}
