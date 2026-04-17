@@ -70,6 +70,9 @@ def card(
     fill: str = "FFFFFF",
     title_color: str = "1B2A4A",
     body_color: str = "3D5472",
+    title_size: float | None = None,
+    body_size: float | None = None,
+    bullet_size: float | None = None,
 ) -> dict[str, Any]:
     return {
         "type": "card",
@@ -84,6 +87,9 @@ def card(
         "fill": fill,
         "title_color": title_color,
         "body_color": body_color,
+        "title_size": title_size,
+        "body_size": body_size,
+        "bullet_size": bullet_size,
     }
 
 

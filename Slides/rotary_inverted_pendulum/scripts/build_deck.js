@@ -201,7 +201,7 @@ function drawCard(slide, el) {
       w: el.w - 0.24,
       h: 0.24,
       fontFace: "Calibri",
-      fontSize: 11.5,
+      fontSize: el.title_size || 11.5,
       bold: true,
       color: el.title_color || C.textDark,
       margin: 0,
@@ -219,7 +219,7 @@ function drawCard(slide, el) {
       w: el.w - 0.24,
       h: bodyH,
       fontFace: "Calibri",
-      fontSize: 10,
+      fontSize: el.body_size || 10,
       color: bodyColor,
       margin: 0,
       fit: "shrink",
@@ -232,7 +232,7 @@ function drawCard(slide, el) {
       w: el.w - 0.24,
       h: bodyH,
       fontFace: "Calibri",
-      fontSize: 9.8,
+      fontSize: el.bullet_size || 9.8,
       color: bodyColor,
       margin: 0,
       fit: "shrink",
@@ -368,10 +368,7 @@ function renderElement(slide, el) {
       drawFlow(slide, el);
       break;
     case "image":
-      drawSlot(slide, el, "Figure");
-      break;
     case "equation":
-      drawSlot(slide, el, "Equation");
       break;
     default:
       throw new Error(`Unsupported element type: ${el.type}`);
@@ -484,6 +481,7 @@ function renderContentSlide(pptx, slideDef, totalSlides) {
   const slide = pptx.addSlide();
   const isKey = slideDef.key_contribution || slideDef.kind === "key";
   const isConclusion = slideDef.kind === "conclusion";
+  const hasSubtitle = Boolean(slideDef.subtitle && slideDef.subtitle.trim());
   if (isConclusion) {
     bg(slide, C.navy);
     slide.addShape(SHAPE.rect, {
@@ -502,16 +500,22 @@ function renderContentSlide(pptx, slideDef, totalSlides) {
   if (isKey) {
     novelBadge(slide);
     titleText(slide, slideDef.title, 0.22, C.navy, 22, 6.48);
-    subtitleText(slide, slideDef.subtitle, 0.84, C.textGray);
-    rule(slide, 0.90, C.amber);
+    if (hasSubtitle) {
+      subtitleText(slide, slideDef.subtitle, 0.84, C.textGray);
+    }
+    rule(slide, hasSubtitle ? 0.90 : 0.78, C.amber);
   } else if (isConclusion) {
     titleText(slide, slideDef.title, 0.22, C.white, 26, 9.2);
-    subtitleText(slide, slideDef.subtitle, 0.84, "B8C8DC");
-    rule(slide, 0.90, "36506E");
+    if (hasSubtitle) {
+      subtitleText(slide, slideDef.subtitle, 0.84, "B8C8DC");
+    }
+    rule(slide, hasSubtitle ? 0.90 : 0.78, "36506E");
   } else {
     titleText(slide, slideDef.title);
-    subtitleText(slide, slideDef.subtitle);
-    rule(slide);
+    if (hasSubtitle) {
+      subtitleText(slide, slideDef.subtitle);
+    }
+    rule(slide, hasSubtitle ? 0.90 : 0.78);
   }
 
   (slideDef.elements || []).forEach((el) => renderElement(slide, el));

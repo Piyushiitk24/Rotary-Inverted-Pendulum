@@ -53,7 +53,7 @@ $g$: gravity.
 
 $\tau$: actuation torque about $\theta$.
 
-Geometry note (this rig): the pendulum is an \textbf{L-shaped rod}. The horizontal segment is aligned with the arm (radial direction) and forms a bearing-supported pivot shaft (three 688RS bearings). The vertical segment carries most of the swinging mass and swings in the $(\mathbf e_t,\mathbf k)$ plane.
+Geometry note (this rig): the pendulum is an **L-shaped rod**. The horizontal segment is aligned with the arm (radial direction) and forms a bearing-supported pivot shaft (three 688RS bearings). The vertical segment carries most of the swinging mass and swings in the $(\mathbf e_t,\mathbf k)$ plane.
 
 In the reduced model used for control, $m_p$ and $l_p$ refer to the mass distribution that moves with $\alpha$ (vertical segment plus concentrated mass). The horizontal segment lies on the pivot axis and contributes primarily to arm-side inertia.
 
@@ -74,66 +74,70 @@ $$\hat J_0 \triangleq \hat J_1 + m_p L_r^2$$
 
 The definition of $\hat J_0$ follows from collecting the $\dot{\theta}^2$ terms in the kinetic energy: it is the arm-side yaw inertia about the motor axis plus the parallel-axis contribution of the swinging mass at radius $L_r$.
 
-A schematic of the coordinates and parameters is shown in Fig.\ \ref{fig:furuta_schematic}.
+A schematic of the coordinates and parameters is shown in Fig. \ref{fig:furuta_schematic}.
 
+In Markdown preview, TikZ figures are not rendered directly. The LaTeX figure source is kept below (and still used by thesis export):
+
+```{=latex}
 \begin{figure}[htbp]
-  \centering
-  \begin{tikzpicture}[
-    x={(0.78cm,-0.45cm)},
-    y={(1.00cm,0.00cm)},
-    z={(0.00cm,1.00cm)},
-    line cap=round,
-    line join=round,
-  ]
-    \pgfmathsetmacro{\thetad}{35}
-    \pgfmathsetmacro{\alphad}{25}
-    \def\Lr{4.2}
-    \def\lp{3.0}
-    \def\Rtheta{1.2}
-    \def\Ralpha{1.1}
+   \centering
+   \begin{tikzpicture}[
+      x={(0.78cm,-0.45cm)},
+      y={(1.00cm,0.00cm)},
+      z={(0.00cm,1.00cm)},
+      line cap=round,
+      line join=round,
+   ]
+      \pgfmathsetmacro{\thetad}{35}
+      \pgfmathsetmacro{\alphad}{25}
+      \def\Lr{4.2}
+      \def\lp{3.0}
+      \def\Rtheta{1.2}
+      \def\Ralpha{1.1}
 
-    \coordinate (O) at (0,0,0);
-    \coordinate (P) at ({\Lr*cos(\thetad)},{\Lr*sin(\thetad)},0);
-    \coordinate (B) at ({\Lr*cos(\thetad) - \lp*sin(\alphad)*sin(\thetad)},
-                        {\Lr*sin(\thetad) + \lp*sin(\alphad)*cos(\thetad)},
-                        {\lp*cos(\alphad)});
+      \coordinate (O) at (0,0,0);
+      \coordinate (P) at ({\Lr*cos(\thetad)},{\Lr*sin(\thetad)},0);
+      \coordinate (B) at ({\Lr*cos(\thetad) - \lp*sin(\alphad)*sin(\thetad)},
+                                    {\Lr*sin(\thetad) + \lp*sin(\alphad)*cos(\thetad)},
+                                    {\lp*cos(\alphad)});
 
-    % Axes.
-    \draw[-{Latex[length=3mm]}] (O) -- (3.2,0,0) node[below left] {$x$};
-    \draw[-{Latex[length=3mm]}] (O) -- (0,3.4,0) node[below] {$y$};
-    \draw[-{Latex[length=3mm]}] (O) -- (0,0,3.4) node[left] {$z$};
+      % Axes.
+      \draw[-{Latex[length=3mm]}] (O) -- (3.2,0,0) node[below left] {$x$};
+      \draw[-{Latex[length=3mm]}] (O) -- (0,3.4,0) node[below] {$y$};
+      \draw[-{Latex[length=3mm]}] (O) -- (0,0,3.4) node[left] {$z$};
 
-    % Base yaw angle theta (in xy plane).
-    \draw[-{Latex[length=3mm]}]
-      plot[domain=0:\thetad, samples=30]
-        ({\Rtheta*cos(\x)},{\Rtheta*sin(\x)},0)
-      node[pos=0.65, right] {$\theta$};
+      % Base yaw angle theta (in xy plane).
+      \draw[-{Latex[length=3mm]}]
+         plot[domain=0:\thetad, samples=30]
+            ({\Rtheta*cos(\x)},{\Rtheta*sin(\x)},0)
+         node[pos=0.65, right] {$\theta$};
 
-    % Arm.
-    \draw[line width=1.2pt] (O) -- (P) node[pos=0.55, above] {$L_r$};
-    \fill (O) circle (0.06);
-    \fill (P) circle (0.06);
+      % Arm.
+      \draw[line width=1.2pt] (O) -- (P) node[pos=0.55, above] {$L_r$};
+      \fill (O) circle (0.06);
+      \fill (P) circle (0.06);
 
-    % Upright reference at the pendulum pivot.
-    \draw[dashed] (P) -- ++(0,0,3.2);
+      % Upright reference at the pendulum pivot.
+      \draw[dashed] (P) -- ++(0,0,3.2);
 
-    % Pendulum.
-    \draw[line width=1.2pt] (P) -- (B) node[pos=0.55, right] {$l_p$};
-    \fill (B) circle (0.14);
-    \node[above] at (B) {$m_p$};
+      % Pendulum.
+      \draw[line width=1.2pt] (P) -- (B) node[pos=0.55, right] {$l_p$};
+      \fill (B) circle (0.14);
+      \node[above] at (B) {$m_p$};
 
-    % Pendulum angle alpha (in the (e_t, z) plane).
-    \draw[-{Latex[length=3mm]}]
-      plot[domain=0:\alphad, samples=25]
-        ({\Lr*cos(\thetad) - \Ralpha*sin(\x)*sin(\thetad)},
-         {\Lr*sin(\thetad) + \Ralpha*sin(\x)*cos(\thetad)},
-         {\Ralpha*cos(\x)})
-      node[pos=0.65, right] {$\alpha$};
-  \end{tikzpicture}
-  \caption{Rotary (Furuta) inverted pendulum schematic and generalized coordinates used in this chapter.}
-  \label{fig:furuta_schematic}
+      % Pendulum angle alpha (in the (e_t, z) plane).
+      \draw[-{Latex[length=3mm]}]
+         plot[domain=0:\alphad, samples=25]
+            ({\Lr*cos(\thetad) - \Ralpha*sin(\x)*sin(\thetad)},
+             {\Lr*sin(\thetad) + \Ralpha*sin(\x)*cos(\thetad)},
+             {\Ralpha*cos(\x)})
+         node[pos=0.65, right] {$\alpha$};
+   \end{tikzpicture}
+   \caption{Rotary (Furuta) inverted pendulum schematic and generalized coordinates used in this chapter.}
+   \label{fig:furuta_schematic}
 \end{figure}
 \FloatBarrier
+```
 
 ---
 
@@ -353,7 +357,6 @@ Potential energy:
 
 $$V=m_p g z = m_p g l_p\cos\alpha = G\cos\alpha$$
 
-
 Lagrangian:
 
 $$\mathcal L=T-V$$
@@ -426,7 +429,7 @@ $$ (\hat J_0+\hat J_2\sin^2\alpha)\ddot\theta + K\cos\alpha\,\ddot\alpha + \hat 
 
 $$K\cos\alpha\,\ddot\theta + \hat J_2\ddot\alpha - \frac{1}{2}\hat J_2\sin(2\alpha)\dot\theta^2 - G\sin\alpha = 0$$
 
-These equations are structurally consistent with classical Furuta pendulum models \cite{Cazzolato2011}. The key difference in this thesis is that later controller chapters use commanded base acceleration as the abstract input, because that matches the firmware command structure more naturally than a motor-torque input. This does \emph{not} mean the real hardware realizes the commanded acceleration exactly; on the real rig the command is still turned into a speed command and the stepper can miss motion under load.
+These equations are structurally consistent with classical Furuta pendulum models \cite{Cazzolato2011}. The key difference in this thesis is that later controller chapters use commanded base acceleration as the abstract input, because that matches the firmware command structure more naturally than a motor-torque input. This does *not* mean the real hardware realizes the commanded acceleration exactly; on the real rig the command is still turned into a speed command and the stepper can miss motion under load.
 
 ---
 
@@ -509,11 +512,11 @@ The controller chapters mainly use the following results from this derivation:
   $$k_s = 4.444\ \text{step/deg}$$
 
 So the main constants passed forward from this chapter are
-\[
+$$
 A = 100.8,\qquad B = 1.952,\qquad k_s = 4.444\ \text{step/deg}.
-\]
+$$
 
-These values match the constants used later in the firmware and controller chapters. They should be read as \emph{model constants}, not as a guarantee that the real stepper-driven hardware follows the commanded acceleration exactly.
+These values match the constants used later in the firmware and controller chapters. They should be read as *model constants*, not as a guarantee that the real stepper-driven hardware follows the commanded acceleration exactly.
 
 ---
 
@@ -1425,11 +1428,13 @@ $$\dot\alpha = -\lambda_\alpha\,\alpha - k\left(\dot\theta_{\mathrm{err}} + \lam
 
 Differentiate the sliding surface with respect to time:
 
-\begin{align}
+$$
+\begin{aligned}
 \dot s
 &= \frac{d}{dt}\left(\dot\alpha + \lambda_\alpha\alpha + k\dot\theta_{\mathrm{err}} + k\lambda_\theta\theta_{\mathrm{err}}\right)\\
 &= \ddot\alpha + \lambda_\alpha\dot\alpha + k\ddot\theta_{\mathrm{err}} + k\lambda_\theta\dot\theta_{\mathrm{err}}
-\end{align}
+\end{aligned}
+$$
 
 Substitute the error acceleration $\ddot\theta_{\mathrm{err}}=\ddot\theta-\ddot\theta_{\mathrm{ref}}$:
 
@@ -1437,20 +1442,24 @@ $$\dot s = \ddot\alpha + \lambda_\alpha\dot\alpha + k(\ddot\theta-\ddot\theta_{\
 
 Now substitute the nonlinear plant model for $\ddot\alpha$:
 
-\begin{align}
+$$
+\begin{aligned}
 \dot s
 &= \left(A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2 - B\cos\alpha\,\ddot\theta\right) + \lambda_\alpha\dot\alpha\\
 &\quad + k\ddot\theta - k\ddot\theta_{\mathrm{ref}} + k\lambda_\theta\dot\theta_{\mathrm{err}}
-\end{align}
+\end{aligned}
+$$
 
 Collect all terms involving the control input $\ddot\theta$:
 
-\begin{align}
+$$
+\begin{aligned}
 \dot s
 &= \underbrace{A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2}_{\triangleq f_0(\alpha,\dot\theta)}
-  + \lambda_\alpha\dot\alpha + k\lambda_\theta\dot\theta_{\mathrm{err}} - k\ddot\theta_{\mathrm{ref}}\\
+&\quad + \lambda_\alpha\dot\alpha + k\lambda_\theta\dot\theta_{\mathrm{err}} - k\ddot\theta_{\mathrm{ref}}\\
 &\quad + (k - B\cos\alpha)\ddot\theta
-\end{align}
+\end{aligned}
+$$
 
 Define the **drift function**
 
@@ -1548,10 +1557,12 @@ B\cos\alpha - k
 
 where
 
-\begin{align}
+$$
+\begin{aligned}
 f_0(\alpha,\dot\theta) &= A\sin\alpha + \sin\alpha\cos\alpha\,\dot\theta^2\\
 s &= \dot\alpha + \lambda_\alpha\alpha + k(\dot\theta_{\mathrm{err}}+\lambda_\theta\theta_{\mathrm{err}})
-\end{align}
+\end{aligned}
+$$
 
 **Components:**
 
@@ -1695,12 +1706,14 @@ at all times, preventing division by small numbers.
 
 Clamp the base tracking error signals before they enter the sliding surface to prevent large outliers (from sensor glitches or reference discontinuities) from dominating the control:
 
-\begin{align}
-\theta_{\mathrm{err,c}} &= \mathrm{constrain}(\theta_{\mathrm{err}},-\theta_{\max},+\theta_{\max})\\
+$$
+\begin{aligned}
+   heta_{\mathrm{err,c}} &= \mathrm{constrain}(\theta_{\mathrm{err}},-\theta_{\max},+\theta_{\max})\\
 \dot\theta_{\mathrm{err,c}} &= \mathrm{constrain}(\dot\theta_{\mathrm{err}},-\dot\theta_{\max},+\dot\theta_{\max})\\
-\theta_{\mathrm{term}} &= \dot\theta_{\mathrm{err,c}}+\lambda_\theta\theta_{\mathrm{err,c}}\\
-\theta_{\mathrm{term,c}} &= \mathrm{constrain}(\theta_{\mathrm{term}},-\theta_{\mathrm{term,max}},+\theta_{\mathrm{term,max}})
-\end{align}
+   heta_{\mathrm{term}} &= \dot\theta_{\mathrm{err,c}}+\lambda_\theta\theta_{\mathrm{err,c}}\\
+   heta_{\mathrm{term,c}} &= \mathrm{constrain}(\theta_{\mathrm{term}},-\theta_{\mathrm{term,max}},+\theta_{\mathrm{term,max}})
+\end{aligned}
+$$
 
 Typical limits (firmware defaults): $\theta_{\max}=78^\circ$, $\dot\theta_{\max}=200\ \mathrm{deg/s}$, $\theta_{\mathrm{term,max}}=300\ \mathrm{deg/s}$. These are large enough to be inactive during normal operation but protective against edge cases.
 

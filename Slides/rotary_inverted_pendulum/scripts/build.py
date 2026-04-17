@@ -39,6 +39,21 @@ def prepare_dirs(root: Path) -> None:
         (root / rel).mkdir(parents=True, exist_ok=True)
 
 
+def clean_dir(path: Path) -> None:
+    if not path.exists():
+        return
+    for child in path.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def clean_generated(workspace: Path) -> None:
+    for rel in ["assets/equations", "assets/figures", "dist"]:
+        clean_dir(workspace / rel)
+
+
 def copy_figures(manifest: dict, repo: Path, workspace: Path) -> dict:
     manifest_copy = copy.deepcopy(manifest)
     seen: dict[str, str] = {}
@@ -78,9 +93,13 @@ def verify_deck(deck_path: Path, expected_slides: int) -> None:
 def main() -> int:
     workspace = workspace_root()
     repo = repo_root()
+    clean_generated(workspace)
     prepare_dirs(workspace)
 
-    manifest = copy_figures(load_manifest(), repo, workspace)
+    manifest = load_manifest()
+    if len(manifest["slides"]) != 21:
+        raise RuntimeError(f"Expected 21 slides in manifest, found {len(manifest['slides'])}")
+    manifest = copy_figures(manifest, repo, workspace)
     manifest_path = workspace / "dist" / manifest["meta"]["manifest_filename"]
     write_manifest(manifest, manifest_path)
 
@@ -107,7 +126,7 @@ def main() -> int:
         env=env,
     )
 
-    verify_deck(final_deck, len(manifest["slides"]))
+    verify_deck(final_deck, 21)
     print(f"[OK] Deck written to {final_deck}")
     return 0
 
