@@ -9,6 +9,16 @@
 #define EN_PIN   7
 #define MUX_ADDR 0x70
 
+#define PENDULUM_SENSOR_AS5600 0
+#define PENDULUM_SENSOR_ENC600 1
+#ifndef PENDULUM_SENSOR_BACKEND
+#define PENDULUM_SENSOR_BACKEND PENDULUM_SENSOR_AS5600
+#endif
+
+#if PENDULUM_SENSOR_BACKEND != PENDULUM_SENSOR_AS5600 && PENDULUM_SENSOR_BACKEND != PENDULUM_SENSOR_ENC600
+#error "PENDULUM_SENSOR_BACKEND must be 0 (AS5600) or 1 (600 PPR quadrature encoder)"
+#endif
+
 const float STEPS_PER_DEG = 4.444f;
 const float LIM_MOTOR_DEG = 80.0f;
 const float LIM_PEND_DEG  = 30.0f;
@@ -39,6 +49,20 @@ const uint16_t BASE_STALL_WARN_TICKS = 30;         // 150 ms at 200 Hz
 constexpr uint8_t AS5600_STATUS_MAGNET_HIGH = 0x08;
 constexpr uint8_t AS5600_STATUS_MAGNET_LOW = 0x10;
 constexpr uint8_t AS5600_STATUS_MAGNET_DETECT = 0x20;
+
+// Optional 600 PPR 2-phase optical pendulum encoder backend.
+// Default firmware still uses the pendulum AS5600. Build with
+// -DPENDULUM_SENSOR_BACKEND=1 to use this encoder on Mega interrupt pins 2/3.
+const uint8_t PEND_ENC_A_PIN = 2;
+const uint8_t PEND_ENC_B_PIN = 3;
+const int32_t PEND_ENC_PPR = 600;
+const int32_t PEND_ENC_CPR = PEND_ENC_PPR * 4;  // 4x quadrature
+const float PEND_ENC_DEG_PER_COUNT = 360.0f / (float)PEND_ENC_CPR;
+
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+volatile int32_t pendEncCount = 0;
+volatile uint8_t pendEncLastAB = 0;
+#endif
 
 // Calibration sampling (averaging reduces ~0.5deg single-sample noise that can create large theta offsets).
 const int CAL_SAMPLES = 25;
@@ -402,6 +426,139 @@ float averageMuxAngleDeg(uint8_t ch, int samples, int delayUs) {
   return wrap360(avgDeg);
 }
 
+static const char* pendulumSensorName() {
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+  return "ENC600";
+#else
+  return "AS5600";
+#endif
+}
+
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+static uint8_t readPendulumEncoderAB() {
+  return (digitalRead(PEND_ENC_A_PIN) ? 0x02 : 0x00) |
+         (digitalRead(PEND_ENC_B_PIN) ? 0x01 : 0x00);
+}
+
+static void updatePendulumEncoderISR() {
+  const uint8_t ab = readPendulumEncoderAB();
+  const uint8_t transition = (pendEncLastAB << 2) | ab;
+
+  switch (transition) {
+    case 0x1: case 0x7: case 0xE: case 0x8:
+      pendEncCount++;
+      break;
+    case 0x2: case 0xB: case 0xD: case 0x4:
+      pendEncCount--;
+      break;
+    default:
+      break;
+  }
+
+  pendEncLastAB = ab;
+}
+
+static int32_t readPendulumEncoderCount() {
+  uint8_t oldSreg = SREG;
+  noInterrupts();
+  int32_t count = pendEncCount;
+  SREG = oldSreg;
+  return count;
+}
+
+static void resetPendulumEncoderCount() {
+  uint8_t oldSreg = SREG;
+  noInterrupts();
+  const uint8_t ab = readPendulumEncoderAB();
+  pendEncCount = 0;
+  pendEncLastAB = ab;
+  SREG = oldSreg;
+}
+
+static void initPendulumEncoder() {
+  pinMode(PEND_ENC_A_PIN, INPUT_PULLUP);
+  pinMode(PEND_ENC_B_PIN, INPUT_PULLUP);
+  resetPendulumEncoderCount();
+  attachInterrupt(digitalPinToInterrupt(PEND_ENC_A_PIN), updatePendulumEncoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PEND_ENC_B_PIN), updatePendulumEncoderISR, CHANGE);
+}
+#endif
+
+static void initPendulumSensorBackend() {
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+  initPendulumEncoder();
+#endif
+}
+
+static float readPendulumSensorDeg() {
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+  return wrap360((float)readPendulumEncoderCount() * PEND_ENC_DEG_PER_COUNT);
+#else
+  selectMux(0);
+  return wrap360(readAS5600Deg());
+#endif
+}
+
+static int readPendulumSensorError() {
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+  return AS5600_OK;
+#else
+  return sensor.lastError();
+#endif
+}
+
+static float calibratePendulumUprightDeg() {
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+  resetPendulumEncoderCount();
+  return 0.0f;
+#else
+  return averageMuxAngleDeg(0, CAL_SAMPLES, CAL_SAMPLE_DELAY_US);
+#endif
+}
+
+static void printPendulumSensorDiagnostics() {
+  float pendRawNow = readPendulumSensorDeg();
+  Serial.print("pendSensor="); Serial.print(pendulumSensorName());
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+  Serial.print(" pinsA/B="); Serial.print(PEND_ENC_A_PIN);
+  Serial.print("/"); Serial.print(PEND_ENC_B_PIN);
+  Serial.print(" ppr="); Serial.print(PEND_ENC_PPR);
+  Serial.print(" cpr="); Serial.print(PEND_ENC_CPR);
+  Serial.print(" degPerCount="); Serial.print(PEND_ENC_DEG_PER_COUNT, 4);
+  Serial.print(" count="); Serial.println(readPendulumEncoderCount());
+#else
+  Serial.println(" muxCh=0");
+#endif
+
+  Serial.print("pendRawDeg="); Serial.print(pendRawNow, 2);
+  Serial.print(" targetRawDeg="); Serial.println(targetRawDeg, 2);
+
+#if PENDULUM_SENSOR_BACKEND == PENDULUM_SENSOR_ENC600
+  Serial.print("pendEncCount="); Serial.print(readPendulumEncoderCount());
+  Serial.print(" ppr="); Serial.print(PEND_ENC_PPR);
+  Serial.print(" cpr="); Serial.print(PEND_ENC_CPR);
+  Serial.print(" pinsA/B="); Serial.print(PEND_ENC_A_PIN);
+  Serial.print("/"); Serial.println(PEND_ENC_B_PIN);
+#else
+  uint8_t pendSt = sensor.readStatus();
+  uint8_t pendAgc = sensor.readAGC();
+  uint16_t pendMag = sensor.readMagnitude();
+  Serial.print("pendMag="); Serial.print(pendMag);
+  Serial.print(" agc="); Serial.print(pendAgc);
+  Serial.print(" st=0x"); Serial.print(pendSt, HEX);
+  Serial.print(" md/hi/lo=");
+  Serial.print((pendSt & AS5600_STATUS_MAGNET_DETECT) ? 1 : 0);
+  Serial.print("/");
+  Serial.print((pendSt & AS5600_STATUS_MAGNET_HIGH) ? 1 : 0);
+  Serial.print("/");
+  Serial.println((pendSt & AS5600_STATUS_MAGNET_LOW) ? 1 : 0);
+#endif
+
+  Serial.print("targetRawDegCal="); Serial.print(targetRawDegCal, 2);
+  Serial.print(" (diff="); Serial.print(getAngleDiffDeg(targetRawDeg, targetRawDegCal), 2);
+  Serial.println(")");
+}
+
 static int signum(float x) {
   return (x > 0.0f) - (x < 0.0f);
 }
@@ -611,8 +768,7 @@ void handleSerial() {
       while (!Serial.available()) { delay(10); }
       while (Serial.available()) Serial.read();
 
-      selectMux(0);
-      float pendUp = readAS5600Deg();
+      float pendUp = readPendulumSensorDeg();
       Serial.print("  Pendulum UPRIGHT reading: "); Serial.println(pendUp, 2);
 
       Serial.println("\n  Now tilt pendulum in the SAME direction the arm just moved (");
@@ -627,8 +783,7 @@ void handleSerial() {
         while (!Serial.available()) { delay(10); }
         while (Serial.available()) Serial.read();
 
-        selectMux(0);
-        pendTilted = readAS5600Deg();
+        pendTilted = readPendulumSensorDeg();
         pendDiff = getAngleDiffDeg(pendTilted, pendUp);
 
         Serial.print("  Pendulum TILTED reading: "); Serial.println(pendTilted, 2);
@@ -673,8 +828,7 @@ void handleSerial() {
       while (!Serial.available()) { delay(10); }
       while (Serial.available()) Serial.read();
 
-      selectMux(0);
-      float upRef = readAS5600Deg();
+      float upRef = readPendulumSensorDeg();
 
       stepper->enableOutputs();
       stepper->setCurrentPosition(0);
@@ -686,8 +840,7 @@ void handleSerial() {
 
       float vel = 0, pos = 0;
       while (!Serial.available()) {
-        selectMux(0);
-        float pNow = readAS5600Deg();
+        float pNow = readPendulumSensorDeg();
         float alphaRaw = getAngleDiffDeg(pNow, upRef);
         float alpha = ALPHA_SIGN * alphaRaw;
 
@@ -743,7 +896,7 @@ void handleSerial() {
       Serial.println("Sampling sensors...");
 
       float oldTarget = targetRawDeg;
-      targetRawDeg = averageMuxAngleDeg(0, CAL_SAMPLES, CAL_SAMPLE_DELAY_US);
+      targetRawDeg = calibratePendulumUprightDeg();
       targetRawDegCal = targetRawDeg;
       motorZeroDeg = averageMuxAngleDeg(1, CAL_SAMPLES, CAL_SAMPLE_DELAY_US);
 
@@ -827,30 +980,12 @@ void handleSerial() {
 	      Serial.print(" CTRL_SIGN="); Serial.println(CTRL_SIGN);
 
 	      // Raw sensors + stored zeros (helps debug off-center settling / calibration bias).
-	      selectMux(0);
-	      float pendRawNow = wrap360(readAS5600Deg());
-	      uint8_t pendSt = sensor.readStatus();
-	      uint8_t pendAgc = sensor.readAGC();
-	      uint16_t pendMag = sensor.readMagnitude();
+	      printPendulumSensorDiagnostics();
 	      selectMux(1);
 	      float baseRawNow = wrap360(readAS5600Deg());
 	      uint8_t baseSt = sensor.readStatus();
 	      uint8_t baseAgc = sensor.readAGC();
 	      uint16_t baseMag = sensor.readMagnitude();
-	      Serial.print("pendRawDeg="); Serial.print(pendRawNow, 2);
-	      Serial.print(" targetRawDeg="); Serial.println(targetRawDeg, 2);
-	      Serial.print("pendMag="); Serial.print(pendMag);
-	      Serial.print(" agc="); Serial.print(pendAgc);
-	      Serial.print(" st=0x"); Serial.print(pendSt, HEX);
-	      Serial.print(" md/hi/lo=");
-	      Serial.print((pendSt & AS5600_STATUS_MAGNET_DETECT) ? 1 : 0);
-	      Serial.print("/");
-	      Serial.print((pendSt & AS5600_STATUS_MAGNET_HIGH) ? 1 : 0);
-	      Serial.print("/");
-	      Serial.println((pendSt & AS5600_STATUS_MAGNET_LOW) ? 1 : 0);
-	      Serial.print("targetRawDegCal="); Serial.print(targetRawDegCal, 2);
-	      Serial.print(" (diff="); Serial.print(getAngleDiffDeg(targetRawDeg, targetRawDegCal), 2);
-	      Serial.println(")");
 	      Serial.print("baseRawDeg="); Serial.print(baseRawNow, 2);
 	      Serial.print(" motorZeroDeg="); Serial.println(motorZeroDeg, 2);
 	      Serial.print("baseMag="); Serial.print(baseMag);
@@ -1076,6 +1211,7 @@ void setup() {
   Serial.begin(500000);
   Wire.begin();
   Wire.setClock(400000);
+  initPendulumSensorBackend();
 
   engine.init();
   stepper = engine.stepperConnectToPin(STEP_PIN);
@@ -1107,6 +1243,7 @@ void setup() {
   Serial.println("Useful:");
   Serial.println("  S (sign wizard), G (print config), R (clear EEPROM), Y (save), W/N/U (tuning)");
   Serial.println("Log: t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped");
+  Serial.print("pendSensor="); Serial.println(pendulumSensorName());
 
   bool loaded = loadPersistedConfig();
   Serial.print("[EEPROM] ");
@@ -1143,9 +1280,8 @@ void loop() {
   float dt = dtUs * 1e-6f;
 
   // Pendulum
-  selectMux(0);
-  float pendDeg = readAS5600Deg();
-  int pendErr = sensor.lastError();
+  float pendDeg = readPendulumSensorDeg();
+  int pendErr = readPendulumSensorError();
   if (currentState == STATE_ACTIVE && pendErr != AS5600_OK) dbgAlphaI2cErr++;
   float alphaDegRaw = getAngleDiffDeg(pendDeg, targetRawDeg);
   float alphaRawSigned = (float)ALPHA_SIGN * alphaDegRaw;

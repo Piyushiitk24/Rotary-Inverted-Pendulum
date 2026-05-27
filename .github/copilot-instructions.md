@@ -1,6 +1,6 @@
 # Rotary Inverted Pendulum (Furuta) — Repo Context for Coding Agents
 
-This repo contains the full end-to-end stack for a **rotary (Furuta) inverted pendulum** driven by a **stepper motor** and measured by **two AS5600 encoders** (via an I²C mux). The system supports:
+This repo contains the full end-to-end stack for a **rotary (Furuta) inverted pendulum** driven by a **stepper motor** and measured by **two AS5600 encoders** (via an I²C mux) by default. The pendulum sensor can also be built for a 600 PPR 2-phase optical encoder on Mega pins 2/3. The system supports:
 - Upright balancing with **three controller modes** (linear + two sliding-mode variants).
 - Optional **reference tracking / “nudge mode”**: commanded base/arm angle targets while staying balanced.
 - Host logging to timestamped CSV + event logs (`tools/run_balance.py`).
@@ -31,9 +31,13 @@ If you are changing anything control-related: **read `src/main.cpp` first**.
 
 - MCU: Arduino Mega 2560
 - Stepper driver: STEP/DIR/EN interface (FastAccelStepper)
-- Encoders: 2× AS5600 via I²C mux at `0x70`
-  - mux ch0: pendulum encoder
+- Encoders: default 2× AS5600 via I²C mux at `0x70`
+  - mux ch0: pendulum encoder (`PENDULUM_SENSOR_BACKEND=0`)
   - mux ch1: base encoder
+- Optional pendulum encoder backend:
+  - env `megaatmega2560_enc600` sets `PENDULUM_SENSOR_BACKEND=1`
+  - 600 PPR quadrature optical encoder, A=`D2`, B=`D3`
+  - 4x decoding gives 2400 counts/rev, 0.15 deg/count
 - Pins (see `src/main.cpp`):
   - `STEP_PIN=11`, `DIR_PIN=6`, `EN_PIN=7`
 
@@ -54,7 +58,8 @@ If you are changing anything control-related: **read `src/main.cpp` first**.
 
 ### Sensor handling
 
-- Always call `selectMux(ch)` before reading the AS5600.
+- Always call `selectMux(ch)` before reading an AS5600. The optional optical
+  pendulum encoder does not use the mux; the base AS5600 still does.
 - All **angle differences** must use `getAngleDiffDeg()` (wrap-safe in ±180°). Do not raw-subtract periodic angles.
 
 ### Stepper actuation (velocity mode; acceleration-input control)
@@ -121,6 +126,10 @@ Minimal workflow:
 - `Z` calibrate (arm centered; pendulum upright)
 - `E` arm/disarm (auto-engages when upright & still)
 - `G` print current config (including controller + SMC parameters)
+
+For the optical pendulum encoder build, `Z` resets the incremental encoder
+count at the held-upright pendulum position. It has no absolute angle, so every
+run must start from a deliberate upright calibration.
 
 Signs + persistence:
 - `S` sign wizard (guided hardware test)
@@ -192,3 +201,7 @@ Notes:
 `t_ms,alphaRaw100,alphaDot100,theta100,thetaDot100,accCmd,velCmd,posMeasSteps,clamped`
 
 If you must change telemetry: update the host parser, analysis scripts, and docs together.
+
+Build the optional optical pendulum encoder firmware without changing the
+default environment:
+- `pio run -e megaatmega2560_enc600`

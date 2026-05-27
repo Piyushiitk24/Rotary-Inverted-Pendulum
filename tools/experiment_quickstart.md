@@ -26,6 +26,9 @@ If you remember only one thing: **run the logger to create sessions, then run th
 Notes:
 - If the logger can’t connect, set `PORT = ...` at the top of `tools/run_balance.py`.
 - If you haven't installed Python deps into the repo venv: `./.venv/bin/pip install -r tools/requirements.txt`
+- Default firmware uses the pendulum AS5600 on the I2C mux. To compile for the
+  optional 600 PPR optical pendulum encoder on Mega pins D2/D3:
+  `pio run -e megaatmega2560_enc600`.
 
 ## 1.5) Thesis results workflow (recommended)
 
@@ -53,6 +56,11 @@ Alternative (older approach): run 3 separate reports by passing 3-session/1-sess
 - `G`  Print config (captures controller parameters in `events.txt` for thesis analysis).
 - `Z`  Calibrate (arm centered; pendulum upright). Do this every attempt.
 - `E`  Arm/disarm toggle. When armed, it auto-engages when upright & still (`ENGAGED!`).
+
+Optical pendulum encoder note: in `PENDULUM_SENSOR_BACKEND=1` builds, `Z`
+resets the incremental encoder count at the current upright position. Hold the
+pendulum upright before every calibration because the optical encoder is not an
+absolute sensor.
 
 **Controller select**
 - `C 0`  Linear controller (baseline)

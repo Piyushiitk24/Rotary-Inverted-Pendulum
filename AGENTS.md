@@ -17,6 +17,7 @@ and safety behavior.
 - Nudge/reference-tracking notes: `tools/base_tracking.md`.
 - Host logger and CSV contract: `tools/run_balance.py`.
 - Analysis pipeline: `tools/analyze_experiments.py` and `tools/balance_analysis/`.
+- Report exploration notebook: `tools/thesis_results.ipynb`.
 - Thesis export: `tools/export_thesis_assets.py` and
   `tools/build_modelling_chapter.py`.
 - Thesis build instructions: `thesis/README.md`.
@@ -24,9 +25,9 @@ and safety behavior.
 - Existing IDE-agent context: `.github/copilot-instructions.md`.
 
 `docs/PinConfiguration.md` is useful hardware background, but verify it against
-`src/main.cpp` before relying on it. It still contains an older base-sensor PWM
-section, while the current firmware reads both AS5600 sensors through the I2C
-multiplexer.
+`src/main.cpp` before relying on it. The current default firmware reads the
+pendulum and base AS5600 sensors through the I2C multiplexer; the optional
+optical pendulum encoder is compile-time selectable.
 
 ## Firmware Facts
 
@@ -34,6 +35,11 @@ multiplexer.
 - Libraries: `FastAccelStepper` and `AS5600`.
 - PlatformIO build flag: `-DFAS_TIMER_MODULE=1`, needed so FastAccelStepper can
   use pin 11 as STEP on the Mega.
+- Pendulum sensor backend is compile-time selectable:
+  - default `PENDULUM_SENSOR_BACKEND=0`: pendulum AS5600 on mux channel 0.
+  - optional env `megaatmega2560_enc600` sets `PENDULUM_SENSOR_BACKEND=1`:
+    600 PPR 2-phase optical encoder on Mega pins 2/3 with 4x decoding,
+    2400 counts/rev, 0.15 deg/count.
 - Active pins in firmware:
   - `STEP_PIN=11`
   - `DIR_PIN=6`
@@ -41,6 +47,7 @@ multiplexer.
   - I2C mux address `0x70`
   - mux channel 0: pendulum AS5600
   - mux channel 1: base AS5600
+  - optional optical pendulum encoder: A=`2`, B=`3`
 - Firmware serial baud is `500000`; `tools/run_balance.py` also uses `500000`.
   `platformio.ini` still has `monitor_speed = 115200`, so do not assume the
   PlatformIO monitor speed matches the active logger contract.
@@ -60,7 +67,8 @@ multiplexer.
 - `tools/run_balance.py` depends on that 9-column telemetry contract. If
   telemetry changes, update the logger, analysis code, quickstart, and this
   guide together.
-- Always select the mux channel before reading an AS5600.
+- Always select the mux channel before reading an AS5600. The optional optical
+  pendulum encoder does not use the mux; the base AS5600 still does.
 - Use `getAngleDiffDeg()` for angle differences. Do not raw-subtract wrapped
   angles.
 - The stepper is driven in continuous velocity mode. Controllers compute an
@@ -101,6 +109,10 @@ Minimal safe workflow:
 5. `E` arm; firmware auto-engages when the pendulum is upright and still.
 6. `!` stop at the end of a trial.
 
+For the optical pendulum encoder build, `Z` resets the incremental encoder
+count at the held-upright position. Move the pendulum to upright before every
+calibration because the optical encoder has no absolute magnet angle.
+
 Other common commands:
 
 - `S`: sign diagnostic wizard.
@@ -124,11 +136,15 @@ with `G` during experiments.
   `balance_log.csv` and `events.txt`.
 - Each firmware `ENGAGED!` to `DISARMED` or `FALLEN ...` block is one trial.
 - Use logger-only markers by typing `# <note>` in `run_balance.py`.
+- On quit or `KeyboardInterrupt`, `tools/run_balance.py` best-effort sends `!`
+  and records an auto-disarm command in `events.txt`.
 - `events.txt` uses host wall-clock timestamps, while CSV telemetry uses device
   `millis()`. Analysis must align those timelines; never assume they share an
   origin.
 - The pinned thesis manifest is
   `experiments/manifest_thesis_20260209.json`.
+- That pinned manifest currently describes 7 sessions: hold for `LIN`, `SMC`,
+  and `SMC4`; nudge for `LIN`; and tap for `LIN`, `SMC`, and `SMC4`.
 - Raw `logs/` and generated `reports/` are ignored by git. Curated exported
   thesis assets under `thesis/figures/` and `thesis/tables/` are tracked.
 
@@ -153,6 +169,12 @@ The report folder consumed by thesis export must contain:
 - `metrics_nudge_steps.csv`
 - `alignment_quality.csv`
 - `figures/`
+
+`tools/analyze_experiments.py` also writes `metrics_summary_by_mode.csv`,
+`manifest_resolved.csv`, `README.md`, and
+`per_session/<session>/trial_diagnostics.csv` for audit and debugging. The
+thesis exporter checks the required CSVs above, copies raw CSVs under
+`thesis/tables/raw/`, and generates curated LaTeX tables.
 
 Export curated assets into `thesis/`:
 
@@ -189,9 +211,15 @@ The slide builder uses Python and Node tooling, renders equations, copies figure
 assets, creates a base PPTX, then post-processes the final deck into `dist/`.
 Follow `Slides/thesis_presentation_design_system.md` for presentation styling.
 
+`Slides/rotary_inverted_pendulum/scripts/content_manifest.py` is the structured
+slide-content source. The generated `dist/` PPTX files are tracked artifacts, so
+do not treat them as disposable clutter without checking the task intent.
+
 ## Validation Commands
 
 - Firmware compile: `pio run`.
+- Optical pendulum encoder compile:
+  `pio run -e megaatmega2560_enc600`.
 - Firmware upload: `platformio run -t upload` only when hardware upload is
   explicitly intended.
 - Logger dependencies: `./.venv/bin/pip install -r tools/requirements.txt`.
