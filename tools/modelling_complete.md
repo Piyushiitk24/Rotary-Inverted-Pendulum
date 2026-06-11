@@ -458,7 +458,14 @@ This section substitutes the measured rig parameters into the linearized model s
 
 Let $J_0\equiv \hat J_0$ and $J_1\equiv \hat J_2$. Numerical values:
 
-$$J_0=0.001104\ \mathrm{kg\,m^2},\quad J_1=1.021\times 10^{-4}\ \mathrm{kg\,m^2},\quad K=1.993\times 10^{-4}\ \mathrm{kg\,m^2},\quad G=0.01029\ \mathrm{N\,m}$$
+$$
+\begin{aligned}
+J_0 &= 0.001104\ \mathrm{kg\,m^2}, &
+J_1 &= 1.021\times 10^{-4}\ \mathrm{kg\,m^2},\\
+K &= 1.993\times 10^{-4}\ \mathrm{kg\,m^2}, &
+G &= 0.01029\ \mathrm{N\,m}.
+\end{aligned}
+$$
 
 Linear equations:
 

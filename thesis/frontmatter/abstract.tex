@@ -1,0 +1,48 @@
+\thispagestyle{plain}
+\addcontentsline{toc}{chapter}{Abstract}
+\begin{center}
+  {\huge\itshape Abstract\par}
+\end{center}
+\vspace{0.5em}
+
+\noindent\rule{\linewidth}{0.5mm}
+\textbf{Name of the Student}: \ThesisAuthor
+\hfill \textbf{Roll No.}: \ThesisRollNumber\\
+\textbf{Degree}: \ThesisDegreeShort
+\hfill \textbf{Department}: Electrical Engineering\\
+\textbf{Thesis Title}: \ThesisTitle\\
+\textbf{Thesis Supervisor}: \ThesisSupervisor\\
+\textbf{Thesis Co-Supervisor}: \ThesisCoSupervisor\\
+\textbf{Month and Year of Submission}: \ThesisSubmissionDate
+\par\noindent\rule{\linewidth}{0.5mm}
+
+This thesis investigates upright stabilization of a custom rotary (Furuta)
+inverted pendulum driven by a stepper motor. Unlike the torque-controlled
+actuators commonly assumed in analytical studies, the experimental platform
+accepts open-loop STEP/DIR speed commands while measuring the actual arm and
+pendulum angles. The resulting mismatch between commanded and realized motion
+is central to the modelling, controller implementation, and interpretation of
+the experiments.
+
+A first-principles nonlinear model is derived and linearized about the upright
+equilibrium. An acceleration-input formulation is then connected to the
+firmware path in which commanded acceleration is integrated into step rate.
+Three upright-only controllers are implemented on the same hardware: linear
+full-state feedback, a hybrid pendulum-surface sliding-mode controller with
+base-centering assistance, and a four-state sliding-mode controller. The
+real-time implementation includes filtered derivative estimation, wrap-safe
+angle processing, sensor-glitch rejection, reference-profile supervision,
+actuator limits, stall diagnostics, and controlled disarming.
+
+Experimental evidence is drawn from seven pinned trials: three undisturbed
+hold trials, one linear-controller reference-tracking trial, and three
+manually disturbed tap trials. In these representative trials, the linear
+controller produced the lowest hold RMS pendulum error and was the only
+controller to complete the tap trial without falling. The hybrid
+sliding-mode controller produced the smallest peak pendulum excursion in the
+hold condition. The four-state controller required substantially greater
+command effort and was more sensitive to actuator shaping. Reference motion
+was achieved without a fall, but none of the commanded steps satisfied the
+fixed settling criterion within the available windows. Because each condition
+contains one trial, the comparison is a qualitative engineering case study,
+not a statistical controller ranking.

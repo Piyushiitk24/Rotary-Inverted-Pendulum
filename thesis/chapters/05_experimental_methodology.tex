@@ -1,0 +1,103 @@
+\chapter{Experimental Methodology}
+\label{ch:experiments}
+\label{ch:methodology}
+
+\section{Research Design}
+The study uses a fixed-case comparative experimental design. All controllers
+run on the same rig, firmware measurement pipeline, actuator interface, safety
+logic, and logger. The independent factor is the selected controller mode.
+The observed responses are pendulum angle, arm angle, estimated angular
+rates, commanded acceleration, commanded velocity, trial outcome, and
+diagnostic events.
+
+This is not a repeated-measures statistical experiment. The manifest contains
+one representative trial for each available controller--condition pair, and
+the conclusions are intentionally limited to those trials.
+
+\section{Dataset definition}
+All results in this thesis are generated from one fixed dataset of experimental runs selected through the manifest \texttt{experiments/manifest\_thesis\_20260209.json}. This makes the analysis repeatable: the same thesis assets can be rebuilt from the same seven pinned runs.
+
+\subsection*{Thesis run identifiers}
+For readability, the internal run labels used by the analysis pipeline are mapped to concise thesis identifiers:
+\begin{itemize}
+  \item Hold-at-center: \textbf{H1--H3}
+  \item Commanded reference tracking (nudge): \textbf{N1}
+  \item Finger tap disturbance: \textbf{T1--T3}
+\end{itemize}
+Each condition is represented by one pinned run only, so later comparisons are qualitative and metric-based rather than statistical. Table~\ref{tab:dataset_manifest} lists the run identifiers used in this thesis.
+
+\InputRequired{tables/tab_dataset_manifest.tex}
+
+\section{Controller and pipeline configuration}
+The controller and pipeline settings were fixed for the pinned runs and were
+captured in each session event log. The complete parameter inventory is
+reported in Appendix~\ref{app:implementation_parameters}; the controller
+chapter reports the smaller mode-specific subsets needed to interpret each
+control law.
+
+\section{Calibration and Trial Procedure}
+Before each run, the operator disarmed the system, recorded the active
+configuration, selected the controller, and calibrated the arm at its center
+with the pendulum held upright. The system was then armed and allowed to
+engage automatically only when the pendulum was inside the upright and
+low-rate engagement window. At the end of a run, the system was explicitly
+disarmed.
+
+The operational sequence was:
+\[
+\texttt{!}\ \rightarrow\ \texttt{G}\ \rightarrow\ \texttt{C 0/1/2}\
+\rightarrow\ \texttt{Z}\ \rightarrow\ \texttt{E}\ \rightarrow\ \texttt{!}.
+\]
+Sign settings had previously been checked through the diagnostic procedure
+described in Section~\ref{ch:notation}. The pinned runs used
+\texttt{motorSign=1}, \texttt{ALPHA\_SIGN=-1},
+\texttt{THETA\_SIGN=1}, and \texttt{CTRL\_SIGN=1}.
+
+\section{Experimental Conditions}
+\begin{itemize}
+  \item \textbf{Hold}: engage near $\theta_{\mathrm{ref}}=0$ and observe
+  undisturbed upright behavior.
+  \item \textbf{Nudge}: command a sequence of bounded arm-angle targets with
+  the linear controller while maintaining upright balance.
+  \item \textbf{Tap}: apply brief manual disturbances while the controller is
+  balancing. Tap onset and magnitude are not independently measured.
+\end{itemize}
+
+\section{Logging artifacts}
+Each logger session produces:
+\begin{itemize}
+  \item a device-time, nine-field time-series log (about \SI{50}{Hz}),
+  \item a host-time event log (status and diagnostic messages).
+\end{itemize}
+Within a session, each controller engagement followed by a disarm defines one \emph{trial}.
+
+The hold and nudge runs are straightforward to interpret from the recorded trajectories. The tap runs are less direct: they do not contain explicit disturbance markers, so the dataset supports qualitative disturbance-recovery comparisons but not precise impulse-response timing metrics.
+
+\section{Event-to-CSV alignment and limitations}
+The event log timestamps are host wall-clock time, while the time-series log uses device time. Therefore, naive alignment can introduce \SIrange{100}{500}{ms} shifts and corrupt any time-window metrics.
+
+The analysis pipeline aligns host events to device time by matching sparse status snapshots to nearby device-time samples using a multi-signal error metric (for example $\alpha$, $\dot{\alpha}$, $\theta$, $\dot{\theta}$, acceleration, and velocity) under a monotonicity constraint. A linear host-to-device mapping is then fit and residuals are reported. If alignment quality is unreliable, the pipeline avoids precise event-time annotations and instead reports metrics computed directly from device-time trajectories.
+
+\section{Metric definitions}
+All metrics are defined once here and reused in later tables:
+\begin{itemize}
+  \item \textbf{RMS and max:} $\mathrm{RMS}(|\alpha|)$, $\max|\alpha|$, $\max|\theta|$, and related quantities over the trial duration.
+  \item \textbf{Drift slope:} slope of $\theta(t)$ over the trial (least-squares fit), reported in \si{\degree\per\second}.
+  \item \textbf{Effort:} RMS and max of the commanded base acceleration $u$ in \si{\step\per\second\squared}.
+  \item \textbf{Saturation and clamp percentages:} fraction of samples where acceleration saturation is active and fraction where the base is near the mechanical limit.
+\end{itemize}
+
+For the nudge trial, rise time, overshoot, steady-state error, and entry into a
+fixed $\pm\SI{1}{\degree}$ settling band are evaluated for each commanded
+step. A missing settling time means the criterion was not maintained within
+the available post-command window.
+
+\section{Reproducibility and Traceability}
+The analysis command resolves the manifest into explicit session paths and
+writes trial-level metrics, summary tables, alignment diagnostics, figures,
+and a resolved manifest. The thesis export copies the required raw metric
+tables into \texttt{thesis/tables/raw/} and records the analysis report name,
+manifest name, repository revision, and export time in
+\texttt{analysis\_metadata.tex}. This allows reported values to be traced to
+the selected sessions without treating ignored raw logs as thesis source
+files.

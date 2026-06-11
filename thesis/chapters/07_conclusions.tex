@@ -1,0 +1,82 @@
+\chapter{Conclusions and Future Work}
+\label{ch:conclusions}
+
+\section{Achievement of the Research Objectives}
+The first objective was to obtain a model suitable for controller design. A
+first-principles nonlinear model was derived, specialized using measured
+geometry and mass properties, and reduced to the upright relation
+$\ddot{\alpha}=100.8\alpha-1.952\ddot{\theta}$. The complete derivation is
+retained in Appendix~\ref{app:full_derivation}.
+
+The second objective was to construct an integrated experimental stack. The
+completed platform measures both angles, estimates angular rates, applies
+wrap-safe state processing, integrates acceleration commands into step rate,
+enforces travel and nonlinear-validity limits, records trial data, and
+exports auditable figures and tables.
+
+The third objective was to implement three controllers on a common platform.
+Linear full-state feedback, hybrid sliding-mode control, and four-state
+sliding-mode control were all implemented through the same sensing and
+actuation path. The work also demonstrated commanded base-reference motion
+with the linear controller.
+
+The fourth objective was experimental comparison. Seven fixed trials were
+analysed across hold, nudge, and tap conditions. This objective was achieved
+as a qualitative engineering comparison, not as a statistical evaluation.
+
+\section{Answers to the Research Questions}
+The acceleration-input representation provides a useful bridge between the
+Furuta model and the firmware command structure, provided it is described as
+an abstract command. The real stepper can still stall or miss motion, so
+measured arm feedback and actuator diagnostics remain necessary.
+
+For the pinned hold trials, the linear controller produced the lowest RMS
+pendulum error, the hybrid SMC produced the smallest peak pendulum and arm
+excursions, and SMC4 required the greatest RMS command effort. In the pinned
+tap trials, only the linear controller completed the run without falling.
+These observations describe the selected runs only and do not establish a
+general ranking of linear and sliding-mode control.
+
+The practical mechanisms required for usable hardware control were filtered
+derivatives, wrap-safe angle differences, sensor-jump rejection, calibration
+and sign checks, low-speed deadband, stop-before-reverse behavior, engagement
+ramping, soft and hard travel limits, nonlinear validity guards, and
+stall/missed-motion diagnostics.
+
+\section{Main Findings}
+\begin{itemize}
+  \item The linear controller was the most consistent overall controller in
+  the pinned dataset and remained upright in the representative tap run.
+  \item The hybrid SMC reduced peak excursions in the representative hold run,
+  but its representative tap recovery ended in a fall.
+  \item SMC4 balanced in the representative hold run but was the most
+  sensitive to actuator limits, denominator protection, and command shaping.
+  \item The nudge run demonstrated balance with commanded arm motion, but none
+  of the three steps met the fixed $\pm\SI{1}{\degree}$ settling criterion
+  within the available windows.
+\end{itemize}
+
+\section{Limitations}
+Each condition is represented by one pinned trial. Manual tap magnitude and
+onset were not measured, the telemetry rate was lower than the control rate,
+and the nominal model was not validated through a dedicated parameter
+identification campaign. The work is restricted to upright stabilization and
+does not address swing-up. Some component procurement details were also not
+retained, which limits exact hardware duplication despite the documented
+functional architecture.
+
+\section{Future Work}
+\begin{itemize}
+  \item repeat every controller--condition combination enough times to report
+  distributions, confidence intervals, and failure rates;
+  \item add a repeatable disturbance device or trigger so recovery time and
+  disturbance magnitude are measurable;
+  \item perform dedicated system identification and compare predicted and
+  measured trajectories before redesigning controller gains;
+  \item log selected controller and actuator signals closer to the
+  \SI{200}{Hz} control rate;
+  \item investigate actuator-aware nonlinear control, observers, and
+  anti-windup or command-allocation methods for bounded stepper motion;
+  \item add and evaluate a separate swing-up controller if full operating-range
+  control becomes a project requirement.
+\end{itemize}

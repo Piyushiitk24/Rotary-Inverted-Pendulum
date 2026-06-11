@@ -1,0 +1,87 @@
+\chapter{Experimental Platform and Mathematical Modelling}
+\label{ch:platform_modelling}
+\label{ch:modelling}
+
+\input{chapters/sections/platform_hardware}
+\input{chapters/sections/notation_signals}
+
+\section{Modelling Assumptions}
+The controller-design model assumes rigid links, frictionless joints, an
+abstract commanded base acceleration $\ddot{\theta}$, no missed steps or
+stalls, no sensor glitches, and no actuator saturation. These assumptions
+isolate the dominant pendulum dynamics. They do not describe the complete
+experimental plant, so all measured results are interpreted together with the
+implementation constraints in Chapter~\ref{ch:controller_implementation}.
+
+\section{Nonlinear Dynamic Model}
+Using the Euler--Lagrange method with $\theta$ as the arm angle and $\alpha=0$
+at upright gives the coupled model
+\begin{align}
+(J_0+J_1\sin^2\alpha)\ddot{\theta}
+{}+K\cos\alpha\,\ddot{\alpha}
+{}+J_1\sin(2\alpha)\dot{\theta}\dot{\alpha}
+-K\sin\alpha\,\dot{\alpha}^2 &= \tau, \\
+K\cos\alpha\,\ddot{\theta}
+{}+J_1\ddot{\alpha}
+-\frac{1}{2}J_1\sin(2\alpha)\dot{\theta}^2
+-G\sin\alpha &= 0.
+\end{align}
+The structure is consistent with established Furuta-pendulum derivations
+\cite{Cazzolato2011}. The complete coordinate construction, energy
+expressions, and Euler--Lagrange algebra are retained in
+Appendix~\ref{app:full_derivation}.
+
+Solving the pendulum equation for the acceleration-input representation used
+by the nonlinear controllers gives
+\begin{equation}
+\ddot{\alpha}
+=A\sin\alpha
++\sin\alpha\cos\alpha\,\dot{\theta}^{2}
+-B\cos\alpha\,\ddot{\theta}.
+\label{eq:nonlinear_reduced}
+\end{equation}
+
+\section{Upright Linearization and Numerical Constants}
+For $|\alpha|\ll 1$, use $\sin\alpha\approx\alpha$,
+$\cos\alpha\approx1$, and neglect products of small quantities. The reduced
+upright relation becomes
+\begin{equation}
+\ddot{\alpha}=A\alpha-B\ddot{\theta}.
+\label{eq:upright_reduced}
+\end{equation}
+
+The measured geometry and mass distribution give the nominal constants in
+Table~\ref{tab:model_constants}.
+\begin{table}[htbp]
+  \centering
+  \caption{Nominal model parameters and constants used for controller design.}
+  \label{tab:model_constants}
+  \begin{tabular}{lll}
+    \toprule
+    Quantity & Value & Meaning \\
+    \midrule
+    $J_0$ & \SI{1.104e-3}{\kilogram\metre\squared} & effective arm-side inertia \\
+    $J_1$ & \SI{1.021e-4}{\kilogram\metre\squared} & pendulum pivot inertia \\
+    $K$ & \SI{1.993e-4}{\kilogram\metre\squared} & inertial coupling constant \\
+    $G$ & \SI{1.029e-2}{\newton\metre} & gravity constant \\
+    $A=G/J_1$ & \SI{100.8}{\per\second\squared} & unstable upright coefficient \\
+    $B=K/J_1$ & 1.952 & base-acceleration coupling \\
+    $k_s$ & \SI{4.444}{\step\per\degree} & angle-to-step conversion \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Thus,
+\[
+\ddot{\alpha}=100.8\,\alpha-1.952\,\ddot{\theta}.
+\]
+These are model constants, not evidence that the stepper reproduces the
+commanded acceleration exactly.
+
+\section{Model Use and Limitations}
+Equation~\eqref{eq:upright_reduced} is used for linear state-feedback design,
+while Equation~\eqref{eq:nonlinear_reduced} is used for the two sliding-mode
+controllers. The model is not independently validated through a parameter
+identification experiment in this thesis. Its role is to provide a coherent
+design model; the experimental chapter evaluates the complete closed-loop
+system rather than claiming plant-model equivalence.

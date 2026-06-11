@@ -1,0 +1,24 @@
+\chapter{Controller Design and Real-Time Implementation}
+\label{ch:controller_implementation}
+
+This chapter develops the three upright controllers and the shared real-time
+pipeline through which they are evaluated. The analytic control laws are
+presented separately from the practical sampled-data, saturation, and safety
+logic used on the rig.
+
+\input{chapters/sections/measurement_estimation}
+\input{chapters/sections/actuation_safety}
+\input{chapters/sections/controller_linear}
+\input{chapters/sections/controller_hybrid_smc}
+\input{chapters/sections/controller_smc4}
+
+\section{Common Implementation Boundary}
+All three controllers use the same calibrated angles, derivative estimates,
+reference signals, sign mapping, acceleration integration, stepper command
+path, travel limits, and trial logging. This common boundary is important for
+the comparison: differences in Chapter~\ref{ch:results} arise from the
+controller and its mode-specific safeguards, not from different sensors or
+data-acquisition paths.
+
+The complete numeric parameter inventory used by the pinned trials is given in
+Appendix~\ref{app:implementation_parameters}.

@@ -1,0 +1,103 @@
+\chapter{Introduction}
+\label{ch:introduction}
+
+\section{Background and Motivation}
+The rotary inverted pendulum, commonly called the Furuta pendulum, is an
+underactuated mechanical system with one actuated rotary arm and one passive
+pendulum joint. Its nonlinear, unstable, and coupled dynamics make it a useful
+benchmark for modelling, state-feedback design, nonlinear control, sensing,
+real-time implementation, and experimental validation
+\cite{Furuta1991,Hamza2019}.
+
+The experimental difficulty is not limited to deriving a stabilizing control
+law. A real platform must estimate angular rates from noisy measurements,
+handle wrapped encoder angles, apply commands through a finite-bandwidth
+actuator, remain inside mechanical limits, and record enough information to
+explain both successful and failed trials. These implementation effects are
+especially important in the present rig because the arm is driven by a stepper
+motor. The base angle is measured directly, but the motor still receives
+open-loop STEP/DIR commands and can stall or miss motion under load.
+
+This thesis therefore treats modelling, controller design, firmware, safety,
+and experimental interpretation as one integrated research problem.
+
+\section{Problem Statement}
+The problem addressed in this thesis is to stabilize a custom stepper-driven
+rotary inverted pendulum near the upright equilibrium while regulating or
+commanding the rotary-arm position. The controller must operate on measured
+arm and pendulum angles, generate commands compatible with the stepper
+velocity interface, and remain usable despite sensor noise, actuator limits,
+timing jitter, and mechanical travel limits.
+
+The work is restricted to \emph{upright-only stabilization}. The pendulum is
+manually placed near upright before engagement; no swing-up controller is
+designed or evaluated.
+
+\section{Research Questions}
+The thesis is organized around three questions:
+\begin{enumerate}
+  \item How can a first-principles Furuta pendulum model be adapted to an
+  acceleration-command representation that matches the stepper firmware
+  interface without claiming ideal actuator realization?
+  \item How do linear full-state feedback, a hybrid sliding-mode controller,
+  and a four-state sliding-mode controller behave on the same physical
+  platform under hold, commanded-motion, and manual-disturbance conditions?
+  \item Which practical sensing, actuation, and safety mechanisms are required
+  to make these controllers repeatable and interpretable on real hardware?
+\end{enumerate}
+
+\section{Research Objectives}
+The objectives are:
+\begin{enumerate}
+  \item derive and numerically specialize a nonlinear and upright-linearized
+  model of the custom rig;
+  \item construct a measured-axis experimental platform and a real-time
+  estimation, actuation, safety, logging, and analysis pipeline;
+  \item implement one linear and two sliding-mode upright controllers using a
+  common state, reference, and actuator interface;
+  \item demonstrate commanded base-position motion while maintaining upright
+  balance;
+  \item compare the controllers using a fixed, auditable experimental dataset
+  while keeping all conclusions within the limits of that evidence.
+\end{enumerate}
+
+\section{Contributions}
+The principal contributions of this work are:
+\begin{itemize}
+  \item an acceleration-input formulation connected explicitly to the
+  firmware path ``commanded acceleration $\rightarrow$ commanded speed
+  $\rightarrow$ STEP/DIR actuation'';
+  \item implementation of three upright controllers on the same custom Furuta
+  platform with encoder feedback and stepper actuation;
+  \item a supervised trapezoidal reference generator that permits commanded
+  arm motion while the linear controller balances the pendulum;
+  \item practical protections for wrapped angles, derivative noise, sensor
+  glitches, actuator reversal, low-speed dithering, travel limits, and missed
+  motion;
+  \item a reproducible analysis path from pinned raw sessions to thesis
+  figures, tables, and qualitative controller comparisons.
+\end{itemize}
+
+\section{Scope and Limitations}
+The experimental evidence consists of seven pinned trials: three hold trials,
+one linear-controller reference-tracking trial, and three manual tap trials.
+Each controller--condition pair is represented by one trial. The dataset is
+therefore suitable for a transparent engineering case study, but not for
+statistical inference or a universal ranking of controller families.
+
+The manual taps have no independent onset marker, so precise recovery-time or
+impulse-response metrics cannot be claimed. The model also omits friction,
+backlash, missed steps, motor-current dynamics, sensor faults, and saturation.
+Those effects are handled only through firmware protections and experimental
+interpretation.
+
+\section{Thesis Organization}
+Chapter~\ref{ch:literature} reviews Furuta modelling, linear and sliding-mode
+control, experimental platforms, and the research gap addressed here.
+Chapter~\ref{ch:platform_modelling} presents the hardware, notation, and
+mathematical model. Chapter~\ref{ch:controller_implementation} develops the
+three controllers and the real-time implementation. Chapter~\ref{ch:experiments}
+defines the experimental and analysis methodology.
+Chapter~\ref{ch:results} presents the measured results, and
+Chapter~\ref{ch:conclusions} states the conclusions, limitations, and future
+work.

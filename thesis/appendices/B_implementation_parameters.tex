@@ -1,0 +1,155 @@
+\chapter{Controller and Firmware Parameters}
+\label{app:implementation_parameters}
+
+This appendix records the numeric configuration associated with the pinned
+experimental dataset. Runtime tunables and sign settings were checked against
+the session event logs. Compile-time timing, limit, and safeguard values were
+checked against the repository firmware source. The logs do not embed a
+firmware commit identifier, so those compile-time values are a reconstructed
+implementation record rather than a cryptographically versioned historical
+snapshot. The main text presents only the settings needed to explain each
+controller. A dash denotes a dimensionless setting, not an unavailable value.
+
+\begin{table}[htbp]
+  \centering
+  \footnotesize
+  \renewcommand{\arraystretch}{1.05}
+  \caption{Shared timing, conversion, and travel-limit parameters.}
+  \label{tab:controller_params_overview}
+  \begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}p{0.26\linewidth}X@{}}
+    \toprule
+    Parameter & Setting & Function \\
+    \midrule
+    Stepper conversion $k_s$ & $4.444\ \si{\step\per\degree}$ & Converts angular commands to step units \\
+    Control tick & \SI{200}{Hz} & Fixed-period control loop \\
+    CSV logging rate & \SI{50}{Hz} & Telemetry decimated from the control tick \\
+    Nominal tick period $T_s$ & \SI{5}{ms} & Target loop period \\
+    Overrun threshold $T_{\mathrm{ov}}$ & \SI{6}{ms} & Counts a timing overrun when $dt>T_{\mathrm{ov}}$ \\
+    Base angle limit & \SI{80}{\degree} & Hard disarm beyond this bound \\
+    Pendulum angle limit & \SI{30}{\degree} & Hard disarm beyond this bound \\
+    Hard-limit debounce $N_{\mathrm{fall}}$ & 3 ticks & Equivalent to \SI{15}{ms} at \SI{200}{Hz} \\
+    Soft-limit margin $\Delta_\theta$ & \SI{2}{\degree} & Prevents outward motion above \SI{78}{\degree} \\
+    Engage ramp duration $T_{\mathrm{ramp}}$ & \SI{100}{ms} & Ramps the controller command after engagement \\
+    Global acceleration cap $u_{\max}$ & \SI{20000}{\step\per\second\squared} & Limits the integrated actuation command \\
+    Global speed cap $\dot{\theta}_{\max}$ & \SI{15000}{\step\per\second} & Limits commanded step frequency \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \footnotesize
+  \renewcommand{\arraystretch}{1.05}
+  \caption{Shared actuation and nonlinear-controller safeguards.}
+  \begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}p{0.26\linewidth}X@{}}
+    \toprule
+    Parameter & Setting & Function \\
+    \midrule
+    Speed stop deadband \texttt{speedStopHz} & \SI{50}{\step\per\second} & Stops the motor below this requested speed \\
+    Stall-detection command threshold & \SI{500}{\step\per\second} & Minimum speed at which motion is expected \\
+    Stall-detection motion threshold & \SI{0.10}{\degree} per tick & Minimum measured motion \\
+    Stall persistence $N_{\mathrm{stall}}$ & 30 ticks & Equivalent to \SI{150}{ms} at \SI{200}{Hz} \\
+    Nonlinear validity limit $|\alpha|$ & \SI{25}{\degree} & Enforces upright-only operation \\
+    Extreme-rate limit $|\dot{\alpha}|$ & \SI{250}{\degree\per\second} & Prevents commands driven by extreme rate estimates \\
+    Rate-limit debounce $N_{\dot{\alpha}}$ & 3 ticks & Requires consecutive threshold violations \\
+    Post-engage grace $T_g$ & \SI{200}{ms} & Delays extreme-rate checking after engagement \\
+    Rate-check angle gate $\alpha_{\min}$ & \SI{5}{\degree} & Avoids noise trips close to upright \\
+    Cosine floor $\cos_{\min}$ & 0.2 & Protects divisions involving $\cos\alpha$ \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \footnotesize
+  \renewcommand{\arraystretch}{1.05}
+  \caption{Linear-controller parameters.}
+  \begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}p{0.26\linewidth}X@{}}
+    \toprule
+    Parameter & Setting & Function \\
+    \midrule
+    $K_{\theta}$ & $31.5\ \si{\step\per\second\squared\per\degree}$ & Base-position gain \\
+    $K_{\alpha}$ & $725.6\ \si{\step\per\second\squared\per\degree}$ & Pendulum-angle gain \\
+    $K_{\dot{\theta}}$ & $28.3\ \si{\step\per\second\per\degree}$ & Base-rate gain \\
+    $K_{\dot{\alpha}}$ & $73.5\ \si{\step\per\second\per\degree}$ & Pendulum-rate gain \\
+    Derivative cutoff $\omega_c$ & \SI{450}{rad\per\second} & Bilinear filtered differentiator \\
+    Angle deadband $\alpha_{\mathrm{db}}$ & \SI{0.5}{\degree} & Reduces noise chasing near upright \\
+    Velocity leak $\lambda_{\mathrm{leak}}$ & \SI{2.0}{s^{-1}} & Active only near upright and centre \\
+    Leak angle window & \SI{5}{\degree} & Pendulum gate for the velocity leak \\
+    Leak base-error window & \SI{20}{\degree} & Base-position gate for the velocity leak \\
+    Upright trim rate & \SI{0.20}{s^{-1}} & Slow bias compensation \\
+    Trim clamp $\alpha_{\mathrm{trim,max}}$ & \SI{1.5}{\degree} & Relative to the calibration reference \\
+    Trim angle window & \SI{3}{\degree} & Enables trim only near upright \\
+    Trim rate window & \SI{50}{\degree\per\second} & Enables trim only at modest pendulum rate \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \footnotesize
+  \renewcommand{\arraystretch}{1.05}
+  \caption{Hybrid sliding-mode controller parameters.}
+  \begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}p{0.26\linewidth}X@{}}
+    \toprule
+    Parameter & Setting & Function \\
+    \midrule
+    Surface slope $\lambda$ & \SI{15}{s^{-1}} & Defines $s=\dot{\alpha}+\lambda\alpha$ \\
+    Reaching gain $K$ & \SI{800}{\degree\per\second\squared} & Boundary-layer reaching law \\
+    Boundary layer $\phi$ & \SI{50}{\degree\per\second} & Reduces high-frequency switching \\
+    Base-assist scale $\gamma$ & 1.0 & Scales the gated centring term \\
+    Firmware sign \texttt{smcSign} & $+1$ & Aligns the implemented and physical actuation directions \\
+    Assist angle gate & \SI{5}{\degree} & Enables assistance near upright \\
+    Assist rate gate & \SI{150}{\degree\per\second} & Enables assistance at moderate pendulum rate \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \footnotesize
+  \renewcommand{\arraystretch}{1.05}
+  \caption{Full-surface sliding-mode controller (SMC4) parameters.}
+  \begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}p{0.26\linewidth}X@{}}
+    \toprule
+    Parameter & Setting & Function \\
+    \midrule
+    Pendulum slope $\lambda_{\alpha}$ & \SI{15}{s^{-1}} & Pendulum component of the four-state surface \\
+    Base slope $\lambda_{\theta}$ & \SI{2.0}{s^{-1}} & Base-tracking component \\
+    Coupling weight $k$ & 0.50 & Requested analytic surface coupling \\
+    Reaching gain $K$ & \SI{800}{\degree\per\second\squared} & Boundary-layer reaching law \\
+    Boundary layer $\phi$ & \SI{50}{\degree\per\second} & Reduces high-frequency switching \\
+    Assist scale $\gamma$ & 1.0 & Gated base-centring assistance \\
+    Coupling hard limit $k_{\max}$ & 1.20 & Prevents ill-conditioning \\
+    Denominator margin $\mathrm{den}_{\min}$ & 0.60 & Protects the analytic inversion \\
+    Coupling ramp duration & \SI{200}{ms} & Ramps coupling after engagement \\
+    Internal rate clamp & \SI{200}{\degree\per\second} & Limits $\dot{\alpha}$ used by the controller \\
+    Base-error clamp & \SI{78}{\degree} & Bounds $|\theta_{\mathrm{err}}|$ \\
+    Base-rate-error clamp & \SI{200}{\degree\per\second} & Bounds $|\dot{\theta}_{\mathrm{err}}|$ \\
+    Combined base-term clamp & \SI{300}{\degree\per\second} & Bounds the surface base term \\
+    SMC4 acceleration cap & \SI{12000}{\step\per\second\squared} & Tighter than the global cap \\
+    SMC4 speed cap & \SI{2000}{\step\per\second} & Tighter than the global cap \\
+    Assist rate gate & \SI{250}{\degree\per\second} & Restricts assistance to the calmer region \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \footnotesize
+  \renewcommand{\arraystretch}{1.05}
+  \caption{Reference-tracking parameters.}
+  \begin{tabularx}{\linewidth}{@{}p{0.34\linewidth}p{0.26\linewidth}X@{}}
+    \toprule
+    Parameter & Setting & Function \\
+    \midrule
+    Target limit & \SI{35}{\degree} & Bounds user-specified base targets \\
+    Maximum reference speed & \SI{12}{\degree\per\second} & Trapezoidal profile limit \\
+    Maximum reference acceleration & \SI{60}{\degree\per\second\squared} & Trapezoidal profile limit \\
+    Stability angle gate & \SI{5}{\degree} & Required to continue the moving profile \\
+    Stability rate gate & \SI{80}{\degree\per\second} & Required to continue the moving profile \\
+    Engage grace $T_g$ & \SI{200}{ms} & Delays pause/resume gating after engagement \\
+    Pause/resume debounce & 10 ticks & Consecutive stable or unstable ticks required \\
+    \bottomrule
+  \end{tabularx}
+\end{table}

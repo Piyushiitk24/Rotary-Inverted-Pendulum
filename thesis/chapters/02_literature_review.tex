@@ -1,0 +1,120 @@
+\chapter{Literature Review and Research Gap}
+\label{ch:literature}
+
+\section{Rotary Inverted Pendulum as a Control Benchmark}
+Furuta, Yamakita, and Kobayashi established the rotary inverted pendulum as a
+compact benchmark for underactuated control, including the combined problems
+of swing-up and stabilization \cite{Furuta1991}. Subsequent work has used the
+platform to study linear control, nonlinear control, intelligent control,
+parameter identification, and real-time education. The review by Hamza
+et al.\ summarizes this development and shows that the platform remains useful
+because a simple mechanical arrangement exposes nonlinear coupling,
+open-loop instability, actuator constraints, and implementation sensitivity
+\cite{Hamza2019}.
+
+The present work uses the same benchmark for a narrower purpose: local
+upright stabilization and base-reference motion on a custom stepper-driven
+rig. Swing-up is excluded so that the experimental comparison focuses on
+upright controller structure and actuator realization.
+
+\section{Dynamic Modelling and Parameter Evaluation}
+Furuta pendulum models are commonly derived with Euler--Lagrange equations
+using motor torque as the generalized input. Cazzolato and Prime show that
+apparently small choices in coordinates, inertia definitions, and mass
+distribution can change the resulting equations, and provide a careful
+reference derivation for the coupled dynamics \cite{Cazzolato2011}. Their work
+supports the modelling structure used in this thesis.
+
+For a custom apparatus, geometric measurement alone does not guarantee an
+accurate dynamic model. Garc\'ia-Alarc\'on et al.\ discuss parameter
+identification for a Furuta pendulum and demonstrate how physical parameters
+can be estimated from experimental data \cite{GarciaAlarcon2012}. The present
+thesis instead uses measured geometry and mass properties to obtain a
+design-oriented model. This is sufficient for controller construction, but the
+resulting constants are treated as nominal model values rather than a
+high-fidelity identified plant.
+
+Most standard models retain torque or motor voltage as the plant input. In the
+present apparatus, however, the low-level interface commands step rate. The
+model is therefore reduced to an abstract commanded base acceleration for
+controller design. This choice improves consistency between equations and
+firmware, but does not imply that the physical stepper realizes the requested
+acceleration.
+
+\section{Linear Upright Stabilization}
+Linearization about the upright equilibrium enables state-space control with
+pole placement or linear-quadratic regulation. Such controllers are widely
+used as baselines because they provide transparent gain interpretation and
+are computationally inexpensive. Park, Kim, and Lee combine swing-up with LQR
+stabilization, while Chawla and Singla report a robust LQR-based intelligent
+controller on a real rotary pendulum \cite{Park2011,Chawla2018}. Standard
+state-feedback and pole-placement principles are described by Ogata and by
+{\AA}str{\"o}m and Murray \cite{ogata_modern_control,Astrom2008}.
+
+Linear controllers are locally meaningful: their design model is accurate
+only near upright and within the actuator range. Their practical value remains
+high because they provide a stable reference against which nonlinear methods
+can be assessed. In this thesis, the linear full-state controller is therefore
+the baseline and is also used for the commanded-reference experiment.
+
+\section{Sliding-Mode Control}
+Sliding-mode control constructs a surface in the state space and uses a
+reaching law to drive the system toward that surface. Classical treatments by
+Utkin and by Slotine and Li establish the robustness and Lyapunov arguments
+used in controller design \cite{utkin1992,slotine1991}. Young, Utkin, and
+\"{O}zg\"{u}ner emphasize both the practical strengths of sliding modes and the
+implementation problem of high-frequency switching or chattering
+\cite{Young1999}. Boundary layers and saturation functions are common ways to
+smooth the discontinuous sign term.
+
+Several studies apply sliding-mode variants to rotary inverted pendulums.
+Yi\u{g}it reports model-free sliding-mode stabilization on a real rotary
+pendulum \cite{Yigit2017}. Nguyen et al.\ use a fuzzy super-twisting approach,
+and Pham, Dao, and Nguyen present a hierarchical sliding-mode design for
+swing-up and stabilization \cite{Nguyen2020,Pham2024}. Irfan et al.\ compare
+advanced sliding-mode techniques in modelling and simulation
+\cite{Irfan2018}. These studies motivate nonlinear control, but they also show
+that performance depends strongly on the surface definition, reaching law,
+state estimation, and actuator assumptions.
+
+This thesis studies two practical variants. The first uses a pendulum-only
+surface plus a separately gated base-centering term. The second places
+pendulum and base-tracking states in one four-state surface. In both cases, the
+ideal Lyapunov result is separated explicitly from the sampled, saturated,
+stepper-driven implementation.
+
+\section{Experimental and Educational Implementations}
+Integrated pendulum platforms and educational rigs demonstrate the importance
+of sensing, timing, and safe experiment workflows in addition to control-law
+design. The STMicroelectronics educational platform documents a complete
+rotary-pendulum implementation, and Ju, Lee, and Lee describe a recent
+real-time educational platform for control and reinforcement-learning
+experiments \cite{ST_RIP_2019,Ju2025}. These systems support repeatable
+experiments through integrated actuation and instrumentation.
+
+The custom platform in this thesis differs in two important respects. First,
+both angles are measured directly, but the actuator remains an open-loop
+STEP/DIR stepper axis rather than a torque-controlled servo. Second, the
+analysis is built around raw session logs and a pinned manifest, allowing each
+reported result to be traced back to a specific trial.
+
+\section{Research Gap}
+The literature provides mature Furuta dynamics, linear stabilization methods,
+sliding-mode theory, and many specialized controller designs. The narrower
+engineering gap addressed in this thesis is the documented implementation and
+like-for-like qualitative evaluation of three upright controllers on the same
+measured-axis, stepper-driven platform.
+
+The research gap is not a claim that linear or sliding-mode control is new.
+Rather, the contribution lies in connecting:
+\begin{enumerate}
+  \item a first-principles model and an acceleration-command representation;
+  \item three controller structures using the same measured states and
+  firmware interface;
+  \item explicit actuator, sensor, timing, and safety constraints; and
+  \item an auditable experimental analysis that distinguishes ideal-theory
+  properties from observed hardware behavior.
+\end{enumerate}
+
+This framing leads directly to the platform and model developed in
+Chapter~\ref{ch:platform_modelling}.

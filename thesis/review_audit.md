@@ -38,7 +38,7 @@ Conventions used below:
 ### Problems
 - The chapter repeatedly calls the base actuator `closed-loop`, but the firmware and results chapters clearly treat the stepper drive as open-loop actuation with measured state feedback. This is the biggest wording conflict in the report (`thesis/chapters/01_hardware_setup.tex:19`, `thesis/chapters/01_hardware_setup.tex:42-43`, `thesis/chapters/01_hardware_setup.tex:65`, `src/main.cpp:32-36`, `src/main.cpp:1402-1437`, `thesis/chapters/10_results_discussion.tex:67`).
 - The sentence `To eliminate this ambiguity` is too strong. The encoder removes ambiguity in base-angle measurement, but it does not eliminate missed-step or stall behavior (`thesis/chapters/01_hardware_setup.tex:43`, `src/main.cpp:1402-1437`).
-- The bill of materials still contains many `TBD` entries, so the chapter cannot currently support a strong reproducibility claim (`thesis/chapters/01_hardware_setup.tex:173-214`).
+- The bill of materials still contains many unresolved entries, so the chapter cannot currently support a strong reproducibility claim (`thesis/chapters/01_hardware_setup.tex:173-214`).
 - The actuation-model paragraph says the theoretical input `coincides` with the practical signal sent to the actuator. In reality the motor is sent a speed command after integration, and the realized motion can still differ from the commanded motion (`thesis/chapters/01_hardware_setup.tex:108-113`, `src/main.cpp:1704-1727`).
 
 ### Easy to understand or not
@@ -55,7 +55,7 @@ Conventions used below:
 - Replace `closed-loop` with `measured-axis` or `encoder-instrumented` wherever you are describing the base axis.
 - Add one explicit sentence: `The encoder closes the measurement loop around theta, but the stepper drive still uses open-loop STEP/DIR actuation and can miss motion under load.`
 - Add a simple block diagram of the whole rig. This is not a data plot, but it would immediately improve readability.
-- Fill all `TBD` BOM entries or remove the reproducibility wording.
+- Resolve all incomplete BOM entries or remove the reproducibility wording.
 - Add the exact final sign settings used in the pinned dataset somewhere in the hardware/notation material: `motorSign=1`, `ALPHA_SIGN=-1`, `THETA_SIGN=1`, `CTRL_SIGN=1` (`thesis/tables/raw/metrics_trials.csv:2-8`).
 
 ### Language simplification guidance
@@ -320,7 +320,7 @@ Conventions used below:
 ### Additions/alterations required
 - Add one sentence in the conclusion that all controller comparisons in this thesis are qualitative because each experiment type uses one pinned representative trial per controller.
 - Rephrase the nudge conclusion as `The linear controller showed that balance-with-reference-tracking is feasible on this rig in one pinned trial.`
-- Add one future-work item about cleaning up the thesis itself before submission: resolve `closed-loop` wording, remove `TBD` hardware items, and simplify language.
+- Add one future-work item about cleaning up the thesis itself before submission: resolve `closed-loop` wording, remove incomplete hardware items, and simplify language.
 
 ### Language simplification guidance
 - End the report with 3-4 short plain statements: what was built, what worked best on this rig, what failed under tap disturbances, and what limits remain.
@@ -379,4 +379,4 @@ Conventions used below:
 6. Fix the Chapter 2 logged-signal description so it matches the raw CSV schema.
 7. Add the missing implementation parameters that materially affect behavior, especially `speedStopHz = 50`, and list the final sign settings used in the pinned dataset.
 8. Improve Chapter 10 figure usage and captions, and use the already-generated plots that are currently ignored.
-9. Fill or remove the remaining `TBD` BOM items before submission if reproducibility is a stated goal.
+9. Fill or remove the remaining incomplete BOM items before submission if reproducibility is a stated goal.
